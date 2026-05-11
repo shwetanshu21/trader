@@ -297,6 +297,24 @@ export enum ValidationReasonCode {
   LotSizeMismatch = 'lot_size_mismatch',
   /** Instrument metadata lookup failed. */
   InstrumentLookupFailed = 'instrument_lookup_failed',
+  /** Session is not authenticated / missing credentials. */
+  SessionNotAuthenticated = 'session_not_authenticated',
+  /** Session has expired or will expire imminently. */
+  SessionExpired = 'session_expired',
+  /** No quote snapshot available for the instrument. */
+  QuoteMissing = 'quote_missing',
+  /** Existing quote snapshot is stale. */
+  QuoteStale = 'quote_stale',
+  /** Instrument master sync is stale or has never completed. */
+  InstrumentStale = 'instrument_stale',
+  /** Price is not rounded to the instrument's tick size. */
+  PriceNotRounded = 'price_not_rounded',
+  /** Insufficient metadata to validate the proposal (e.g. missing lot size or tick size). */
+  InsufficientMetadata = 'insufficient_metadata',
+  /** Proposed exchange/profile does not match the active market profile. */
+  CrossMarketMismatch = 'cross_market_mismatch',
+  /** F&O proposal is missing expiry context (required for NFO). */
+  MissingExpiry = 'missing_expiry',
 }
 
 /** A single validation reason attached to a proposal attempt. */
