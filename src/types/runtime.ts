@@ -239,6 +239,24 @@ export interface RuntimeConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   /** Zerodha integration config. Null when env vars are absent. */
   zerodha: ZerodhaConfig | null;
+  /** Proposal engine config. Null when env vars are absent (graceful degraded mode). */
+  proposalEngine: ProposalEngineConfig | null;
+}
+
+// ---------------------------------------------------------------------------
+// Proposal engine config
+// ---------------------------------------------------------------------------
+
+/** Configuration for the proposal-generation provider (LLM). Null when not configured. */
+export interface ProposalEngineConfig {
+  /** Base URL of the proposal-generation provider API. */
+  providerUrl: string;
+  /** Request timeout in ms. */
+  timeoutMs: number;
+  /** Maximum proposals to generate per tick. */
+  maxProposalsPerTick: number;
+  /** API key for the provider. */
+  apiKey?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -372,6 +390,30 @@ export interface ProposalVerdict {
 /** A proposal attempt with its full validation trail. */
 export interface ProposalAttemptWithReasons extends ProposalAttemptRow {
   reasons: ValidationReason[];
+}
+
+// ---------------------------------------------------------------------------
+// Provider proposal response types
+// ---------------------------------------------------------------------------
+
+/** A single proposal candidate from the provider (before normalization). */
+export interface ProviderProposal {
+  exchange: string;
+  tradingsymbol: string;
+  side: 'buy' | 'sell';
+  product: string;
+  quantity: number;
+  price: number | null;
+  triggerPrice: number | null;
+  orderType: string;
+  tag?: string;
+}
+
+/** Full response from the proposal-generation provider. */
+export interface ProviderProposalResponse {
+  proposals: ProviderProposal[];
+  reasoning?: string;
+  metadata?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------

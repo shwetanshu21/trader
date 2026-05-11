@@ -1,4 +1,4 @@
-import type { RuntimeConfig, ConfigValidationError, ZerodhaConfig } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, ZerodhaConfig, ProposalEngineConfig } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Parsed env accessor — reads `process.env` once at startup.
@@ -90,6 +90,9 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
   // ── ZERODHA ────────────────────────────────────────────────────────────
   const zerodha = parseZerodhaConfig(env, errors);
 
+  // ── PROPOSAL ENGINE ────────────────────────────────────────────────────
+  const proposalEngine = parseProposalEngineConfig(env, errors);
+
   // ── Fail on hard errors ─────────────────────────────────────────────────
   if (errors.length > 0) {
     const summary = errors.map(e => `  — ${e.field}: ${e.message}`).join('\n');
@@ -114,6 +117,7 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     dbPath,
     logLevel: resolvedLogLevel,
     zerodha,
+    proposalEngine,
   };
 }
 
@@ -172,6 +176,69 @@ function parseZerodhaConfig(
     userId,
     totpKey,
     sessionRefreshIntervalMs,
+  };
+}
+
+/**
+ * Parse proposal-generation provider configuration.
+ * Returns null if no proposal-provider env vars are set (graceful degraded mode).
+ * Requires at minimum TRADER_PROPOSAL_PROVIDER_URL; partial config pushes an error.
+ */
+function parseProposalEngineConfig(
+  env: Record<string, string | undefined>,
+  errors: ConfigValidationError[],
+): ProposalEngineConfig | null {
+  const providerUrl = env.TRADER_PROPOSAL_PROVIDER_URL?.trim() || '';
+
+  // All absent = graceful degraded mode (no LLM proposals)
+  if (!providerUrl) {
+    return null;
+  }
+
+  // Validate URL
+  try {
+    new URL(providerUrl);
+  } catch {
+    errors.push({
+      field: 'TRADER_PROPOSAL_PROVIDER_URL',
+      message: `Invalid URL: "${providerUrl}".`,
+      provided: providerUrl,
+    });
+    return null;
+  }
+
+  // Optional: API key
+  const apiKey = env.TRADER_PROPOSAL_API_KEY?.trim() || undefined;
+
+  // Optional: timeout (default 30s)
+  const timeoutRaw = env.TRADER_PROPOSAL_TIMEOUT_MS ?? '30000';
+  const timeoutMs = Number(timeoutRaw);
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300_000) {
+    errors.push({
+      field: 'TRADER_PROPOSAL_TIMEOUT_MS',
+      message: `Must be between 1000 and 300000, got "${timeoutRaw}".`,
+      provided: timeoutRaw,
+    });
+    return null;
+  }
+
+  // Optional: max proposals per tick (default 5)
+  const maxRaw = env.TRADER_PROPOSAL_MAX_PER_TICK ?? '5';
+  const maxProposalsPerTick = Number(maxRaw);
+  if (!Number.isFinite(maxProposalsPerTick) || maxProposalsPerTick < 1 || maxProposalsPerTick > 50) {
+    errors.push({
+      field: 'TRADER_PROPOSAL_MAX_PER_TICK',
+      message: `Must be between 1 and 50, got "${maxRaw}".`,
+      provided: maxRaw,
+    });
+    return null;
+  }
+
+  return {
+    providerUrl,
+    timeoutMs,
+    maxProposalsPerTick,
+    apiKey,
   };
 }
 

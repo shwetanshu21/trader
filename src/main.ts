@@ -2,6 +2,7 @@ import { loadConfigFromEnv } from './config/env.js';
 import { DatabaseManager } from './persistence/sqlite.js';
 import { RuntimeStateRepository } from './persistence/runtime-state-repo.js';
 import { ZerodhaRepository } from './persistence/zerodha-repo.js';
+import { ProposalRepository } from './persistence/proposal-repo.js';
 import { LifecycleManager } from './runtime/lifecycle.js';
 import { HealthService } from './runtime/health-service.js';
 import { MarketClock } from './runtime/market-clock.js';
@@ -13,6 +14,9 @@ import { SessionService } from './integrations/zerodha/session-service.js';
 import { InstrumentsService } from './integrations/zerodha/instruments-service.js';
 import { MarketDataStream } from './integrations/zerodha/market-data-stream.js';
 import { ZerodhaSupervisor } from './integrations/zerodha/zerodha-supervisor.js';
+import { ProposalEngine } from './proposals/proposal-engine.js';
+import { IndiaProposalValidator } from './proposals/india-validator.js';
+import { ProposalSupervisor } from './proposals/proposal-supervisor.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -54,13 +58,16 @@ async function main(): Promise<void> {
 
   // ── Phase 4: initialise Zerodha services ────────────────────────────────
   let zerodhaSupervisor: ZerodhaSupervisor | null = null;
+  let sessionService: SessionService | null = null;
+  let instrumentsService: InstrumentsService | null = null;
+  let marketDataStream: MarketDataStream | null = null;
 
   if (config.zerodha) {
     console.log(`[boot] Zerodha integration: configured (user=${config.zerodha.userId})`);
 
-    const sessionService = new SessionService(config.zerodha, zerodhaRepo);
-    const instrumentsService = new InstrumentsService(zerodhaRepo);
-    const marketDataStream = new MarketDataStream(zerodhaRepo);
+    sessionService = new SessionService(config.zerodha, zerodhaRepo);
+    instrumentsService = new InstrumentsService(zerodhaRepo);
+    marketDataStream = new MarketDataStream(zerodhaRepo);
 
     zerodhaSupervisor = new ZerodhaSupervisor(
       sessionService,
@@ -77,8 +84,40 @@ async function main(): Promise<void> {
     console.log('[boot] Zerodha integration: not configured (degraded broker mode)');
   }
 
-  // ── Phase 5: start scheduler loop ──────────────────────────────────────
+  // ── Phase 5: create market clock (shared by scheduler and proposal supervisor) ──
   const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
+
+  // ── Phase 5a: initialise Proposal subsystem ─────────────────────────────
+  let proposalSupervisor: ProposalSupervisor | null = null;
+
+  if (config.proposalEngine) {
+    console.log('[boot] Proposal engine: configured');
+
+    const proposalRepo = new ProposalRepository(dbManager.db);
+    const engine = new ProposalEngine(config.proposalEngine);
+    const validator = new IndiaProposalValidator();
+
+    proposalSupervisor = new ProposalSupervisor({
+      engine,
+      validator,
+      repo: proposalRepo,
+      session: sessionService,
+      instruments: instrumentsService,
+      stream: marketDataStream,
+      clock,
+      maxProposals: config.proposalEngine.maxProposalsPerTick,
+    });
+
+    console.log('[boot] Proposal supervisor initialised');
+  } else {
+    console.log('[boot] Proposal engine: not configured (proposal generation disabled)');
+  }
+
+  // ── Phase 6: start scheduler loop ──────────────────────────────────────
+  const tickWork = [
+    ...(zerodhaSupervisor ? [zerodhaSupervisor] : []),
+    ...(proposalSupervisor ? [proposalSupervisor] : []),
+  ];
   const scheduler = new Scheduler({
     clock,
     lifecycle,
@@ -86,7 +125,7 @@ async function main(): Promise<void> {
     health: healthService,
     telemetry,
     intervalMs: config.schedulerIntervalMs,
-    tickWork: zerodhaSupervisor ? [zerodhaSupervisor] : [],
+    tickWork,
   });
 
   scheduler.start();
