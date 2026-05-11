@@ -1,4 +1,8 @@
 import { loadConfigFromEnv } from './config/env.js';
+import { DatabaseManager } from './persistence/sqlite.js';
+import { RuntimeStateRepository } from './persistence/runtime-state-repo.js';
+import { LifecycleManager } from './runtime/lifecycle.js';
+import { HealthService } from './runtime/health-service.js';
 
 /** Boot the runtime: load config, initialise subsystems, and hand to the scheduler. */
 async function main(): Promise<void> {
@@ -13,7 +17,20 @@ async function main(): Promise<void> {
   console.log(`[boot] db path      : ${config.dbPath}`);
   console.log(`[boot] log level    : ${config.logLevel}`);
 
-  // ── Phase 2: future — initialise persistence (S01/T03) ─────────────────
+  // ── Phase 2: initialise persistence and lifecycle ──────────────────────
+  const dbManager = new DatabaseManager(config.dbPath);
+  const repo = new RuntimeStateRepository(dbManager.db);
+  const lifecycle = new LifecycleManager(repo);
+  const healthService = new HealthService(lifecycle, repo, Date.now());
+
+  // Transition to Running
+  const bootEvent = lifecycle.start('Runtime boot completed');
+  console.log(`[boot] lifecycle → ${bootEvent.state} (${bootEvent.reason})`);
+
+  // Record initial health check
+  const initialHealth = healthService.recordHealthCheck();
+  console.log(`[boot] initial health: ${initialHealth.verdict} (uptime ${initialHealth.uptimeMs}ms)`);
+
   // ── Phase 3: future — start scheduler loop (S01/T04) ───────────────────
   // ── Phase 4: future — start health HTTP server (S01/T04) ───────────────
 
