@@ -146,6 +146,27 @@ CREATE TABLE IF NOT EXISTS proposal_validation_reasons (
 
 CREATE INDEX IF NOT EXISTS idx_validation_reasons_attempt ON proposal_validation_reasons(proposal_attempt_id);
 CREATE INDEX IF NOT EXISTS idx_validation_reasons_code ON proposal_validation_reasons(reason_code);
+
+CREATE TABLE IF NOT EXISTS blocked_order_attempts (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  proposal_attempt_id INTEGER NOT NULL UNIQUE REFERENCES proposal_attempts(id),
+  blocked_at          INTEGER NOT NULL,
+  block_code          TEXT    NOT NULL,
+  block_message       TEXT    NOT NULL DEFAULT '',
+  gate_tag            TEXT    NOT NULL DEFAULT '',
+  exchange            TEXT    NOT NULL,
+  tradingsymbol       TEXT    NOT NULL,
+  instrument_token    INTEGER,
+  side                TEXT    NOT NULL,
+  product             TEXT    NOT NULL,
+  quantity            INTEGER NOT NULL,
+  price               REAL,
+  trigger_price       REAL,
+  order_type          TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_blocked_order_blocked_at ON blocked_order_attempts(blocked_at);
+CREATE INDEX IF NOT EXISTS idx_blocked_order_proposal ON blocked_order_attempts(proposal_attempt_id);
 `;
 
 export class DatabaseManager {

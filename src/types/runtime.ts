@@ -420,6 +420,66 @@ export interface ProviderProposalResponse {
 // Re-export Zerodha instrument types for convenience from runtime boundary
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Execution gate — blocked-order ledger DTOs
+// ---------------------------------------------------------------------------
+
+/**
+ * Machine-readable block codes for the execution gate.
+ * M001 uses a single invariant block code — all proposals are blocked.
+ */
+export enum BlockCode {
+  /** Hard block applied because milestone M001 forbids live order placement. */
+  MilestoneExecutionBlockM001 = 'milestone_execution_block_m001',
+}
+
+/**
+ * A single blocked-order ledger row — persisted for every accepted proposal
+ * attempt that reaches the execution gate in M001.
+ *
+ * Snapshot fields (exchange, tradingsymbol, side, product, quantity, price,
+ * trigger_price, order_type, instrument_token) are copied from the source
+ * proposal at block time so the ledger remains self-describing even if the
+ * proposal row is later GC'd or updated.
+ */
+export interface BlockedOrderRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → proposal_attempts(id). UNIQUE — idempotency key. */
+  proposalAttemptId: number;
+  /** Unix timestamp (ms) when this block was recorded. */
+  blockedAt: number;
+  /** Machine-readable block code. */
+  blockCode: BlockCode;
+  /** Human-readable block message. */
+  blockMessage: string;
+  /** Policy/phase tag for grouping (e.g. 'M001-hard-block'). */
+  gateTag: string;
+
+  // ── Proposal snapshot fields (copied at block time) ──
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE'). */
+  tradingsymbol: string;
+  /** Kite instrument token at time of block (may be null for synthetic proposals). */
+  instrumentToken: number | null;
+  /** Trade side: 'buy' or 'sell'. */
+  side: string;
+  /** Product: 'MIS', 'CNC', 'NRML'. */
+  product: string;
+  /** Order quantity (always positive in a valid proposal). */
+  quantity: number;
+  /** Limit price, or null for market orders. */
+  price: number | null;
+  /** Trigger price for SL/SLM orders, or null. */
+  triggerPrice: number | null;
+  /** Order type: 'MARKET', 'LIMIT', 'SL', 'SLM'. */
+  orderType: string;
+}
+
+/** Shape for inserting a new blocked-order row (without id). */
+export type NewBlockedOrder = Omit<BlockedOrderRow, 'id'>;
+
 export type {
   InstrumentRecord,
   InstrumentSyncState,
