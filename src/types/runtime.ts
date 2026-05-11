@@ -96,8 +96,48 @@ export interface HealthStatus {
   scheduler: SchedulerState;
   /** List of active degradation reasons (empty when healthy). */
   degradedReasons: string[];
+  /** Broker (Zerodha) health block. Present only when Zerodha is configured. */
+  zerodha?: BrokerHealth;
   /** ISO‑8601 timestamp of this health snapshot. */
   checkedAt: string;
+}
+
+/** Broker health block — published on /health for agent observability. */
+export interface BrokerHealth {
+  /** Session authentication state. */
+  session: ZerodhaSessionHealth;
+  /** Instrument master freshness summary. */
+  instruments: {
+    /** Last successful sync timestamp (ms), or null. */
+    lastSuccessAt: number | null;
+    /** Number of instruments in the last successful sync. */
+    instrumentCount: number | null;
+    /** Staleness in ms, or null if never synced. */
+    stalenessMs: number | null;
+    /** Whether the instrument store is stale. */
+    isStale: boolean;
+  };
+  /** Quote stream status. */
+  stream: {
+    /** Stream connection state. */
+    state: string;
+    /** Number of reconnection attempts. */
+    reconnectCount: number;
+    /** Whether the quote feed is stale. */
+    isStale: boolean;
+    /** Staleness in ms, or null if no quote ever received. */
+    stalenessMs: number | null;
+    /** Last quote received timestamp (ms), or null. */
+    lastQuoteAt: number | null;
+  };
+  /** Recent ingestion event summaries (newest first, max 5). */
+  recentEvents: Array<{
+    eventType: string;
+    recordedAt: number;
+    durationMs: number | null;
+    itemCount: number | null;
+    error: string | null;
+  }>;
 }
 
 // ---------------------------------------------------------------------------

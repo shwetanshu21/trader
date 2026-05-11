@@ -7,12 +7,35 @@ import {
   MarketPhase,
   SchedulerStatus,
   type SchedulerState,
+  type HealthStatus,
 } from '../types/runtime.js';
 import type { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
 import type { LifecycleManager } from './lifecycle.js';
 import type { HealthService } from './health-service.js';
 import type { MarketClock } from './market-clock.js';
 import type { Telemetry } from './telemetry.js';
+
+// ---------------------------------------------------------------------------
+// TickWork — hook interface for supervised broker / ingestion work
+// Implementations run on every scheduler tick, AFTER the core tick logic.
+// Errors from a TickWork degrade the runtime but do NOT stop the scheduler.
+// ---------------------------------------------------------------------------
+
+export interface TickWork {
+  /** Short label for logging/diagnostics. */
+  readonly label: string;
+
+  /**
+   * Execute supervised broker work.
+   *
+   * @param now     - Current DateTime (same across all TickWork instances per tick)
+   * @param health  - Health snapshot recorded this tick (read-only)
+   *
+   * Throwing or returning a failed result degrades the runtime lifecycle
+   * with a labelled reason but the scheduler continues ticking.
+   */
+  doWork(now: Date, health: HealthStatus): void | Promise<void>;
+}
 
 // ---------------------------------------------------------------------------
 // TickResult — structured output of a single tick iteration
@@ -48,6 +71,8 @@ export interface SchedulerOptions {
   telemetry: Telemetry;
   /** Interval between ticks in ms (from RuntimeConfig.schedulerIntervalMs). */
   intervalMs: number;
+  /** Optional list of TickWork hooks to run on every tick. */
+  tickWork?: TickWork[];
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +86,7 @@ export class Scheduler {
   private readonly _health: HealthService;
   private readonly _telemetry: Telemetry;
   private readonly _intervalMs: number;
+  private readonly _tickWork: TickWork[];
 
   private _timer: ReturnType<typeof setInterval> | null = null;
   private _abortController: AbortController | null = null;
@@ -78,6 +104,7 @@ export class Scheduler {
     this._health = options.health;
     this._telemetry = options.telemetry;
     this._intervalMs = options.intervalMs;
+    this._tickWork = options.tickWork ?? [];
 
     // Restore persisted state if available
     const persisted = this._repo.getSchedulerState();
@@ -274,7 +301,27 @@ export class Scheduler {
       this._persistState();
 
       // Record a health check
-      this._health.recordHealthCheck();
+      const tickHealth = this._health.recordHealthCheck();
+
+      // Run supervised TickWork hooks
+      for (const work of this._tickWork) {
+        try {
+          await work.doWork(now, tickHealth);
+        } catch (err) {
+          const workError = err instanceof Error ? err.message : String(err);
+          console.error(`[scheduler] TickWork "${work.label}" failed: ${workError}`);
+          // Degrade lifecycle for tick work failures
+          try {
+            this._lifecycle.degrade(`TickWork "${work.label}" error: ${workError}`, {
+              tickCount: this._tickCount,
+              label: work.label,
+              error: workError,
+            });
+          } catch {
+            // Already degraded or stopped
+          }
+        }
+      }
 
       // If lifecycle is Degraded and tick succeeded, try recovering to Running
       // Only attempt recovery from Degraded — not from Stopped

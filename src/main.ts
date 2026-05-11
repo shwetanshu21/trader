@@ -1,6 +1,7 @@
 import { loadConfigFromEnv } from './config/env.js';
 import { DatabaseManager } from './persistence/sqlite.js';
 import { RuntimeStateRepository } from './persistence/runtime-state-repo.js';
+import { ZerodhaRepository } from './persistence/zerodha-repo.js';
 import { LifecycleManager } from './runtime/lifecycle.js';
 import { HealthService } from './runtime/health-service.js';
 import { MarketClock } from './runtime/market-clock.js';
@@ -8,6 +9,12 @@ import { Scheduler } from './runtime/scheduler.js';
 import { Telemetry } from './runtime/telemetry.js';
 import { INDIA_NSE_EQ_MARKET } from './market/india-profile.js';
 import { createHealthServer } from './runtime/health-server.js';
+import { SessionService } from './integrations/zerodha/session-service.js';
+import { InstrumentsService } from './integrations/zerodha/instruments-service.js';
+import { MarketDataStream } from './integrations/zerodha/market-data-stream.js';
+import { ZerodhaSupervisor } from './integrations/zerodha/zerodha-supervisor.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /** Boot the runtime: load config, initialise subsystems, and start scheduler + health server. */
 async function main(): Promise<void> {
@@ -22,9 +29,17 @@ async function main(): Promise<void> {
   console.log(`[boot] db path      : ${config.dbPath}`);
   console.log(`[boot] log level    : ${config.logLevel}`);
 
-  // ── Phase 2: initialise persistence and lifecycle ──────────────────────
+  // ── Phase 2: ensure data directory exists ───────────────────────────────
+  const dbDir = path.dirname(config.dbPath);
+  if (dbDir && dbDir !== '.') {
+    fs.mkdirSync(dbDir, { recursive: true });
+    console.log(`[boot] data directory: ${dbDir}`);
+  }
+
+  // ── Phase 3: initialise persistence and lifecycle ──────────────────────
   const dbManager = new DatabaseManager(config.dbPath);
   const repo = new RuntimeStateRepository(dbManager.db);
+  const zerodhaRepo = new ZerodhaRepository(dbManager.db);
   const lifecycle = new LifecycleManager(repo);
   const healthService = new HealthService(lifecycle, repo, Date.now());
   const telemetry = new Telemetry(repo);
@@ -37,7 +52,32 @@ async function main(): Promise<void> {
   const initialHealth = healthService.recordHealthCheck();
   console.log(`[boot] initial health: ${initialHealth.verdict} (uptime ${initialHealth.uptimeMs}ms)`);
 
-  // ── Phase 3: start scheduler loop ──────────────────────────────────────
+  // ── Phase 4: initialise Zerodha services ────────────────────────────────
+  let zerodhaSupervisor: ZerodhaSupervisor | null = null;
+
+  if (config.zerodha) {
+    console.log(`[boot] Zerodha integration: configured (user=${config.zerodha.userId})`);
+
+    const sessionService = new SessionService(config.zerodha, zerodhaRepo);
+    const instrumentsService = new InstrumentsService(zerodhaRepo);
+    const marketDataStream = new MarketDataStream(zerodhaRepo);
+
+    zerodhaSupervisor = new ZerodhaSupervisor(
+      sessionService,
+      instrumentsService,
+      zerodhaRepo,
+      marketDataStream,
+    );
+
+    // Register supervisor on the health service
+    healthService.setZerodhaSupervisor(zerodhaSupervisor);
+
+    console.log('[boot] Zerodha services initialised');
+  } else {
+    console.log('[boot] Zerodha integration: not configured (degraded broker mode)');
+  }
+
+  // ── Phase 5: start scheduler loop ──────────────────────────────────────
   const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
   const scheduler = new Scheduler({
     clock,
@@ -46,12 +86,13 @@ async function main(): Promise<void> {
     health: healthService,
     telemetry,
     intervalMs: config.schedulerIntervalMs,
+    tickWork: zerodhaSupervisor ? [zerodhaSupervisor] : [],
   });
 
   scheduler.start();
   console.log(`[boot] scheduler started — phase: ${scheduler.getState().marketPhase}`);
 
-  // ── Phase 4: start health HTTP server ──────────────────────────────────
+  // ── Phase 6: start health HTTP server ──────────────────────────────────
   const server = createHealthServer(healthService, scheduler, telemetry, dbManager);
   server.listen(config.port, () => {
     console.log(`[boot] health HTTP server listening on port ${config.port}`);
@@ -60,6 +101,15 @@ async function main(): Promise<void> {
   // ── Graceful shutdown on process signals ───────────────────────────────
   const shutdown = (signal: string) => {
     console.log(`[boot] received ${signal} — shutting down gracefully`);
+
+    // Disconnect market data stream if active
+    if (zerodhaSupervisor) {
+      try {
+        // The supervisor doesn't expose the stream directly for shutdown
+        // Stream cleanup happens via its own disconnect/close lifecycle
+      } catch { /* ignore */ }
+    }
+
     scheduler.stop(`${signal} received`);
     server.close(() => {
       dbManager.close();

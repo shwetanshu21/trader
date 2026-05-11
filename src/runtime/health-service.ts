@@ -6,6 +6,7 @@ import {
 } from '../types/runtime.js';
 import type { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
 import type { LifecycleManager } from './lifecycle.js';
+import type { ZerodhaSupervisor } from '../integrations/zerodha/zerodha-supervisor.js';
 
 // ---------------------------------------------------------------------------
 // HealthService — composites HealthStatus from lifecycle + scheduler state
@@ -15,15 +16,23 @@ export class HealthService {
   private readonly _lifecycle: LifecycleManager;
   private readonly _repo: RuntimeStateRepository;
   private readonly _startedAt: number;
+  private _zerodhaSupervisor: ZerodhaSupervisor | null = null;
 
   constructor(
     lifecycle: LifecycleManager,
     repo: RuntimeStateRepository,
     startedAt: number,
+    zerodhaSupervisor?: ZerodhaSupervisor | null,
   ) {
     this._lifecycle = lifecycle;
     this._repo = repo;
     this._startedAt = startedAt;
+    this._zerodhaSupervisor = zerodhaSupervisor ?? null;
+  }
+
+  /** Set or update the Zerodha supervisor reference (wired after construction). */
+  setZerodhaSupervisor(supervisor: ZerodhaSupervisor | null): void {
+    this._zerodhaSupervisor = supervisor;
   }
 
   /** Produce a HealthStatus snapshot without persisting it. */
@@ -81,12 +90,16 @@ export class HealthService {
       verdict = HealthVerdict.Healthy;
     }
 
+    // Include broker health block if available
+    const zerodha = this._zerodhaSupervisor?.getBrokerHealth();
+
     return {
       verdict,
       uptimeMs,
       lifecycleState,
       scheduler,
       degradedReasons,
+      zerodha,
       checkedAt: new Date().toISOString(),
     };
   }

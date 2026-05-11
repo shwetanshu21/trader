@@ -2,9 +2,11 @@
 // Lightweight HTTP health endpoint for the Pi runtime.
 // Uses Node built-in `http` module — zero extra dependencies.
 // Endpoints:
-//   GET /health      → HealthStatus JSON
-//   GET /health/live  → 200 OK liveness probe (no DB read)
-//   GET /health/ready → 200 if lifecycle is Running or Degraded, 503 otherwise
+//   GET /health         → HealthStatus JSON (including broker health when configured)
+//   GET /health/live    → 200 OK liveness probe (no DB read)
+//   GET /health/ready   → 200 if lifecycle is Running or Degraded, 503 otherwise
+//   GET /health/broker  → Broker (Zerodha) health block, or 404
+//   GET /health/scheduler → Detailed scheduler state
 
 import http from 'node:http';
 import type { HealthService } from './health-service.js';
@@ -66,6 +68,18 @@ export function createHealthServer(
             lifecycleState: state.lifecycleState,
             schedulerStatus: state.scheduler.status,
           }));
+          break;
+        }
+
+        case '/health/broker': {
+          const full = healthService.getHealth();
+          if (full.zerodha) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(full.zerodha, null, 2));
+          } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Broker not configured' }));
+          }
           break;
         }
 
