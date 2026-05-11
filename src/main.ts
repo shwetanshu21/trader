@@ -17,6 +17,8 @@ import { ZerodhaSupervisor } from './integrations/zerodha/zerodha-supervisor.js'
 import { ProposalEngine } from './proposals/proposal-engine.js';
 import { IndiaProposalValidator } from './proposals/india-validator.js';
 import { ProposalSupervisor } from './proposals/proposal-supervisor.js';
+import { BlockedOrderRepository } from './persistence/blocked-order-repo.js';
+import { ExecutionGateSupervisor } from './execution/execution-gate-supervisor.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -89,6 +91,7 @@ async function main(): Promise<void> {
 
   // ── Phase 5a: initialise Proposal subsystem ─────────────────────────────
   let proposalSupervisor: ProposalSupervisor | null = null;
+  let executionGateSupervisor: ExecutionGateSupervisor | null = null;
 
   if (config.proposalEngine) {
     console.log('[boot] Proposal engine: configured');
@@ -108,7 +111,12 @@ async function main(): Promise<void> {
       maxProposals: config.proposalEngine.maxProposalsPerTick,
     });
 
+    // ── Phase 5b: initialise ExecutionGateSupervisor ──────────────────────
+    const blockedRepo = new BlockedOrderRepository(dbManager.db);
+    executionGateSupervisor = new ExecutionGateSupervisor({ blockedRepo });
+
     console.log('[boot] Proposal supervisor initialised');
+    console.log('[boot] Execution gate supervisor initialised');
   } else {
     console.log('[boot] Proposal engine: not configured (proposal generation disabled)');
   }
@@ -117,6 +125,7 @@ async function main(): Promise<void> {
   const tickWork = [
     ...(zerodhaSupervisor ? [zerodhaSupervisor] : []),
     ...(proposalSupervisor ? [proposalSupervisor] : []),
+    ...(executionGateSupervisor ? [executionGateSupervisor] : []),
   ];
   const scheduler = new Scheduler({
     clock,
