@@ -31,6 +31,26 @@ CREATE TABLE IF NOT EXISTS health_checks (
   degraded_reasons TEXT,
   checked_at      TEXT    NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS zerodha_session (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  access_token TEXT    NOT NULL,
+  obtained_at  INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  state        TEXT    NOT NULL DEFAULT 'missing_credentials',
+  reason       TEXT    NOT NULL DEFAULT '',
+  last_error   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS zerodha_ingestion_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type  TEXT    NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  duration_ms INTEGER,
+  item_count  INTEGER,
+  error       TEXT,
+  diagnostic  TEXT
+);
 `;
 
 export class DatabaseManager {

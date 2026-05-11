@@ -101,6 +101,85 @@ export interface HealthStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Zerodha — config, session, health
+// ---------------------------------------------------------------------------
+
+/** Zerodha-specific configuration (null when env vars are absent). */
+export interface ZerodhaConfig {
+  /** Zerodha Kite Connect API key. */
+  apiKey: string;
+  /** Zerodha Kite Connect API secret. */
+  apiSecret: string;
+  /** Zerodha user ID. */
+  userId: string;
+  /** TOTP key used for daily 2FA session creation. */
+  totpKey: string;
+  /** Session refresh interval in ms (default: 21_600_000 = 6h, shorter than the 24h Kite limit). */
+  sessionRefreshIntervalMs: number;
+}
+
+/** Machine-readable Zerodha session state. */
+export enum ZerodhaSessionState {
+  /** Valid session material present. */
+  Authenticated = 'authenticated',
+  /** No session material or persisted row. */
+  MissingCredentials = 'missing_credentials',
+  /** Token exchange was attempted and failed. */
+  AuthFailed = 'auth_failed',
+  /** Previous session has expired and refresh has not been attempted or failed. */
+  Expired = 'expired',
+}
+
+/** Persisted session row shape (full — includes token material for internal use). */
+export interface ZerodhaSessionRow {
+  /** Kite access token obtained after login. */
+  accessToken: string;
+  /** Unix timestamp (ms) when the token was obtained. */
+  obtainedAt: number;
+  /** Unix timestamp (ms) when the token expires. */
+  expiresAt: number;
+  /** Current session state. */
+  state: ZerodhaSessionState;
+  /** Human-readable reason for the current state. */
+  reason: string;
+  /** Last error detail, if any. */
+  lastError: string | null;
+}
+
+/** Health-facing session snapshot — NEVER includes token values. */
+export interface ZerodhaSessionHealth {
+  /** Current session state. */
+  state: ZerodhaSessionState;
+  /** Unix timestamp (ms) when the token was obtained (0 if never). */
+  obtainedAt: number;
+  /** Unix timestamp (ms) when the token expires (0 if unknown). */
+  expiresAt: number;
+  /** Human-readable reason for the current state. */
+  reason: string;
+  /** Last error detail, if any (not emitted on health surfaces). */
+  lastError: string | null;
+  /** Unix timestamp (ms) of the last auth check. */
+  lastAuthCheckAt: number;
+}
+
+/** A single ingestion event record. */
+export interface IngestionEvent {
+  id: number;
+  /** Type of ingestion (e.g. 'instrument_master', 'quote', 'tick'). */
+  eventType: string;
+  /** Unix timestamp (ms) when the event was recorded. */
+  recordedAt: number;
+  /** Duration of the ingestion in ms, or null. */
+  durationMs: number | null;
+  /** Number of items ingested, or null. */
+  itemCount: number | null;
+  /** Error message if the ingestion failed, or null. */
+  error: string | null;
+  /** Additional diagnostic JSON. */
+  diagnostic: Record<string, unknown> | null;
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -118,6 +197,8 @@ export interface RuntimeConfig {
   dbPath: string;
   /** Logging level. Default: info. */
   logLevel: 'debug' | 'info' | 'warn' | 'error';
+  /** Zerodha integration config. Null when env vars are absent. */
+  zerodha: ZerodhaConfig | null;
 }
 
 // ---------------------------------------------------------------------------

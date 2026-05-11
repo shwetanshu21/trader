@@ -1,4 +1,4 @@
-import type { RuntimeConfig, ConfigValidationError } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, ZerodhaConfig } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Parsed env accessor — reads `process.env` once at startup.
@@ -6,6 +6,9 @@ import type { RuntimeConfig, ConfigValidationError } from '../types/runtime.js';
 
 const VALID_NODE_ENVS = ['development', 'production', 'test'] as const;
 const VALID_LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
+
+/// Default session refresh: 6 hours (Kite tokens live 24h; refresh well before expiry).
+const DEFAULT_ZERODHA_SESSION_REFRESH_MS = 21_600_000;
 
 /** Parse and validate runtime configuration from environment variables. */
 export function loadConfig(env: Record<string, string | undefined>): RuntimeConfig {
@@ -84,6 +87,9 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     ? logLevel
     : 'info';
 
+  // ── ZERODHA ────────────────────────────────────────────────────────────
+  const zerodha = parseZerodhaConfig(env, errors);
+
   // ── Fail on hard errors ─────────────────────────────────────────────────
   if (errors.length > 0) {
     const summary = errors.map(e => `  — ${e.field}: ${e.message}`).join('\n');
@@ -107,6 +113,65 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     schedulerIntervalMs,
     dbPath,
     logLevel: resolvedLogLevel,
+    zerodha,
+  };
+}
+
+/**
+ * Parse Zerodha configuration.
+ * Returns null if all Zerodha env vars are absent (graceful degraded mode).
+ * Returns a populated config if all required fields are present.
+ * Pushes to errors array if some but not all required fields are present.
+ */
+function parseZerodhaConfig(
+  env: Record<string, string | undefined>,
+  errors: ConfigValidationError[],
+): ZerodhaConfig | null {
+  const apiKey = env.TRADER_ZERODHA_API_KEY ?? '';
+  const apiSecret = env.TRADER_ZERODHA_API_SECRET ?? '';
+  const userId = env.TRADER_ZERODHA_USER_ID ?? '';
+  const totpKey = env.TRADER_ZERODHA_TOTP_KEY ?? '';
+
+  const allAbsent = !apiKey && !apiSecret && !userId && !totpKey;
+
+  if (allAbsent) {
+    return null; // Graceful degraded mode — no Zerodha integration
+  }
+
+  // Partial presence is an error
+  const missing: string[] = [];
+  if (!apiKey) missing.push('TRADER_ZERODHA_API_KEY');
+  if (!apiSecret) missing.push('TRADER_ZERODHA_API_SECRET');
+  if (!userId) missing.push('TRADER_ZERODHA_USER_ID');
+  if (!totpKey) missing.push('TRADER_ZERODHA_TOTP_KEY');
+
+  if (missing.length > 0) {
+    errors.push({
+      field: 'ZERODHA',
+      message: `Partial Zerodha config: missing ${missing.join(', ')}. Set all four or none.`,
+      provided: { present: ['TRADER_ZERODHA_API_KEY', 'TRADER_ZERODHA_API_SECRET', 'TRADER_ZERODHA_USER_ID', 'TRADER_ZERODHA_TOTP_KEY'].filter(k => env[k]), missing },
+    });
+    return null;
+  }
+
+  // Optional refresh interval
+  const intervalRaw = env.TRADER_ZERODHA_SESSION_REFRESH_MS ?? String(DEFAULT_ZERODHA_SESSION_REFRESH_MS);
+  const sessionRefreshIntervalMs = Number(intervalRaw);
+  if (!Number.isFinite(sessionRefreshIntervalMs) || sessionRefreshIntervalMs < 60_000) {
+    errors.push({
+      field: 'TRADER_ZERODHA_SESSION_REFRESH_MS',
+      message: `Must be ≥ 60_000ms, got "${intervalRaw}".`,
+      provided: intervalRaw,
+    });
+    return null;
+  }
+
+  return {
+    apiKey,
+    apiSecret,
+    userId,
+    totpKey,
+    sessionRefreshIntervalMs,
   };
 }
 
