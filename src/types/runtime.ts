@@ -480,6 +480,157 @@ export interface BlockedOrderRow {
 /** Shape for inserting a new blocked-order row (without id). */
 export type NewBlockedOrder = Omit<BlockedOrderRow, 'id'>;
 
+// ---------------------------------------------------------------------------
+// Operator Dashboard — typed snapshot / read-model DTOs
+// ---------------------------------------------------------------------------
+
+/**
+ * Top-level operator dashboard snapshot.
+ *
+ * Joins live health, market profile, runtime lifecycle, broker status,
+ * recent proposals, blocked-order ledger, and recent lifecycle events.
+ * Token-safe: never includes access tokens, API keys, or raw secret-bearing config.
+ * Bounded: recent lists are limited to the most recent entries only.
+ */
+export interface DashboardSnapshot {
+  /** ISO‑8601 timestamp when this snapshot was assembled. */
+  assembledAt: string;
+  /** Market profile identity and current session metadata. */
+  marketProfile: DashboardMarketProfile;
+  /** Runtime health verdict and degradation reasons. */
+  health: DashboardHealth;
+  /** Scheduler and lifecycle runtime state. */
+  runtime: DashboardRuntime;
+  /** Broker (Zerodha) health block — null when broker not configured. */
+  broker: DashboardBroker | null;
+  /** Recent proposal attempts with outcome/reasons (newest first, max 20). */
+  recentProposals: DashboardRecentProposal[];
+  /** Recent blocked-order ledger entries (newest first, max 20). */
+  recentBlockedOrders: DashboardBlockedOrder[];
+  /** Recent lifecycle transition events (newest first, max 10). */
+  recentLifecycleEvents: DashboardLifecycleEvent[];
+}
+
+/** Market profile identity and session metadata. */
+export interface DashboardMarketProfile {
+  /** Unique market identifier (e.g. 'INDIA_NSE_EQ'). */
+  marketId: string;
+  /** Human-readable label (e.g. 'NSE India Equities'). */
+  displayName: string;
+  /** IANA timezone (e.g. 'Asia/Kolkata'). */
+  timezone: string;
+  /** Current market phase string. */
+  currentPhase: string;
+  /** Whether today is a trading day. */
+  isTradingDay: boolean;
+  /** Settlement cycle label (e.g. 'T+1'). */
+  settlementCycle: string;
+}
+
+/** Runtime health — verdict, lifecycle, degradation reasons. */
+export interface DashboardHealth {
+  /** Health verdict: 'healthy', 'degraded', or 'unhealthy'. */
+  verdict: string;
+  /** Process uptime in milliseconds. */
+  uptimeMs: number;
+  /** Current lifecycle state. */
+  lifecycleState: string;
+  /** Active degradation reasons (empty when healthy). */
+  degradedReasons: string[];
+  /** ISO‑8601 timestamp of the health check. */
+  checkedAt: string;
+}
+
+/** Scheduler and lifecycle runtime state. */
+export interface DashboardRuntime {
+  /** Scheduler status: 'idle', 'running', 'paused', or 'stopped'. */
+  schedulerStatus: string;
+  /** Current market phase the scheduler is operating in. */
+  marketPhase: string;
+  /** Unix timestamp (ms) of the last completed tick, or null. */
+  lastTickTimestamp: number | null;
+  /** Unix timestamp (ms) when the scheduler started, or null. */
+  startedAt: number | null;
+  /** Total tick iterations since start. */
+  tickCount: number;
+  /** Most recent scheduler error, or null. */
+  lastError: string | null;
+}
+
+/** Broker (Zerodha) health block — redacted, token-safe. */
+export interface DashboardBroker {
+  /** Session authentication state string. */
+  sessionState: string;
+  /** Instrument master summary. */
+  instruments: {
+    /** Number of instruments in the last successful sync, or null. */
+    count: number | null;
+    /** Whether the instrument store is stale. */
+    isStale: boolean;
+  };
+  /** Quote stream status. */
+  stream: {
+    /** Stream connection state string. */
+    state: string;
+    /** Whether the quote feed is stale. */
+    isStale: boolean;
+    /** Last quote received timestamp (ms), or null. */
+    lastQuoteAt: number | null;
+  };
+  /** Number of recent ingestion events. */
+  recentEventCount: number;
+}
+
+/** A recent proposal attempt for the dashboard (redacted — no tokens). */
+export interface DashboardRecentProposal {
+  /** Proposal attempt row ID. */
+  id: number;
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE'). */
+  tradingsymbol: string;
+  /** Trade side. */
+  side: string;
+  /** Product type. */
+  product: string;
+  /** Final proposal status. */
+  status: string;
+  /** Validation reason messages (empty for accepted proposals). */
+  reasons: string[];
+  /** ISO‑8601 timestamp when the proposal was created. */
+  createdAt: string;
+}
+
+/** A blocked-order ledger entry for the dashboard. */
+export interface DashboardBlockedOrder {
+  /** Blocked-order row ID. */
+  id: number;
+  /** Source proposal attempt ID. */
+  proposalAttemptId: number;
+  /** ISO‑8601 timestamp when the block was recorded. */
+  blockedAt: string;
+  /** Machine-readable block code. */
+  blockCode: string;
+  /** Human-readable block message. */
+  blockMessage: string;
+  /** Exchange. */
+  exchange: string;
+  /** Trading symbol. */
+  tradingsymbol: string;
+  /** Trade side. */
+  side: string;
+}
+
+/** A lifecycle transition event for the dashboard. */
+export interface DashboardLifecycleEvent {
+  /** ISO‑8601 timestamp of the transition. */
+  timestamp: string;
+  /** The state the runtime transitioned to. */
+  state: string;
+  /** Human-readable reason for the transition. */
+  reason: string;
+}
+
 export type {
   InstrumentRecord,
   InstrumentSyncState,
