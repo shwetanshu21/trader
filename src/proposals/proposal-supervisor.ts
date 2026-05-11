@@ -246,6 +246,9 @@ export class ProposalSupervisor implements TickWork {
         marketPhase: phase,
       });
 
+      // Set the proposal status to match the verdict before persisting
+      attempt.proposalStatus = verdict.status;
+
       // Persist the attempt with its validation reasons
       if (verdict.status === ProposalStatus.Accepted) {
         this._repo.insertAttemptWithReasons(attempt, []);
