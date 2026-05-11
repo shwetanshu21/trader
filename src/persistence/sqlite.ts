@@ -116,6 +116,36 @@ CREATE TABLE IF NOT EXISTS zerodha_stream_state (
   last_error          TEXT,
   created_at          INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS proposal_attempts (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  exchange          TEXT    NOT NULL,
+  tradingsymbol     TEXT    NOT NULL,
+  instrument_token  INTEGER,
+  side              TEXT    NOT NULL,
+  product           TEXT    NOT NULL,
+  quantity          INTEGER NOT NULL,
+  price             REAL,
+  trigger_price     REAL,
+  order_type        TEXT    NOT NULL DEFAULT 'MARKET',
+  tag               TEXT,
+  proposal_status   TEXT    NOT NULL,
+  created_at        INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposal_attempts_lookup ON proposal_attempts(exchange, tradingsymbol);
+CREATE INDEX IF NOT EXISTS idx_proposal_attempts_status ON proposal_attempts(proposal_status);
+CREATE INDEX IF NOT EXISTS idx_proposal_attempts_created ON proposal_attempts(created_at);
+
+CREATE TABLE IF NOT EXISTS proposal_validation_reasons (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  proposal_attempt_id INTEGER NOT NULL REFERENCES proposal_attempts(id),
+  reason_code         TEXT    NOT NULL,
+  reason_message      TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_validation_reasons_attempt ON proposal_validation_reasons(proposal_attempt_id);
+CREATE INDEX IF NOT EXISTS idx_validation_reasons_code ON proposal_validation_reasons(reason_code);
 `;
 
 export class DatabaseManager {

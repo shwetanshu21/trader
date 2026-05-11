@@ -253,6 +253,110 @@ export interface ConfigValidationError {
 }
 
 // ---------------------------------------------------------------------------
+// Proposal engine — DTOs for trade proposal generation, validation, persistence
+// ---------------------------------------------------------------------------
+
+/** Status of a proposal attempt. */
+export enum ProposalStatus {
+  /** Proposal was accepted (passed all validation checks). */
+  Accepted = 'accepted',
+  /** Proposal was refused (one or more validation failures). */
+  Refused = 'refused',
+  /** Proposal was skipped (overlap with prior attempt, no re-evaluation needed). */
+  Skipped = 'skipped',
+  /** Proposal is pending validation (intermediate state during evaluation). */
+  Pending = 'pending',
+}
+
+/**
+ * Machine-readable validation reason codes.
+ * Determined by the validator — downstream slices consume these without reinterpretation.
+ */
+export enum ValidationReasonCode {
+  /** The instrument symbol is unknown / not in the instrument master. */
+  UnknownSymbol = 'unknown_symbol',
+  /** Quantity is zero or negative. */
+  ZeroQuantity = 'zero_quantity',
+  /** Trade side is missing or invalid. */
+  MissingSide = 'missing_side',
+  /** Product type is missing or invalid (MIS/CNC/NRML). */
+  MissingProduct = 'missing_product',
+  /** The order type is unsupported. */
+  InvalidOrderType = 'invalid_order_type',
+  /** Price violates exchange price band. */
+  PriceBandViolation = 'price_band_violation',
+  /** Position or exposure limit would be exceeded. */
+  PositionLimitExceeded = 'position_limit_exceeded',
+  /** Market is closed for this segment. */
+  MarketClosed = 'market_closed',
+  /** Duplicate proposal attempt (same symbol+side already processed this tick). */
+  DuplicateAttempt = 'duplicate_attempt',
+  /** Segment is not supported for trading. */
+  InvalidSegment = 'invalid_segment',
+  /** Lot size constraint not met (quantity not multiple of lot size). */
+  LotSizeMismatch = 'lot_size_mismatch',
+  /** Instrument metadata lookup failed. */
+  InstrumentLookupFailed = 'instrument_lookup_failed',
+}
+
+/** A single validation reason attached to a proposal attempt. */
+export interface ValidationReason {
+  /** Machine-readable reason code. */
+  reasonCode: ValidationReasonCode;
+  /** Human-readable explanation. */
+  reasonMessage: string;
+}
+
+/**
+ * Normalized proposal attempt — the canonical payload persisted for each supervised tick.
+ * Stable identity is exchange + tradingsymbol. instrumentToken is a trace snapshot only.
+ */
+export interface ProposalAttemptRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE', 'RELIANCE24DEC3000CE'). */
+  tradingsymbol: string;
+  /** Kite instrument token (trace snapshot — not stable identity). */
+  instrumentToken: number | null;
+  /** Trade side: 'buy' or 'sell'. */
+  side: string;
+  /** Product: 'MIS', 'CNC', 'NRML'. */
+  product: string;
+  /** Order quantity (always positive). */
+  quantity: number;
+  /** Limit price, or null for market orders. */
+  price: number | null;
+  /** Trigger price for SL/SLM orders, or null. */
+  triggerPrice: number | null;
+  /** Order type: 'MARKET', 'LIMIT', 'SL', 'SLM'. */
+  orderType: string;
+  /** Optional tag for grouping/identification. */
+  tag: string | null;
+  /** Current proposal status. */
+  proposalStatus: ProposalStatus;
+  /** Unix timestamp (ms) when this attempt was created. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new proposal attempt (without id). */
+export type NewProposalAttempt = Omit<ProposalAttemptRow, 'id'>;
+
+/** Validation verdict bundle attached to a proposal attempt. */
+export interface ProposalVerdict {
+  /** The final proposal status. */
+  status: ProposalStatus;
+  /** Validation reasons (empty list for Accepted, 1+ for Refused/Skipped). */
+  reasons: ValidationReason[];
+}
+
+/** A proposal attempt with its full validation trail. */
+export interface ProposalAttemptWithReasons extends ProposalAttemptRow {
+  reasons: ValidationReason[];
+}
+
+// ---------------------------------------------------------------------------
 // Re-export Zerodha instrument types for convenience from runtime boundary
 // ---------------------------------------------------------------------------
 
