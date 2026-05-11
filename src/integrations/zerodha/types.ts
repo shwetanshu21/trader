@@ -149,3 +149,134 @@ export interface InstrumentFreshnessConfig {
   /** Maximum age (ms) of a snapshot before it is considered stale. */
   maxStalenessMs: number;
 }
+
+// ---------------------------------------------------------------------------
+// Quote / Market Data Stream types
+// ---------------------------------------------------------------------------
+
+/** Stream connection states for the Kite WebSocket feed. */
+export enum StreamState {
+  Disconnected = 'disconnected',
+  Connecting = 'connecting',
+  Connected = 'connected',
+  Degraded = 'degraded',
+  Closed = 'closed',
+}
+
+/** Latest quote snapshot for a single instrument — persisted in SQLite. */
+export interface QuoteSnapshot {
+  exchange: string;
+  tradingsymbol: string;
+  instrumentToken: number;
+  /** Last traded price (INR). */
+  lastPrice: number;
+  /** Price change from previous close, or null. */
+  change: number | null;
+  /** Price change percent from previous close, or null. */
+  changePercent: number | null;
+  /** Traded volume, or null. */
+  volume: number | null;
+  /** Open interest, or null. */
+  oi: number | null;
+  /** Day's high price, or null. */
+  high: number | null;
+  /** Day's low price, or null. */
+  low: number | null;
+  /** Open price, or null. */
+  open: number | null;
+  /** Previous close price, or null. */
+  close: number | null;
+  /** Best bid price, or null. */
+  bid: number | null;
+  /** Best ask price, or null. */
+  ask: number | null;
+  /** Unix timestamp (s) of the tick from the exchange, or null. */
+  priceTimestamp: number | null;
+  /** Unix timestamp (ms) when this snapshot was received and persisted. */
+  receivedAt: number;
+}
+
+/** Stream diagnostics snapshot — persisted for agent observability. */
+export interface StreamDiagnostics {
+  state: StreamState;
+  /** Unix timestamp (ms) when the stream last connected. */
+  connectedAt: number | null;
+  /** Unix timestamp (ms) of the last heartbeat tick. */
+  lastHeartbeatAt: number | null;
+  /** Unix timestamp (ms) of the last received quote. */
+  lastQuoteReceivedAt: number | null;
+  /** Number of reconnection attempts since start. */
+  reconnectCount: number;
+  /** Number of malformed packets received. */
+  parseFailures: number;
+  /** Number of tokens currently subscribed. */
+  subscribedCount: number;
+  /** Last error message, or null. */
+  lastError: string | null;
+  /** Timestamp (ms) when this diagnostics record was created. */
+  createdAt: number;
+}
+
+/** Result of a quote freshness check. */
+export interface QuoteFreshness {
+  isStale: boolean;
+  /** Staleness in ms, or null if no quote has ever been received. */
+  stalenessMs: number | null;
+  /** Timestamp (ms) of the last quote received, or null. */
+  lastQuoteAt: number | null;
+}
+
+/** Configuration for quote stream stale-feed detection. */
+export interface QuoteFreshnessConfig {
+  /** Maximum age (ms) of a quote snapshot before it is considered stale. */
+  maxStalenessMs: number;
+}
+
+/** Parsed tick from the Kite binary WebSocket protocol. */
+export interface KiteTick {
+  /** Packet type code. */
+  packetType: number;
+  /** Kite instrument token. */
+  instrumentToken: number;
+  /** Last traded price (INR, scaled to decimal). */
+  lastPrice: number;
+  /** Price change (INR, scaled to decimal), or null. */
+  change: number | null;
+  /** Price change percent, or null. */
+  changePercent: number | null;
+  /** Traded volume, or null. */
+  volume: number | null;
+  /** Open interest, or null. */
+  oi: number | null;
+  /** Day's high price (INR), or null. */
+  high: number | null;
+  /** Day's low price (INR), or null. */
+  low: number | null;
+  /** Open price (INR), or null. */
+  open: number | null;
+  /** Previous close price (INR), or null. */
+  close: number | null;
+  /** Best bid price (INR), or null. */
+  bid: number | null;
+  /** Best ask price (INR), or null. */
+  ask: number | null;
+  /** Tick timestamp (epoch seconds), or null. */
+  timestamp: number | null;
+}
+
+/**
+ * WebSocket factory type — injected so tests can provide mock WebSockets
+ * without needing network access.
+ */
+export type WebSocketFactory = (url: string) => WebSocket;
+
+/** Default factory using the global Node 22+ WebSocket. */
+export const defaultWebSocketFactory: WebSocketFactory = (url: string): WebSocket => new WebSocket(url);
+
+/** Subscribed instrument entry for the stream supervisor. */
+export interface SubscribedInstrument {
+  instrumentToken: number;
+  exchange: string;
+  tradingsymbol: string;
+  subscribedAt: number;
+}

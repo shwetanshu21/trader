@@ -224,4 +224,12 @@ export type {
   SupportedSegment,
   RawInstrumentCsvRow,
   InstrumentFreshnessConfig,
+  QuoteSnapshot,
+  StreamDiagnostics,
+  StreamState,
+  QuoteFreshness,
+  QuoteFreshnessConfig,
+  KiteTick,
+  WebSocketFactory,
+  SubscribedInstrument,
 } from '../integrations/zerodha/types.js';

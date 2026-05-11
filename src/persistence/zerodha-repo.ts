@@ -5,6 +5,9 @@ import {
   type IngestionEvent,
   type InstrumentRecord,
   type InstrumentSyncState,
+  type QuoteSnapshot,
+  type StreamDiagnostics,
+  type StreamState,
 } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -318,6 +321,187 @@ export class ZerodhaRepository {
     if (state.lastSuccessAt === null) return null;
     return now - state.lastSuccessAt;
   }
+
+  // ── Latest quotes (upsert, keyed by exchange + tradingsymbol) ──────────
+
+  /** Upsert a latest-quote snapshot. */
+  upsertQuote(quote: QuoteSnapshot): void {
+    this._db.prepare(`
+      INSERT INTO zerodha_latest_quotes (
+        exchange, tradingsymbol, instrument_token, last_price, change, change_percent,
+        volume, oi, high, low, open, close, bid, ask, price_timestamp, received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(exchange, tradingsymbol) DO UPDATE SET
+        instrument_token = excluded.instrument_token,
+        last_price       = excluded.last_price,
+        change           = excluded.change,
+        change_percent   = excluded.change_percent,
+        volume           = excluded.volume,
+        oi               = excluded.oi,
+        high             = excluded.high,
+        low              = excluded.low,
+        open             = excluded.open,
+        close            = excluded.close,
+        bid              = excluded.bid,
+        ask              = excluded.ask,
+        price_timestamp  = excluded.price_timestamp,
+        received_at      = excluded.received_at
+    `).run(
+      quote.exchange,
+      quote.tradingsymbol,
+      quote.instrumentToken,
+      quote.lastPrice,
+      quote.change,
+      quote.changePercent,
+      quote.volume,
+      quote.oi,
+      quote.high,
+      quote.low,
+      quote.open,
+      quote.close,
+      quote.bid,
+      quote.ask,
+      quote.priceTimestamp,
+      quote.receivedAt,
+    );
+  }
+
+  /** Retrieve the latest quote for an instrument by exchange + tradingsymbol. */
+  getQuote(exchange: string, tradingsymbol: string): QuoteSnapshot | null {
+    const row = this._db.prepare(`
+      SELECT exchange, tradingsymbol, instrument_token, last_price, change, change_percent,
+             volume, oi, high, low, open, close, bid, ask, price_timestamp, received_at
+      FROM zerodha_latest_quotes
+      WHERE exchange = ? AND tradingsymbol = ?
+    `).get(exchange, tradingsymbol) as QuoteDbRow | undefined;
+
+    return row ? mapQuoteRow(row) : null;
+  }
+
+  /** Retrieve the latest quote by instrument token. */
+  getQuoteByToken(instrumentToken: number): QuoteSnapshot | null {
+    const row = this._db.prepare(`
+      SELECT exchange, tradingsymbol, instrument_token, last_price, change, change_percent,
+             volume, oi, high, low, open, close, bid, ask, price_timestamp, received_at
+      FROM zerodha_latest_quotes
+      WHERE instrument_token = ?
+    `).get(instrumentToken) as QuoteDbRow | undefined;
+
+    return row ? mapQuoteRow(row) : null;
+  }
+
+  /** Return all latest quotes. */
+  getAllQuotes(): QuoteSnapshot[] {
+    const rows = this._db.prepare(`
+      SELECT exchange, tradingsymbol, instrument_token, last_price, change, change_percent,
+             volume, oi, high, low, open, close, bid, ask, price_timestamp, received_at
+      FROM zerodha_latest_quotes
+      ORDER BY exchange, tradingsymbol
+    `).all() as QuoteDbRow[];
+
+    return rows.map(mapQuoteRow);
+  }
+
+  /** Count how many latest-quote snapshots are stored. */
+  countQuotes(): number {
+    const row = this._db.prepare('SELECT COUNT(*) AS cnt FROM zerodha_latest_quotes').get() as { cnt: number };
+    return row.cnt;
+  }
+
+  /**
+   * Determine the staleness of the newest quote across ALL subscribed instruments.
+   * Returns the minimum received_at across all quotes, or null if no quotes exist.
+   */
+  getQuoteStalenessMs(now: number): { isStale: boolean; stalenessMs: number | null; lastQuoteAt: number | null } {
+    const row = this._db.prepare(`
+      SELECT MAX(received_at) AS newest_ts FROM zerodha_latest_quotes
+    `).get() as { newest_ts: number | null };
+
+    if (row.newest_ts === null) {
+      return { isStale: true, stalenessMs: null, lastQuoteAt: null };
+    }
+
+    const stalenessMs = now - row.newest_ts;
+    return { isStale: stalenessMs > 60_000, stalenessMs, lastQuoteAt: row.newest_ts };
+  }
+
+  // ── Stream diagnostics (singleton, id=1) ──────────────────────────────
+
+  /** Upsert the singleton stream diagnostics row. */
+  upsertStreamDiagnostics(diag: StreamDiagnostics): void {
+    this._db.prepare(`
+      INSERT INTO zerodha_stream_state (
+        id, state, connected_at, last_heartbeat_at, last_quote_received_at,
+        reconnect_count, parse_failures, subscribed_count, last_error, created_at
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        state                = excluded.state,
+        connected_at         = excluded.connected_at,
+        last_heartbeat_at    = excluded.last_heartbeat_at,
+        last_quote_received_at = excluded.last_quote_received_at,
+        reconnect_count      = excluded.reconnect_count,
+        parse_failures       = excluded.parse_failures,
+        subscribed_count     = excluded.subscribed_count,
+        last_error           = excluded.last_error,
+        created_at           = excluded.created_at
+    `).run(
+      diag.state,
+      diag.connectedAt,
+      diag.lastHeartbeatAt,
+      diag.lastQuoteReceivedAt,
+      diag.reconnectCount,
+      diag.parseFailures,
+      diag.subscribedCount,
+      diag.lastError,
+      diag.createdAt,
+    );
+  }
+
+  /** Read the current stream diagnostics, or return a default disconnected state. */
+  getStreamDiagnostics(): StreamDiagnostics {
+    const row = this._db.prepare(`
+      SELECT state, connected_at, last_heartbeat_at, last_quote_received_at,
+             reconnect_count, parse_failures, subscribed_count, last_error, created_at
+      FROM zerodha_stream_state
+      WHERE id = 1
+    `).get() as {
+      state: string;
+      connected_at: number | null;
+      last_heartbeat_at: number | null;
+      last_quote_received_at: number | null;
+      reconnect_count: number;
+      parse_failures: number;
+      subscribed_count: number;
+      last_error: string | null;
+      created_at: number;
+    } | undefined;
+
+    if (!row) {
+      return {
+        state: 'disconnected' as StreamState,
+        connectedAt: null,
+        lastHeartbeatAt: null,
+        lastQuoteReceivedAt: null,
+        reconnectCount: 0,
+        parseFailures: 0,
+        subscribedCount: 0,
+        lastError: null,
+        createdAt: Date.now(),
+      };
+    }
+
+    return {
+      state: row.state as StreamState,
+      connectedAt: row.connected_at,
+      lastHeartbeatAt: row.last_heartbeat_at,
+      lastQuoteReceivedAt: row.last_quote_received_at,
+      reconnectCount: row.reconnect_count,
+      parseFailures: row.parse_failures,
+      subscribedCount: row.subscribed_count,
+      lastError: row.last_error,
+      createdAt: row.created_at,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +523,25 @@ interface InstrumentDbRow {
   updated_at: number;
 }
 
+interface QuoteDbRow {
+  exchange: string;
+  tradingsymbol: string;
+  instrument_token: number;
+  last_price: number;
+  change: number | null;
+  change_percent: number | null;
+  volume: number | null;
+  oi: number | null;
+  high: number | null;
+  low: number | null;
+  open: number | null;
+  close: number | null;
+  bid: number | null;
+  ask: number | null;
+  price_timestamp: number | null;
+  received_at: number;
+}
+
 function mapInstrumentRow(row: InstrumentDbRow): InstrumentRecord {
   return {
     exchange: row.exchange,
@@ -352,5 +555,26 @@ function mapInstrumentRow(row: InstrumentDbRow): InstrumentRecord {
     instrumentType: row.instrument_type as InstrumentRecord['instrumentType'],
     segment: row.segment as InstrumentRecord['segment'],
     exchangeToken: row.exchange_token,
+  };
+}
+
+function mapQuoteRow(row: QuoteDbRow): QuoteSnapshot {
+  return {
+    exchange: row.exchange,
+    tradingsymbol: row.tradingsymbol,
+    instrumentToken: row.instrument_token,
+    lastPrice: row.last_price,
+    change: row.change,
+    changePercent: row.change_percent,
+    volume: row.volume,
+    oi: row.oi,
+    high: row.high,
+    low: row.low,
+    open: row.open,
+    close: row.close,
+    bid: row.bid,
+    ask: row.ask,
+    priceTimestamp: row.price_timestamp,
+    receivedAt: row.received_at,
   };
 }

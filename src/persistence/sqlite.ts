@@ -80,6 +80,42 @@ CREATE TABLE IF NOT EXISTS zerodha_instrument_sync_state (
   last_status           TEXT,
   last_error            TEXT
 );
+
+CREATE TABLE IF NOT EXISTS zerodha_latest_quotes (
+  exchange          TEXT    NOT NULL,
+  tradingsymbol     TEXT    NOT NULL,
+  instrument_token  INTEGER NOT NULL,
+  last_price        REAL    NOT NULL DEFAULT 0,
+  change            REAL,
+  change_percent    REAL,
+  volume            INTEGER,
+  oi                INTEGER,
+  high              REAL,
+  low               REAL,
+  open              REAL,
+  close             REAL,
+  bid               REAL,
+  ask               REAL,
+  price_timestamp   INTEGER,
+  received_at       INTEGER NOT NULL,
+  PRIMARY KEY (exchange, tradingsymbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_latest_quotes_token ON zerodha_latest_quotes(instrument_token);
+CREATE INDEX IF NOT EXISTS idx_latest_quotes_received ON zerodha_latest_quotes(received_at);
+
+CREATE TABLE IF NOT EXISTS zerodha_stream_state (
+  id                  INTEGER PRIMARY KEY CHECK (id = 1),
+  state               TEXT    NOT NULL DEFAULT 'disconnected',
+  connected_at        INTEGER,
+  last_heartbeat_at   INTEGER,
+  last_quote_received_at INTEGER,
+  reconnect_count     INTEGER NOT NULL DEFAULT 0,
+  parse_failures      INTEGER NOT NULL DEFAULT 0,
+  subscribed_count    INTEGER NOT NULL DEFAULT 0,
+  last_error          TEXT,
+  created_at          INTEGER NOT NULL
+);
 `;
 
 export class DatabaseManager {

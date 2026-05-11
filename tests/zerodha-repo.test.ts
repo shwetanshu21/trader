@@ -437,4 +437,223 @@ describe('ZerodhaRepository', () => {
       expect(repo.getInstrumentStalenessMs(100_000)).toBe(96_000);
     });
   });
+
+  describe('latest quotes', () => {
+    it('starts with zero quotes', () => {
+      const repo = createRepo();
+      expect(repo.countQuotes()).toBe(0);
+    });
+
+    it('returns null for unknown quote', () => {
+      const repo = createRepo();
+      expect(repo.getQuote('NSE', 'UNKNOWN')).toBeNull();
+      expect(repo.getQuoteByToken(999)).toBeNull();
+    });
+
+    it('upserts and retrieves a quote snapshot', () => {
+      const repo = createRepo();
+      const now = Date.now();
+
+      repo.upsertQuote({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        lastPrice: 2560.50,
+        change: 15.25,
+        changePercent: 0.60,
+        volume: 1_500_000,
+        oi: null,
+        high: 2575.00,
+        low: 2545.00,
+        open: 2548.00,
+        close: 2545.25,
+        bid: 2559.50,
+        ask: 2561.00,
+        priceTimestamp: Math.floor(now / 1000),
+        receivedAt: now,
+      });
+
+      expect(repo.countQuotes()).toBe(1);
+      const loaded = repo.getQuote('NSE', 'RELIANCE');
+      expect(loaded).not.toBeNull();
+      expect(loaded!.lastPrice).toBe(2560.50);
+      expect(loaded!.change).toBe(15.25);
+      expect(loaded!.volume).toBe(1_500_000);
+      expect(loaded!.bid).toBe(2559.50);
+      expect(loaded!.ask).toBe(2561.00);
+    });
+
+    it('upsert replaces previous quote for the same instrument', () => {
+      const repo = createRepo();
+      const t1 = 1000;
+
+      repo.upsertQuote({
+        exchange: 'NSE', tradingsymbol: 'TCS', instrumentToken: 200,
+        lastPrice: 3500, change: null, changePercent: null, volume: null, oi: null,
+        high: null, low: null, open: null, close: null, bid: null, ask: null,
+        priceTimestamp: null, receivedAt: t1,
+      });
+
+      repo.upsertQuote({
+        exchange: 'NSE', tradingsymbol: 'TCS', instrumentToken: 200,
+        lastPrice: 3510, change: 10, changePercent: 0.29, volume: null, oi: null,
+        high: null, low: null, open: null, close: null, bid: null, ask: null,
+        priceTimestamp: null, receivedAt: t1 + 1000,
+      });
+
+      expect(repo.countQuotes()).toBe(1);
+      const loaded = repo.getQuoteByToken(200);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.lastPrice).toBe(3510);
+      expect(loaded!.change).toBe(10);
+    });
+
+    it('retrieves all quotes', () => {
+      const repo = createRepo();
+      const now = Date.now();
+
+      repo.upsertQuote({
+        exchange: 'NSE', tradingsymbol: 'RELIANCE', instrumentToken: 1,
+        lastPrice: 2500, change: null, changePercent: null, volume: null, oi: null,
+        high: null, low: null, open: null, close: null, bid: null, ask: null,
+        priceTimestamp: null, receivedAt: now,
+      });
+      repo.upsertQuote({
+        exchange: 'NSE', tradingsymbol: 'TCS', instrumentToken: 2,
+        lastPrice: 3500, change: null, changePercent: null, volume: null, oi: null,
+        high: null, low: null, open: null, close: null, bid: null, ask: null,
+        priceTimestamp: null, receivedAt: now,
+      });
+
+      const all = repo.getAllQuotes();
+      expect(all.length).toBe(2);
+    });
+
+    it('reports staleness correctly', () => {
+      const repo = createRepo();
+      const now = 100_000;
+
+      // No quotes yet — stale
+      const fresh1 = repo.getQuoteStalenessMs(now);
+      expect(fresh1.isStale).toBe(true);
+      expect(fresh1.stalenessMs).toBeNull();
+      expect(fresh1.lastQuoteAt).toBeNull();
+
+      // Add a recent quote
+      repo.upsertQuote({
+        exchange: 'NSE', tradingsymbol: 'RELIANCE', instrumentToken: 1,
+        lastPrice: 2500, change: null, changePercent: null, volume: null, oi: null,
+        high: null, low: null, open: null, close: null, bid: null, ask: null,
+        priceTimestamp: null, receivedAt: now - 5_000,
+      });
+
+      // 5 seconds old — not stale (< 60s)
+      const fresh2 = repo.getQuoteStalenessMs(now);
+      expect(fresh2.isStale).toBe(false);
+      expect(fresh2.stalenessMs).toBe(5_000);
+
+      // 120 seconds old — stale
+      const fresh3 = repo.getQuoteStalenessMs(now + 120_000);
+      expect(fresh3.isStale).toBe(true);
+      expect(fresh3.stalenessMs).toBe(125_000);
+    });
+
+    it('looks up quote by instrument token', () => {
+      const repo = createRepo();
+      repo.upsertQuote({
+        exchange: 'NFO', tradingsymbol: 'BANKNIFTY24DEC50000CE', instrumentToken: 789,
+        lastPrice: 150.50, change: null, changePercent: null, volume: null, oi: null,
+        high: null, low: null, open: null, close: null, bid: null, ask: null,
+        priceTimestamp: null, receivedAt: Date.now(),
+      });
+
+      const found = repo.getQuoteByToken(789);
+      expect(found).not.toBeNull();
+      expect(found!.exchange).toBe('NFO');
+      expect(found!.tradingsymbol).toBe('BANKNIFTY24DEC50000CE');
+      expect(found!.lastPrice).toBe(150.50);
+    });
+  });
+
+  describe('stream diagnostics', () => {
+    it('returns default disconnected state when no diagnostics exist', () => {
+      const repo = createRepo();
+      const diag = repo.getStreamDiagnostics();
+
+      expect(diag.state).toBe('disconnected');
+      expect(diag.connectedAt).toBeNull();
+      expect(diag.lastHeartbeatAt).toBeNull();
+      expect(diag.reconnectCount).toBe(0);
+      expect(diag.parseFailures).toBe(0);
+      expect(diag.subscribedCount).toBe(0);
+      expect(diag.lastError).toBeNull();
+      expect(diag.createdAt).toBeGreaterThan(0);
+    });
+
+    it('persists and retrieves stream diagnostics', () => {
+      const repo = createRepo();
+      const now = Date.now();
+
+      repo.upsertStreamDiagnostics({
+        state: 'connected',
+        connectedAt: now - 10_000,
+        lastHeartbeatAt: now - 1_000,
+        lastQuoteReceivedAt: now - 500,
+        reconnectCount: 2,
+        parseFailures: 1,
+        subscribedCount: 5,
+        lastError: null,
+        createdAt: now,
+      });
+
+      const loaded = repo.getStreamDiagnostics();
+      expect(loaded.state).toBe('connected');
+      expect(loaded.connectedAt).toBe(now - 10_000);
+      expect(loaded.reconnectCount).toBe(2);
+      expect(loaded.parseFailures).toBe(1);
+      expect(loaded.subscribedCount).toBe(5);
+      expect(loaded.lastError).toBeNull();
+    });
+
+    it('upsert replaces previous diagnostics', () => {
+      const repo = createRepo();
+      const now = Date.now();
+
+      repo.upsertStreamDiagnostics({
+        state: 'disconnected', connectedAt: null, lastHeartbeatAt: null,
+        lastQuoteReceivedAt: null, reconnectCount: 0, parseFailures: 0,
+        subscribedCount: 0, lastError: null, createdAt: now,
+      });
+
+      repo.upsertStreamDiagnostics({
+        state: 'connected', connectedAt: now, lastHeartbeatAt: now,
+        lastQuoteReceivedAt: now, reconnectCount: 1, parseFailures: 3,
+        subscribedCount: 10, lastError: null, createdAt: now,
+      });
+
+      const loaded = repo.getStreamDiagnostics();
+      expect(loaded.state).toBe('connected');
+      expect(loaded.reconnectCount).toBe(1);
+      expect(loaded.parseFailures).toBe(3);
+      expect(loaded.subscribedCount).toBe(10);
+    });
+
+    it('persists error state', () => {
+      const repo = createRepo();
+      const now = Date.now();
+
+      repo.upsertStreamDiagnostics({
+        state: 'degraded', connectedAt: null, lastHeartbeatAt: null,
+        lastQuoteReceivedAt: null, reconnectCount: 3, parseFailures: 5,
+        subscribedCount: 0, lastError: 'WebSocket closed: code=1006 reason=Abnormal Closure',
+        createdAt: now,
+      });
+
+      const loaded = repo.getStreamDiagnostics();
+      expect(loaded.state).toBe('degraded');
+      expect(loaded.reconnectCount).toBe(3);
+      expect(loaded.parseFailures).toBe(5);
+      expect(loaded.lastError).toContain('WebSocket closed');
+    });
+  });
 });
