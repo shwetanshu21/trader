@@ -211,3 +211,17 @@ export interface ConfigValidationError {
   message: string;
   provided: unknown;
 }
+
+// ---------------------------------------------------------------------------
+// Re-export Zerodha instrument types for convenience from runtime boundary
+// ---------------------------------------------------------------------------
+
+export type {
+  InstrumentRecord,
+  InstrumentSyncState,
+  InstrumentSyncResult,
+  InstrumentType,
+  SupportedSegment,
+  RawInstrumentCsvRow,
+  InstrumentFreshnessConfig,
+} from '../integrations/zerodha/types.js';
