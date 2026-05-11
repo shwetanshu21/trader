@@ -188,8 +188,8 @@ export class RuntimeApp {
       clock,
     });
 
-    // ── Phase 8: create health HTTP server ────────────────────────────────
-    const server = createHealthServer(healthService, scheduler, telemetry, dbManager);
+    // ── Phase 8: create health HTTP server with dashboard routes ───────────
+    const server = createHealthServer(healthService, scheduler, telemetry, dbManager, dashboard);
 
     // Build handles
     this._handles = {

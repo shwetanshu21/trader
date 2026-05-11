@@ -13,6 +13,8 @@ import type { HealthService } from './health-service.js';
 import type { Scheduler } from './scheduler.js';
 import type { Telemetry } from './telemetry.js';
 import type { DatabaseManager } from '../persistence/sqlite.js';
+import type { DashboardReadModel } from './dashboard-read-model.js';
+import { renderDashboardHtml, renderDashboardJson } from './dashboard-render.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +36,7 @@ export function createHealthServer(
   scheduler: Scheduler,
   telemetry: Telemetry,
   dbManager: DatabaseManager,
+  dashboard?: DashboardReadModel,
 ): http.Server {
   return http.createServer((req, res) => {
     // CORS headers for local health monitoring
@@ -91,6 +94,32 @@ export function createHealthServer(
           break;
         }
 
+        // ── Dashboard routes ────────────────────────────────────────────
+
+        case '/dashboard': {
+          if (!dashboard) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(dashboardNotAvailableHtml());
+            break;
+          }
+          const snapshot = dashboard.getSnapshot();
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(renderDashboardHtml(snapshot));
+          break;
+        }
+
+        case '/dashboard.json': {
+          if (!dashboard) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Dashboard not available' }));
+            break;
+          }
+          const snapshot = dashboard.getSnapshot();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(renderDashboardJson(snapshot));
+          break;
+        }
+
         default: {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found', path: url.pathname }));
@@ -103,6 +132,20 @@ export function createHealthServer(
       res.end(JSON.stringify({ error: 'Internal server error', detail: message }));
     }
   });
+}
+
+// ── Fallback HTML when dashboard is not wired ──────────────────────────────
+
+function dashboardNotAvailableHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Dashboard</title></head>
+<body style="font-family:sans-serif;padding:2rem;background:#0f172a;color:#e2e8f0;">
+<h1>Runtime Dashboard</h1>
+<p class="muted" style="color:#64748b;">Dashboard read model not wired. Use the JSON health endpoints instead.</p>
+<p><a href="/health" style="color:#3b82f6;">/health</a></p>
+</body>
+</html>`;
 }
 
 // ── Simple process-start tracking for liveness ───────────────────────────────
