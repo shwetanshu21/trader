@@ -19,9 +19,7 @@ import {
   ValidationReasonCode,
   MarketPhase,
 } from '../types/runtime.js';
-import type { SessionService } from '../integrations/zerodha/session-service.js';
-import type { InstrumentsService } from '../integrations/zerodha/instruments-service.js';
-import type { MarketDataStream } from '../integrations/zerodha/market-data-stream.js';
+import type { SessionRuntimePort, InstrumentCatalogPort, QuoteStreamPort } from '../integrations/broker/ports.js';
 import type { MarketClock } from '../runtime/market-clock.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { ProposalEngine, type EngineContext } from './proposal-engine.js';
@@ -37,9 +35,9 @@ export class ProposalSupervisor implements TickWork {
   private readonly _engine: ProposalEngine;
   private readonly _validator: IndiaProposalValidator;
   private readonly _repo: ProposalRepository;
-  private readonly _session: SessionService | null;
-  private readonly _instruments: InstrumentsService | null;
-  private readonly _stream: MarketDataStream | null;
+  private readonly _session: SessionRuntimePort | null;
+  private readonly _instruments: InstrumentCatalogPort | null;
+  private readonly _stream: QuoteStreamPort | null;
   private readonly _clock: MarketClock;
   private readonly _maxProposals: number;
 
@@ -54,9 +52,9 @@ export class ProposalSupervisor implements TickWork {
     engine: ProposalEngine;
     validator: IndiaProposalValidator;
     repo: ProposalRepository;
-    session: SessionService | null;
-    instruments: InstrumentsService | null;
-    stream: MarketDataStream | null;
+    session: SessionRuntimePort | null;
+    instruments: InstrumentCatalogPort | null;
+    stream: QuoteStreamPort | null;
     clock: MarketClock;
     maxProposals?: number;
   }) {

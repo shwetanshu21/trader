@@ -55,6 +55,55 @@ describe('loadConfig', () => {
     expect(cfg.marketTimezone).toBe('Asia/Kolkata');
   });
 
+  it('reads broker MCP aliases from TRADER_BROKER_*', () => {
+    const cfg = loadConfig({
+      TRADER_BROKER_TRANSPORT: 'mcp',
+      TRADER_BROKER_MCP_URL: 'http://localhost:8787/mcp',
+      TRADER_BROKER_MCP_TIMEOUT_MS: '12345',
+      TRADER_BROKER_QUOTE_POLL_INTERVAL_MS: '7000',
+      TRADER_BROKER_INSTRUMENT_REFRESH_MS: '90000',
+      TRADER_BROKER_MCP_TOOL_SESSION: 'get-profile',
+      TRADER_BROKER_MCP_TOOL_INSTRUMENTS: 'get-instruments-bod',
+      TRADER_BROKER_MCP_TOOL_QUOTES: 'get-full-market-quote',
+    });
+
+    expect(cfg.broker).toMatchObject({
+      transport: 'mcp',
+      mcpUrl: 'http://localhost:8787/mcp',
+      mcpTimeoutMs: 12345,
+      quotePollIntervalMs: 7000,
+      instrumentRefreshIntervalMs: 90000,
+      mcpTools: {
+        session: 'get-profile',
+        instruments: 'get-instruments-bod',
+        quotes: 'get-full-market-quote',
+      },
+    });
+  });
+
+  it('reads provider-specific MCP aliases from TRADER_UPSTOX_*', () => {
+    const cfg = loadConfig({
+      TRADER_UPSTOX_TRANSPORT: 'mcp',
+      TRADER_UPSTOX_MCP_URL: 'http://localhost:8787/mcp',
+    });
+
+    expect(cfg.broker).toMatchObject({
+      transport: 'mcp',
+      mcpUrl: 'http://localhost:8787/mcp',
+    });
+  });
+
+  it('prefers TRADER_BROKER_* over legacy TRADER_ZERODHA_* aliases', () => {
+    const cfg = loadConfig({
+      TRADER_BROKER_TRANSPORT: 'mcp',
+      TRADER_BROKER_MCP_URL: 'http://localhost:8787/mcp',
+      TRADER_ZERODHA_TRANSPORT: 'mcp',
+      TRADER_ZERODHA_MCP_URL: 'https://legacy.example/mcp',
+    });
+
+    expect(cfg.broker?.mcpUrl).toBe('http://localhost:8787/mcp');
+  });
+
   it('rejects non-numeric interval', () => {
     expect(() => loadConfig({ TRADER_SCHEDULER_INTERVAL_MS: 'fast' })).toThrow(ConfigValidationErrorImpl);
   });

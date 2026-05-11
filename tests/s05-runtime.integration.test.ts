@@ -7,11 +7,14 @@
 // Deterministic guards (no real-time sleeps).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { RuntimeApp } from '../src/runtime/runtime-app.js';
 import type { RuntimeConfig } from '../src/types/runtime.js';
 
 // ---------------------------------------------------------------------------
-// Minimal config for testing (no Zerodha, no Proposal Engine)
+// Minimal config for testing (no broker, no Proposal Engine)
 // ---------------------------------------------------------------------------
 
 function testConfig(overrides?: Partial<RuntimeConfig>): RuntimeConfig {
@@ -148,7 +151,7 @@ describe('S05 Runtime — RuntimeApp harness', () => {
       expect(snapshot.health.verdict).toBe('healthy');
     });
 
-    it('snapshot broker is null when Zerodha not configured', () => {
+    it('snapshot broker is null when broker is not configured', () => {
       app = new RuntimeApp(testConfig({ port: 0 }));
       const handles = app.build();
 
@@ -186,8 +189,8 @@ describe('S05 Runtime — RuntimeApp harness', () => {
   // ── Broker-configured runtime ────────────────────────────────────────
 
   describe('Broker-configured runtime', () => {
-    it('creates zerodha services when config includes broker', () => {
-      // We need a full zerodha config — but this test just proves the
+    it('creates broker services when config includes broker', () => {
+      // We need a full broker config — but this test just proves the
       // harness wires it correctly without starting the real services.
       // The actual service start is tested in integration tests.
       // For the harness, we just verify it doesn't crash with a partial config.
@@ -258,5 +261,27 @@ describe('S05 Runtime — DashboardReadModel edge cases', () => {
     const snapshot = handles.dashboard.getSnapshot();
     expect(snapshot.health.lifecycleState).toBe('running');
     expect(() => JSON.stringify(snapshot)).not.toThrow();
+  });
+});
+
+describe('S05 Runtime — restart persistence regression', () => {
+  it('can restart on the same sqlite db after a clean stop', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trader-runtime-restart-'));
+    const dbPath = path.join(tmpDir, 'runtime.db');
+
+    const app1 = new RuntimeApp(testConfig({ port: 0, dbPath }));
+    app1.start();
+    app1.stop('First stop');
+
+    const app2 = new RuntimeApp(testConfig({ port: 0, dbPath }));
+    const handles2 = app2.start();
+
+    expect(handles2.lifecycle.state).toBe('running');
+    expect(handles2.healthService.getHealth().verdict).toBe('healthy');
+    expect(handles2.scheduler.getState().status).toBe('running');
+    expect(handles2.scheduler.getState().lastError).toBeNull();
+    expect(handles2.scheduler.getState().tickCount).toBeGreaterThanOrEqual(0);
+
+    app2.stop('Second stop');
   });
 });

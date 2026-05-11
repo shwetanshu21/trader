@@ -16,7 +16,7 @@ import {
 import type {
   InstrumentRecord,
   QuoteSnapshot,
-} from '../integrations/zerodha/types.js';
+} from '../integrations/broker/types.js';
 
 // ---------------------------------------------------------------------------
 // Output shapes

@@ -1,4 +1,4 @@
-import type { RuntimeConfig, ConfigValidationError, ZerodhaConfig, ProposalEngineConfig } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Parsed env accessor — reads `process.env` once at startup.
@@ -7,8 +7,27 @@ import type { RuntimeConfig, ConfigValidationError, ZerodhaConfig, ProposalEngin
 const VALID_NODE_ENVS = ['development', 'production', 'test'] as const;
 const VALID_LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
-/// Default session refresh: 6 hours (Kite tokens live 24h; refresh well before expiry).
-const DEFAULT_ZERODHA_SESSION_REFRESH_MS = 21_600_000;
+/// Default session refresh: 6 hours (session material lives ~24h; refresh well before expiry).
+const DEFAULT_BROKER_SESSION_REFRESH_MS = 21_600_000;
+
+function firstDefined(env: Record<string, string | undefined>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    if (env[key] !== undefined) return env[key];
+  }
+  return undefined;
+}
+
+function firstTrimmed(env: Record<string, string | undefined>, keys: readonly string[]): string | undefined {
+  const value = firstDefined(env, keys);
+  return value?.trim();
+}
+
+function aliasLabel(keys: readonly string[]): string {
+  const [preferred, ...aliases] = keys;
+  return aliases.length > 0
+    ? `${preferred} (aliases: ${aliases.join(', ')})`
+    : preferred;
+}
 
 /** Parse and validate runtime configuration from environment variables. */
 export function loadConfig(env: Record<string, string | undefined>): RuntimeConfig {
@@ -87,8 +106,8 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     ? logLevel
     : 'info';
 
-  // ── ZERODHA ────────────────────────────────────────────────────────────
-  const zerodha = parseZerodhaConfig(env, errors);
+  // ── BROKER ─────────────────────────────────────────────────────────────
+  const broker = parseBrokerConfig(env, errors);
 
   // ── PROPOSAL ENGINE ────────────────────────────────────────────────────
   const proposalEngine = parseProposalEngineConfig(env, errors);
@@ -116,66 +135,162 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     schedulerIntervalMs,
     dbPath,
     logLevel: resolvedLogLevel,
-    zerodha,
+    broker,
+    zerodha: broker,
     proposalEngine,
   };
 }
 
 /**
- * Parse Zerodha configuration.
- * Returns null if all Zerodha env vars are absent (graceful degraded mode).
+ * Parse broker transport configuration.
+ * Returns null if all legacy broker env vars are absent (graceful degraded mode).
  * Returns a populated config if all required fields are present.
  * Pushes to errors array if some but not all required fields are present.
  */
-function parseZerodhaConfig(
+function parseBrokerConfig(
   env: Record<string, string | undefined>,
   errors: ConfigValidationError[],
-): ZerodhaConfig | null {
-  const apiKey = env.TRADER_ZERODHA_API_KEY ?? '';
-  const apiSecret = env.TRADER_ZERODHA_API_SECRET ?? '';
-  const userId = env.TRADER_ZERODHA_USER_ID ?? '';
-  const totpKey = env.TRADER_ZERODHA_TOTP_KEY ?? '';
+): BrokerConfig | null {
+  const keysets = {
+    transport: ['TRADER_BROKER_TRANSPORT', 'TRADER_UPSTOX_TRANSPORT', 'TRADER_ZERODHA_TRANSPORT'],
+    apiKey: ['TRADER_BROKER_API_KEY', 'TRADER_UPSTOX_API_KEY', 'TRADER_ZERODHA_API_KEY'],
+    apiSecret: ['TRADER_BROKER_API_SECRET', 'TRADER_UPSTOX_API_SECRET', 'TRADER_ZERODHA_API_SECRET'],
+    userId: ['TRADER_BROKER_USER_ID', 'TRADER_UPSTOX_USER_ID', 'TRADER_ZERODHA_USER_ID'],
+    totpKey: ['TRADER_BROKER_TOTP_KEY', 'TRADER_UPSTOX_TOTP_KEY', 'TRADER_ZERODHA_TOTP_KEY'],
+    sessionRefreshMs: ['TRADER_BROKER_SESSION_REFRESH_MS', 'TRADER_UPSTOX_SESSION_REFRESH_MS', 'TRADER_ZERODHA_SESSION_REFRESH_MS'],
+    mcpUrl: ['TRADER_BROKER_MCP_URL', 'TRADER_UPSTOX_MCP_URL', 'TRADER_ZERODHA_MCP_URL'],
+    mcpAuthToken: ['TRADER_BROKER_MCP_AUTH_TOKEN', 'TRADER_UPSTOX_MCP_AUTH_TOKEN', 'TRADER_ZERODHA_MCP_AUTH_TOKEN'],
+    mcpSessionTool: ['TRADER_BROKER_MCP_TOOL_SESSION', 'TRADER_UPSTOX_MCP_TOOL_SESSION', 'TRADER_ZERODHA_MCP_TOOL_SESSION'],
+    mcpInstrumentsTool: ['TRADER_BROKER_MCP_TOOL_INSTRUMENTS', 'TRADER_UPSTOX_MCP_TOOL_INSTRUMENTS', 'TRADER_ZERODHA_MCP_TOOL_INSTRUMENTS'],
+    mcpQuotesTool: ['TRADER_BROKER_MCP_TOOL_QUOTES', 'TRADER_UPSTOX_MCP_TOOL_QUOTES', 'TRADER_ZERODHA_MCP_TOOL_QUOTES'],
+    mcpTimeoutMs: ['TRADER_BROKER_MCP_TIMEOUT_MS', 'TRADER_UPSTOX_MCP_TIMEOUT_MS', 'TRADER_ZERODHA_MCP_TIMEOUT_MS'],
+    quotePollIntervalMs: ['TRADER_BROKER_QUOTE_POLL_INTERVAL_MS', 'TRADER_UPSTOX_QUOTE_POLL_INTERVAL_MS', 'TRADER_ZERODHA_QUOTE_POLL_INTERVAL_MS'],
+    instrumentRefreshIntervalMs: ['TRADER_BROKER_INSTRUMENT_REFRESH_MS', 'TRADER_UPSTOX_INSTRUMENT_REFRESH_MS', 'TRADER_ZERODHA_INSTRUMENT_REFRESH_MS'],
+  } as const;
 
-  const allAbsent = !apiKey && !apiSecret && !userId && !totpKey;
+  const transportRaw = firstTrimmed(env, keysets.transport)?.toLowerCase();
+  const transport = (transportRaw === 'mcp' || transportRaw === 'direct')
+    ? transportRaw
+    : undefined;
 
-  if (allAbsent) {
-    return null; // Graceful degraded mode — no Zerodha integration
+  const apiKey = firstTrimmed(env, keysets.apiKey) ?? '';
+  const apiSecret = firstTrimmed(env, keysets.apiSecret) ?? '';
+  const userId = firstTrimmed(env, keysets.userId) ?? '';
+  const totpKey = firstTrimmed(env, keysets.totpKey) ?? '';
+
+  const mcpUrl = firstTrimmed(env, keysets.mcpUrl) ?? '';
+  const mcpAuthToken = firstTrimmed(env, keysets.mcpAuthToken) || undefined;
+  const mcpSessionTool = firstTrimmed(env, keysets.mcpSessionTool) || undefined;
+  const mcpInstrumentsTool = firstTrimmed(env, keysets.mcpInstrumentsTool) || undefined;
+  const mcpQuotesTool = firstTrimmed(env, keysets.mcpQuotesTool) || undefined;
+
+  const anyDirect = Boolean(apiKey || apiSecret || userId || totpKey);
+  const anyMcp = Boolean(mcpUrl || mcpAuthToken || mcpSessionTool || mcpInstrumentsTool || mcpQuotesTool || transport === 'mcp');
+
+  if (!anyDirect && !anyMcp && transport !== 'direct') {
+    return null; // Graceful degraded mode — no broker integration
   }
 
-  // Partial presence is an error
-  const missing: string[] = [];
-  if (!apiKey) missing.push('TRADER_ZERODHA_API_KEY');
-  if (!apiSecret) missing.push('TRADER_ZERODHA_API_SECRET');
-  if (!userId) missing.push('TRADER_ZERODHA_USER_ID');
-  if (!totpKey) missing.push('TRADER_ZERODHA_TOTP_KEY');
-
-  if (missing.length > 0) {
-    errors.push({
-      field: 'ZERODHA',
-      message: `Partial Zerodha config: missing ${missing.join(', ')}. Set all four or none.`,
-      provided: { present: ['TRADER_ZERODHA_API_KEY', 'TRADER_ZERODHA_API_SECRET', 'TRADER_ZERODHA_USER_ID', 'TRADER_ZERODHA_TOTP_KEY'].filter(k => env[k]), missing },
-    });
-    return null;
-  }
-
-  // Optional refresh interval
-  const intervalRaw = env.TRADER_ZERODHA_SESSION_REFRESH_MS ?? String(DEFAULT_ZERODHA_SESSION_REFRESH_MS);
+  const intervalRaw = firstDefined(env, keysets.sessionRefreshMs) ?? String(DEFAULT_BROKER_SESSION_REFRESH_MS);
   const sessionRefreshIntervalMs = Number(intervalRaw);
   if (!Number.isFinite(sessionRefreshIntervalMs) || sessionRefreshIntervalMs < 60_000) {
     errors.push({
-      field: 'TRADER_ZERODHA_SESSION_REFRESH_MS',
-      message: `Must be ≥ 60_000ms, got "${intervalRaw}".`,
+      field: keysets.sessionRefreshMs[0],
+      message: `Must be ≥ 60_000ms, got "${intervalRaw}". Also accepts ${keysets.sessionRefreshMs.slice(1).join(', ')}.`,
       provided: intervalRaw,
     });
     return null;
   }
 
+  const resolvedTransport = transport ?? (anyMcp ? 'mcp' : 'direct');
+
+  if (resolvedTransport === 'direct') {
+    const missing: string[] = [];
+    if (!apiKey) missing.push(aliasLabel(keysets.apiKey));
+    if (!apiSecret) missing.push(aliasLabel(keysets.apiSecret));
+    if (!userId) missing.push(aliasLabel(keysets.userId));
+    if (!totpKey) missing.push(aliasLabel(keysets.totpKey));
+
+    if (missing.length > 0) {
+      errors.push({
+        field: 'BROKER',
+        message: `Partial broker direct config: missing ${missing.join(', ')}. Set all four or switch ${aliasLabel(keysets.transport)}=mcp.`,
+        provided: {
+          transport: resolvedTransport,
+          missing,
+        },
+      });
+      return null;
+    }
+
+    return {
+      transport: 'direct',
+      apiKey,
+      apiSecret,
+      userId,
+      totpKey,
+      sessionRefreshIntervalMs,
+    };
+  }
+
+  const resolvedMcpUrl = mcpUrl || 'https://mcp.kite.trade/mcp';
+  try {
+    new URL(resolvedMcpUrl);
+  } catch {
+    errors.push({
+      field: keysets.mcpUrl[0],
+      message: `Invalid MCP URL: "${resolvedMcpUrl}". Also accepts ${keysets.mcpUrl.slice(1).join(', ')}.`,
+      provided: resolvedMcpUrl,
+    });
+    return null;
+  }
+
+  const timeoutRaw = firstDefined(env, keysets.mcpTimeoutMs) ?? '30000';
+  const mcpTimeoutMs = Number(timeoutRaw);
+  if (!Number.isFinite(mcpTimeoutMs) || mcpTimeoutMs < 1000 || mcpTimeoutMs > 300_000) {
+    errors.push({
+      field: keysets.mcpTimeoutMs[0],
+      message: `Must be between 1000 and 300000, got "${timeoutRaw}". Also accepts ${keysets.mcpTimeoutMs.slice(1).join(', ')}.`,
+      provided: timeoutRaw,
+    });
+    return null;
+  }
+
+  const quotePollRaw = firstDefined(env, keysets.quotePollIntervalMs) ?? '15000';
+  const quotePollIntervalMs = Number(quotePollRaw);
+  if (!Number.isFinite(quotePollIntervalMs) || quotePollIntervalMs < 1000 || quotePollIntervalMs > 300_000) {
+    errors.push({
+      field: keysets.quotePollIntervalMs[0],
+      message: `Must be between 1000 and 300000, got "${quotePollRaw}". Also accepts ${keysets.quotePollIntervalMs.slice(1).join(', ')}.`,
+      provided: quotePollRaw,
+    });
+    return null;
+  }
+
+  const instrumentRefreshRaw = firstDefined(env, keysets.instrumentRefreshIntervalMs) ?? '86400000';
+  const instrumentRefreshIntervalMs = Number(instrumentRefreshRaw);
+  if (!Number.isFinite(instrumentRefreshIntervalMs) || instrumentRefreshIntervalMs < 60_000) {
+    errors.push({
+      field: keysets.instrumentRefreshIntervalMs[0],
+      message: `Must be ≥ 60_000ms, got "${instrumentRefreshRaw}". Also accepts ${keysets.instrumentRefreshIntervalMs.slice(1).join(', ')}.`,
+      provided: instrumentRefreshRaw,
+    });
+    return null;
+  }
+
   return {
-    apiKey,
-    apiSecret,
-    userId,
-    totpKey,
+    transport: 'mcp',
+    mcpUrl: resolvedMcpUrl,
+    mcpAuthToken,
+    mcpTimeoutMs,
+    quotePollIntervalMs,
+    instrumentRefreshIntervalMs,
     sessionRefreshIntervalMs,
+    mcpTools: {
+      session: mcpSessionTool,
+      instruments: mcpInstrumentsTool,
+      quotes: mcpQuotesTool,
+    },
   };
 }
 

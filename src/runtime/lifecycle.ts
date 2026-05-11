@@ -23,9 +23,13 @@ export class LifecycleManager {
   constructor(repo: RuntimeStateRepository) {
     this._repo = repo;
 
-    // Recover last known state from DB, or default to Booting
+    // Recover last known state from DB, or default to Booting.
+    // A persisted Stopped state is terminal for the prior process only — a
+    // fresh process boot must be allowed to start again on the same DB.
     const persisted = repo.getLatestLifecycleState();
-    this._state = persisted ?? LifecycleState.Booting;
+    this._state = persisted === LifecycleState.Stopped
+      ? LifecycleState.Booting
+      : (persisted ?? LifecycleState.Booting);
 
     // Restore the latest event for in-memory access
     this._latestEvent = repo.getLatestLifecycleEvent();

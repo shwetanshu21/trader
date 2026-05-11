@@ -8,6 +8,7 @@
     "build": "tsc",
     "dev": "tsx watch src/main.ts",
     "start": "node --experimental-specifier-resolution=node dist/main.js",
+    "start:upstox:notifier": "tsx src/upstox/notifier-main.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
@@ -23,6 +24,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.9.0"
   }
 }

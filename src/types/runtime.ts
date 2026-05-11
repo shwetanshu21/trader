@@ -96,7 +96,9 @@ export interface HealthStatus {
   scheduler: SchedulerState;
   /** List of active degradation reasons (empty when healthy). */
   degradedReasons: string[];
-  /** Broker (Zerodha) health block. Present only when Zerodha is configured. */
+  /** Neutral broker health block. Present when any broker transport is configured. */
+  broker?: BrokerHealth;
+  /** Backward-compatible alias for older Zerodha-shaped consumers. */
   zerodha?: BrokerHealth;
   /** ISO‑8601 timestamp of this health snapshot. */
   checkedAt: string;
@@ -105,7 +107,7 @@ export interface HealthStatus {
 /** Broker health block — published on /health for agent observability. */
 export interface BrokerHealth {
   /** Session authentication state. */
-  session: ZerodhaSessionHealth;
+  session: BrokerSessionHealth;
   /** Instrument master freshness summary. */
   instruments: {
     /** Last successful sync timestamp (ms), or null. */
@@ -141,25 +143,43 @@ export interface BrokerHealth {
 }
 
 // ---------------------------------------------------------------------------
-// Zerodha — config, session, health
+// Broker transport — config, session, health
 // ---------------------------------------------------------------------------
 
-/** Zerodha-specific configuration (null when env vars are absent). */
-export interface ZerodhaConfig {
-  /** Zerodha Kite Connect API key. */
-  apiKey: string;
-  /** Zerodha Kite Connect API secret. */
-  apiSecret: string;
-  /** Zerodha user ID. */
-  userId: string;
-  /** TOTP key used for daily 2FA session creation. */
-  totpKey: string;
-  /** Session refresh interval in ms (default: 21_600_000 = 6h, shorter than the 24h Kite limit). */
+/** Broker transport configuration (null when env vars are absent). */
+export interface BrokerConfig {
+  /** Broker transport mode: direct Kite auth or remote Kite MCP. */
+  transport?: 'direct' | 'mcp';
+  /** Session refresh interval in ms (default: 21_600_000 = 6h). */
   sessionRefreshIntervalMs: number;
+  /** Zerodha Kite Connect API key (direct mode). */
+  apiKey?: string;
+  /** Zerodha Kite Connect API secret (direct mode). */
+  apiSecret?: string;
+  /** Zerodha user ID (direct mode). */
+  userId?: string;
+  /** TOTP key used for daily 2FA session creation (direct mode). */
+  totpKey?: string;
+  /** Zerodha Kite MCP endpoint URL (MCP mode). */
+  mcpUrl?: string;
+  /** Optional bearer token or session token for the MCP endpoint. */
+  mcpAuthToken?: string;
+  /** Per-request timeout for MCP calls in ms. */
+  mcpTimeoutMs?: number;
+  /** Quote polling interval used by the MCP-backed quote stream in ms. */
+  quotePollIntervalMs?: number;
+  /** Instrument refresh interval in ms for MCP-backed sync. */
+  instrumentRefreshIntervalMs?: number;
+  /** Optional explicit MCP tool overrides when auto-discovery is insufficient. */
+  mcpTools?: {
+    session?: string;
+    instruments?: string;
+    quotes?: string;
+  };
 }
 
-/** Machine-readable Zerodha session state. */
-export enum ZerodhaSessionState {
+/** Machine-readable broker session state. */
+export enum BrokerSessionState {
   /** Valid session material present. */
   Authenticated = 'authenticated',
   /** No session material or persisted row. */
@@ -171,7 +191,7 @@ export enum ZerodhaSessionState {
 }
 
 /** Persisted session row shape (full — includes token material for internal use). */
-export interface ZerodhaSessionRow {
+export interface BrokerSessionRow {
   /** Kite access token obtained after login. */
   accessToken: string;
   /** Unix timestamp (ms) when the token was obtained. */
@@ -179,7 +199,7 @@ export interface ZerodhaSessionRow {
   /** Unix timestamp (ms) when the token expires. */
   expiresAt: number;
   /** Current session state. */
-  state: ZerodhaSessionState;
+  state: BrokerSessionState;
   /** Human-readable reason for the current state. */
   reason: string;
   /** Last error detail, if any. */
@@ -187,9 +207,9 @@ export interface ZerodhaSessionRow {
 }
 
 /** Health-facing session snapshot — NEVER includes token values. */
-export interface ZerodhaSessionHealth {
+export interface BrokerSessionHealth {
   /** Current session state. */
-  state: ZerodhaSessionState;
+  state: BrokerSessionState;
   /** Unix timestamp (ms) when the token was obtained (0 if never). */
   obtainedAt: number;
   /** Unix timestamp (ms) when the token expires (0 if unknown). */
@@ -237,8 +257,10 @@ export interface RuntimeConfig {
   dbPath: string;
   /** Logging level. Default: info. */
   logLevel: 'debug' | 'info' | 'warn' | 'error';
-  /** Zerodha integration config. Null when env vars are absent. */
-  zerodha: ZerodhaConfig | null;
+  /** Broker transport config. Null when env vars are absent. */
+  broker?: BrokerConfig | null;
+  /** Backward-compatible alias during the rename. */
+  zerodha: BrokerConfig | null;
   /** Proposal engine config. Null when env vars are absent (graceful degraded mode). */
   proposalEngine: ProposalEngineConfig | null;
 }
@@ -501,7 +523,7 @@ export interface DashboardSnapshot {
   health: DashboardHealth;
   /** Scheduler and lifecycle runtime state. */
   runtime: DashboardRuntime;
-  /** Broker (Zerodha) health block — null when broker not configured. */
+  /** Neutral broker health block — null when broker not configured. */
   broker: DashboardBroker | null;
   /** Recent proposal attempts with outcome/reasons (newest first, max 20). */
   recentProposals: DashboardRecentProposal[];
@@ -557,7 +579,7 @@ export interface DashboardRuntime {
   lastError: string | null;
 }
 
-/** Broker (Zerodha) health block — redacted, token-safe. */
+/** Broker health block — redacted, token-safe. */
 export interface DashboardBroker {
   /** Session authentication state string. */
   sessionState: string;
@@ -631,6 +653,12 @@ export interface DashboardLifecycleEvent {
   reason: string;
 }
 
+export type ZerodhaConfig = BrokerConfig;
+export const ZerodhaSessionState = BrokerSessionState;
+export type ZerodhaSessionState = BrokerSessionState;
+export type ZerodhaSessionRow = BrokerSessionRow;
+export type ZerodhaSessionHealth = BrokerSessionHealth;
+
 export type {
   InstrumentRecord,
   InstrumentSyncState,
@@ -647,4 +675,4 @@ export type {
   KiteTick,
   WebSocketFactory,
   SubscribedInstrument,
-} from '../integrations/zerodha/types.js';
+} from '../integrations/broker/types.js';

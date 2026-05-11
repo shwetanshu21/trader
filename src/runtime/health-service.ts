@@ -6,7 +6,7 @@ import {
 } from '../types/runtime.js';
 import type { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
 import type { LifecycleManager } from './lifecycle.js';
-import type { ZerodhaSupervisor } from '../integrations/zerodha/zerodha-supervisor.js';
+import type { BrokerHealthSource } from '../integrations/broker/ports.js';
 
 // ---------------------------------------------------------------------------
 // HealthService — composites HealthStatus from lifecycle + scheduler state
@@ -16,23 +16,28 @@ export class HealthService {
   private readonly _lifecycle: LifecycleManager;
   private readonly _repo: RuntimeStateRepository;
   private readonly _startedAt: number;
-  private _zerodhaSupervisor: ZerodhaSupervisor | null = null;
+  private _brokerSupervisor: BrokerHealthSource | null = null;
 
   constructor(
     lifecycle: LifecycleManager,
     repo: RuntimeStateRepository,
     startedAt: number,
-    zerodhaSupervisor?: ZerodhaSupervisor | null,
+    zerodhaSupervisor?: BrokerHealthSource | null,
   ) {
     this._lifecycle = lifecycle;
     this._repo = repo;
     this._startedAt = startedAt;
-    this._zerodhaSupervisor = zerodhaSupervisor ?? null;
+    this._brokerSupervisor = zerodhaSupervisor ?? null;
   }
 
-  /** Set or update the Zerodha supervisor reference (wired after construction). */
-  setZerodhaSupervisor(supervisor: ZerodhaSupervisor | null): void {
-    this._zerodhaSupervisor = supervisor;
+  /** Set or update the broker supervisor reference (wired after construction). */
+  setBrokerSupervisor(supervisor: BrokerHealthSource | null): void {
+    this._brokerSupervisor = supervisor;
+  }
+
+  /** Backward-compatible alias during the broker/upstox rename. */
+  setZerodhaSupervisor(supervisor: BrokerHealthSource | null): void {
+    this.setBrokerSupervisor(supervisor);
   }
 
   /** Produce a HealthStatus snapshot without persisting it. */
@@ -90,8 +95,8 @@ export class HealthService {
       verdict = HealthVerdict.Healthy;
     }
 
-    // Include broker health block if available
-    const zerodha = this._zerodhaSupervisor?.getBrokerHealth();
+// Include broker health block if available
+    const broker = this._brokerSupervisor?.getBrokerHealth();
 
     return {
       verdict,
@@ -99,7 +104,8 @@ export class HealthService {
       lifecycleState,
       scheduler,
       degradedReasons,
-      zerodha,
+      broker,
+      zerodha: broker,
       checkedAt: new Date().toISOString(),
     };
   }

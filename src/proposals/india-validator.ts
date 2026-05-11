@@ -18,7 +18,7 @@ import type {
   InstrumentRecord,
   InstrumentSyncState,
   QuoteSnapshot,
-} from '../integrations/zerodha/types.js';
+} from '../integrations/broker/types.js';
 
 import type { MarketProfile } from '../market/market-profile.js';
 import { INDIA_MARKETS } from '../market/india-profile.js';
@@ -259,7 +259,7 @@ export class IndiaProposalValidator {
     if (session.state === ZerodhaSessionState.MissingCredentials) {
       reasons.push({
         reasonCode: ValidationReasonCode.SessionNotAuthenticated,
-        reasonMessage: 'Zerodha session is missing credentials; authentication required',
+        reasonMessage: 'Broker session is missing credentials; authentication required',
       });
       return;
     }
@@ -267,7 +267,7 @@ export class IndiaProposalValidator {
     if (session.state === ZerodhaSessionState.AuthFailed) {
       reasons.push({
         reasonCode: ValidationReasonCode.SessionNotAuthenticated,
-        reasonMessage: 'Zerodha authentication failed; no valid session',
+        reasonMessage: 'Broker authentication failed; no valid session',
       });
       return;
     }
@@ -275,7 +275,7 @@ export class IndiaProposalValidator {
     if (session.state === ZerodhaSessionState.Expired) {
       reasons.push({
         reasonCode: ValidationReasonCode.SessionExpired,
-        reasonMessage: 'Zerodha session has expired; refresh required',
+        reasonMessage: 'Broker session has expired; refresh required',
       });
       return;
     }
@@ -287,13 +287,13 @@ export class IndiaProposalValidator {
       if (remainingMs <= 0) {
         reasons.push({
           reasonCode: ValidationReasonCode.SessionExpired,
-          reasonMessage: 'Zerodha session token has expired',
+          reasonMessage: 'Broker session token has expired',
         });
       } else if (remainingMs < 300_000) {
         // Less than 5 min remaining — treat as expired (refresh window too tight)
         reasons.push({
           reasonCode: ValidationReasonCode.SessionExpired,
-          reasonMessage: `Zerodha session expires imminently (${Math.round(remainingMs / 1000)}s remaining)`,
+          reasonMessage: `Broker session expires imminently (${Math.round(remainingMs / 1000)}s remaining)`,
         });
       }
     }

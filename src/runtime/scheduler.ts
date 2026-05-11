@@ -106,9 +106,11 @@ export class Scheduler {
     this._intervalMs = options.intervalMs;
     this._tickWork = options.tickWork ?? [];
 
-    // Restore persisted state if available
+    // Restore persisted state if available.
+    // A terminal Stopped snapshot belongs to the previous process and should
+    // not poison a fresh scheduler instance created on the same DB.
     const persisted = this._repo.getSchedulerState();
-    if (persisted.status !== SchedulerStatus.Idle) {
+    if (persisted.status !== SchedulerStatus.Idle && persisted.status !== SchedulerStatus.Stopped) {
       this._status = persisted.status;
       this._tickCount = persisted.tickCount;
       this._startedAt = persisted.startedAt;

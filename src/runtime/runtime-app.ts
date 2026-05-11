@@ -11,7 +11,7 @@ import path from 'node:path';
 
 import { DatabaseManager } from '../persistence/sqlite.js';
 import { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
-import { ZerodhaRepository } from '../persistence/zerodha-repo.js';
+import { BrokerRepository } from '../persistence/broker-repo.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import { LifecycleManager } from './lifecycle.js';
@@ -21,16 +21,18 @@ import { Scheduler } from './scheduler.js';
 import { Telemetry } from './telemetry.js';
 import { createHealthServer } from './health-server.js';
 import { DashboardReadModel } from './dashboard-read-model.js';
-import { SessionService } from '../integrations/zerodha/session-service.js';
-import { InstrumentsService } from '../integrations/zerodha/instruments-service.js';
-import { MarketDataStream } from '../integrations/zerodha/market-data-stream.js';
-import { ZerodhaSupervisor } from '../integrations/zerodha/zerodha-supervisor.js';
+import { SessionService } from '../integrations/broker/session-service.js';
+import { InstrumentsService } from '../integrations/broker/instruments-service.js';
+import { MarketDataStream } from '../integrations/broker/market-data-stream.js';
+import { BrokerSupervisor } from '../integrations/broker/broker-supervisor.js';
+import { KiteMcpClient } from '../integrations/broker/mcp/kite-mcp-client.js';
+import { KiteMcpQuoteStream } from '../integrations/broker/mcp/kite-mcp-quote-stream.js';
 import { ProposalEngine } from '../proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../proposals/india-validator.js';
 import { ProposalSupervisor } from '../proposals/proposal-supervisor.js';
 import { ExecutionGateSupervisor } from '../execution/execution-gate-supervisor.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
-import type { RuntimeConfig } from '../types/runtime.js';
+import { SchedulerStatus, type RuntimeConfig } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // RuntimeAppHandles — typed references to all composed subsystems
@@ -39,7 +41,8 @@ import type { RuntimeConfig } from '../types/runtime.js';
 export interface RuntimeAppHandles {
   dbManager: DatabaseManager;
   runtimeStateRepo: RuntimeStateRepository;
-  zerodhaRepo: ZerodhaRepository;
+  brokerRepo: BrokerRepository;
+  zerodhaRepo: BrokerRepository;
   proposalRepo: ProposalRepository | null;
   blockedOrderRepo: BlockedOrderRepository | null;
   lifecycle: LifecycleManager;
@@ -48,7 +51,8 @@ export interface RuntimeAppHandles {
   scheduler: Scheduler;
   server: http.Server;
   clock: MarketClock;
-  zerodhaSupervisor: ZerodhaSupervisor | null;
+  brokerSupervisor: BrokerSupervisor | null;
+  zerodhaSupervisor: BrokerSupervisor | null;
   proposalSupervisor: ProposalSupervisor | null;
   executionGateSupervisor: ExecutionGateSupervisor | null;
   dashboard: DashboardReadModel;
@@ -85,8 +89,20 @@ export class RuntimeApp {
     // ── Phase 2: initialise persistence and lifecycle ─────────────────────
     const dbManager = new DatabaseManager(this.config.dbPath);
     const runtimeStateRepo = new RuntimeStateRepository(dbManager.db);
-    const zerodhaRepo = new ZerodhaRepository(dbManager.db);
+    const brokerRepo = new BrokerRepository(dbManager.db);
     const lifecycle = new LifecycleManager(runtimeStateRepo);
+
+    const persistedScheduler = runtimeStateRepo.getSchedulerState();
+    if (persistedScheduler.status === SchedulerStatus.Stopped) {
+      runtimeStateRepo.upsertSchedulerState({
+        status: SchedulerStatus.Idle,
+        marketPhase: persistedScheduler.marketPhase,
+        lastTickTimestamp: null,
+        startedAt: null,
+        tickCount: 0,
+        lastError: null,
+      });
+    }
 
     const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
     const telemetry = new Telemetry(runtimeStateRepo);
@@ -102,30 +118,53 @@ export class RuntimeApp {
     // ── Phase 3: market clock ─────────────────────────────────────────────
     const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
 
-    // ── Phase 4: initialise Zerodha services ──────────────────────────────
-    let zerodhaSupervisor: ZerodhaSupervisor | null = null;
+    // ── Phase 4: initialise broker services ───────────────────────────────
+    let brokerSupervisor: BrokerSupervisor | null = null;
     let sessionService: SessionService | null = null;
     let instrumentsService: InstrumentsService | null = null;
-    let marketDataStream: MarketDataStream | null = null;
+    let marketDataStream: import('../integrations/broker/ports.js').QuoteStreamPort | null = null;
 
-    if (this.config.zerodha) {
-      logBoot(`Zerodha integration: configured (user=${this.config.zerodha.userId})`);
+    let brokerConfig = this.config.broker ?? this.config.zerodha;
 
-      sessionService = new SessionService(this.config.zerodha, zerodhaRepo);
-      instrumentsService = new InstrumentsService(zerodhaRepo);
-      marketDataStream = new MarketDataStream(zerodhaRepo);
+    if (brokerConfig) {
+      const transport = brokerConfig.transport ?? 'direct';
+      const transportLabel = transport === 'mcp'
+        ? `configured (upstox-mcp=${brokerConfig.mcpUrl ?? 'http://localhost:8787/mcp'})`
+        : `configured (user=${brokerConfig.userId ?? 'unknown'})`;
+      logBoot(`Broker integration: ${transportLabel}`);
 
-      zerodhaSupervisor = new ZerodhaSupervisor(
-        sessionService,
-        instrumentsService,
-        zerodhaRepo,
-        marketDataStream,
-      );
+      sessionService = new SessionService(brokerConfig, brokerRepo);
+      instrumentsService = new InstrumentsService(brokerRepo);
 
-      healthService.setZerodhaSupervisor(zerodhaSupervisor);
-      logBoot('Zerodha services initialised');
+      if (transport === 'mcp') {
+        const mcpClient = new KiteMcpClient(brokerConfig);
+        marketDataStream = new KiteMcpQuoteStream(
+          brokerRepo,
+          mcpClient,
+          brokerConfig.quotePollIntervalMs,
+        );
+
+        brokerSupervisor = new BrokerSupervisor(
+          sessionService,
+          instrumentsService,
+          brokerRepo,
+          marketDataStream,
+          mcpClient,
+        );
+      } else {
+        marketDataStream = new MarketDataStream(brokerRepo);
+        brokerSupervisor = new BrokerSupervisor(
+          sessionService,
+          instrumentsService,
+          brokerRepo,
+          marketDataStream,
+        );
+      }
+
+      healthService.setBrokerSupervisor(brokerSupervisor);
+      logBoot('Broker services initialised');
     } else {
-      logBoot('Zerodha integration: not configured (degraded broker mode)');
+      logBoot('Broker integration: not configured (degraded broker mode)');
     }
 
     // ── Phase 5: initialise Proposal subsystem ────────────────────────────
@@ -163,7 +202,7 @@ export class RuntimeApp {
 
     // ── Phase 6: build scheduler ─────────────────────────────────────────
     const tickWork = [
-      ...(zerodhaSupervisor ? [zerodhaSupervisor] : []),
+      ...(brokerSupervisor ? [brokerSupervisor] : []),
       ...(proposalSupervisor ? [proposalSupervisor] : []),
       ...(executionGateSupervisor ? [executionGateSupervisor] : []),
     ];
@@ -182,7 +221,7 @@ export class RuntimeApp {
     const dashboard = new DashboardReadModel({
       healthService,
       runtimeStateRepo,
-      zerodhaRepo,
+      zerodhaRepo: brokerRepo,
       proposalRepo,
       blockedOrderRepo,
       clock,
@@ -195,7 +234,8 @@ export class RuntimeApp {
     this._handles = {
       dbManager,
       runtimeStateRepo,
-      zerodhaRepo,
+      brokerRepo,
+      zerodhaRepo: brokerRepo,
       proposalRepo,
       blockedOrderRepo,
       lifecycle,
@@ -204,7 +244,8 @@ export class RuntimeApp {
       scheduler,
       server,
       clock,
-      zerodhaSupervisor,
+      brokerSupervisor,
+      zerodhaSupervisor: brokerSupervisor,
       proposalSupervisor,
       executionGateSupervisor,
       dashboard,

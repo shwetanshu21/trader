@@ -32,6 +32,15 @@ describe('LifecycleManager', () => {
       const lm = new LifecycleManager(repo);
       expect(lm.state).toBe(LifecycleState.Running);
     });
+
+    it('treats a persisted stopped state as a fresh boot', () => {
+      const repo = createRepo();
+      repo.insertLifecycleEvent({ state: LifecycleState.Stopped, reason: 'previous shutdown' });
+
+      const lm = new LifecycleManager(repo);
+      expect(lm.state).toBe(LifecycleState.Booting);
+      expect(lm.latestEvent?.state).toBe(LifecycleState.Stopped);
+    });
   });
 
   describe('transitions', () => {

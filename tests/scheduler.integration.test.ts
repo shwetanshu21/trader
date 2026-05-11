@@ -105,6 +105,36 @@ describe('Scheduler', () => {
       expect(state.startedAt).toBe(1000);
       expect(state.lastTickTimestamp).toBe(5000);
     });
+
+    it('treats a persisted stopped snapshot as a fresh scheduler boot', () => {
+      const { repo } = createFixtures();
+
+      repo.upsertSchedulerState({
+        status: SchedulerStatus.Stopped,
+        marketPhase: MarketPhase.Closed,
+        lastTickTimestamp: 5000,
+        startedAt: 1000,
+        tickCount: 10,
+        lastError: 'previous stop',
+      });
+
+      const scheduler = new Scheduler({
+        clock: new MarketClock(INDIA_NSE_EQ_MARKET),
+        lifecycle: new LifecycleManager(repo),
+        repo,
+        health: new HealthService(new LifecycleManager(repo), repo, Date.now()),
+        telemetry: new Telemetry(repo),
+        intervalMs: 60000,
+      });
+
+      const state = scheduler.getState();
+      expect(state.status).toBe(SchedulerStatus.Idle);
+      expect(state.tickCount).toBe(0);
+      expect(state.startedAt).toBeNull();
+      expect(state.lastTickTimestamp).toBeNull();
+      expect(state.lastError).toBeNull();
+      expect(state.marketPhase).toBe(MarketPhase.Closed);
+    });
   });
 
   describe('start()', () => {

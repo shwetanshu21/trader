@@ -21,7 +21,7 @@ import type {
 } from '../types/runtime.js';
 import type { HealthService } from './health-service.js';
 import type { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
-import type { ZerodhaRepository } from '../persistence/zerodha-repo.js';
+import type { ZerodhaRepository } from '../persistence/broker-repo.js';
 import type { ProposalRepository } from '../persistence/proposal-repo.js';
 import type { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import type { MarketClock } from './market-clock.js';
@@ -121,21 +121,21 @@ export class DashboardReadModel {
 
   private _getDashboardBroker(): DashboardBroker | null {
     const health = this._healthService.getHealth();
-    if (!health.zerodha) return null;
+    const broker = health.broker ?? health.zerodha;
+    if (!broker) return null;
 
-    const zerodha = health.zerodha;
     return {
-      sessionState: zerodha.session.state,
+      sessionState: broker.session.state,
       instruments: {
-        count: zerodha.instruments.instrumentCount,
-        isStale: zerodha.instruments.isStale,
+        count: broker.instruments.instrumentCount,
+        isStale: broker.instruments.isStale,
       },
       stream: {
-        state: zerodha.stream.state,
-        isStale: zerodha.stream.isStale,
-        lastQuoteAt: zerodha.stream.lastQuoteAt,
+        state: broker.stream.state,
+        isStale: broker.stream.isStale,
+        lastQuoteAt: broker.stream.lastQuoteAt,
       },
-      recentEventCount: zerodha.recentEvents.length,
+      recentEventCount: broker.recentEvents.length,
     };
   }
 

@@ -70,7 +70,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
 
   const brokerSection = broker ? `
       <div class="section">
-        <h2>Broker (Zerodha)</h2>
+        <h2>Broker (Upstox MCP)</h2>
         <table>
           <tr><td>Session</td><td class="td-value">${escapeHtml(broker.sessionState)}</td></tr>
           <tr><td>Instruments</td><td class="td-value">${broker.instruments.count ?? '—'} (${broker.instruments.isStale ? 'stale' : 'fresh'})</td></tr>
@@ -80,7 +80,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         </table>
       </div>` : `
       <div class="section">
-        <h2>Broker (Zerodha)</h2>
+        <h2>Broker</h2>
         <p class="muted">Not configured — running in degraded broker mode</p>
       </div>`;
 

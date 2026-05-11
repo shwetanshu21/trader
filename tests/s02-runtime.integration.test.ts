@@ -1,5 +1,5 @@
 // ── S02 Runtime Integration Test ──
-// Verifies that Zerodha services compose correctly into the runtime,
+// Verifies that broker services compose correctly into the runtime,
 // the health surface includes broker fields, and the supervisor runs
 // on scheduler ticks without crashing.
 //
@@ -25,6 +25,7 @@ import {
   MarketPhase,
   type ZerodhaConfig,
   type HealthStatus,
+  type InstrumentRecord,
 } from '../src/types/runtime.js';
 import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
 
@@ -73,6 +74,100 @@ describe('S02 Runtime — Zerodha composition', () => {
       const { zerodhaRepo } = createFixtures();
       const { supervisor } = createZerodhaServices(zerodhaRepo, createTestZerodhaConfig());
       expect(supervisor.isConfigured).toBe(true);
+    });
+
+    it('refreshes instruments on warm restart when MCP key cache is empty', async () => {
+      const { zerodhaRepo } = createFixtures();
+      const session = new SessionService(
+        {
+          transport: 'mcp',
+          mcpUrl: 'http://localhost:8787/mcp',
+          sessionRefreshIntervalMs: 21_600_000,
+        },
+        zerodhaRepo,
+      );
+      const instruments = new InstrumentsService(zerodhaRepo);
+
+      const seededRecord: InstrumentRecord = {
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 12345,
+        name: 'RELIANCE',
+        expiry: null,
+        strike: null,
+        lotSize: 1,
+        tickSize: 0.05,
+        instrumentType: 'EQ',
+        segment: 'NSE',
+        exchangeToken: 12345,
+      };
+
+      instruments.syncFromRecords([seededRecord]);
+      session.applySessionMaterial({
+        accessToken: 'mcp-session',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        reason: 'seed session',
+      });
+
+      const subscriptions: number[][] = [];
+      const stream = {
+        connect: async () => {},
+        disconnect: async () => {},
+        subscribe(tokens: number[]) { subscriptions.push(tokens); },
+        unsubscribe() {},
+        getLatestQuote: () => null,
+        getAllQuotes: () => [],
+        getState: () => 'disconnected' as const,
+        getDiagnostics: () => ({
+          state: 'disconnected' as const,
+          connectedAt: null,
+          lastHeartbeatAt: null,
+          lastQuoteReceivedAt: null,
+          reconnectCount: 0,
+          parseFailures: 0,
+          subscribedCount: subscriptions.flat().length,
+          lastError: null,
+          createdAt: Date.now(),
+        }),
+        persistDiagnostics: () => {},
+        checkQuoteFreshness: () => ({ isStale: true, stalenessMs: null, lastQuoteAt: null }),
+        syncNow: async () => {},
+      };
+
+      let fetchCount = 0;
+      const supervisor = new ZerodhaSupervisor(
+        session,
+        instruments,
+        zerodhaRepo,
+        stream,
+        {
+          refreshSession: async () => ({ accessToken: 'mcp-session', reason: 'probe' }),
+          fetchInstrumentCatalog: async () => {
+            fetchCount += 1;
+            return [seededRecord];
+          },
+          hasCachedInstrumentKeys: () => false,
+        },
+      );
+
+      await supervisor.doWork(new Date(), {
+        verdict: HealthVerdict.Healthy,
+        uptimeMs: 0,
+        lifecycleState: LifecycleState.Running,
+        scheduler: {
+          status: SchedulerStatus.Running,
+          marketPhase: MarketPhase.Closed,
+          lastTickTimestamp: null,
+          startedAt: null,
+          tickCount: 0,
+          lastError: null,
+        },
+        degradedReasons: [],
+        checkedAt: new Date().toISOString(),
+      });
+
+      expect(fetchCount).toBe(1);
+      expect(subscriptions).toContainEqual([12345]);
     });
 
     it('reports not configured when config is absent', () => {
