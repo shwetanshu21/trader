@@ -133,6 +133,42 @@ describe('loadConfig', () => {
     expect(cfg.dbPath).toBe('/custom/trader.db');
   });
 
+  it('defaults proposal engine to custom mode when only provider URL is set', () => {
+    const cfg = loadConfig({ TRADER_PROPOSAL_PROVIDER_URL: 'https://example.com/proposals' });
+    expect(cfg.proposalEngine).toMatchObject({
+      providerMode: 'custom',
+      providerUrl: 'https://example.com/proposals',
+    });
+  });
+
+  it('parses openai-compatible proposal mode with model', () => {
+    const cfg = loadConfig({
+      TRADER_PROPOSAL_PROVIDER_MODE: 'openai-compatible',
+      TRADER_PROPOSAL_PROVIDER_URL: 'https://crof.ai/v1/chat/completions',
+      TRADER_PROPOSAL_PROVIDER_MODEL: 'kimi-k2.6-precision',
+    });
+
+    expect(cfg.proposalEngine).toMatchObject({
+      providerMode: 'openai-compatible',
+      providerUrl: 'https://crof.ai/v1/chat/completions',
+      providerModel: 'kimi-k2.6-precision',
+    });
+  });
+
+  it('rejects unsupported proposal provider mode', () => {
+    expect(() => loadConfig({
+      TRADER_PROPOSAL_PROVIDER_MODE: 'foo',
+      TRADER_PROPOSAL_PROVIDER_URL: 'https://example.com/proposals',
+    })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects openai-compatible proposal mode without model', () => {
+    expect(() => loadConfig({
+      TRADER_PROPOSAL_PROVIDER_MODE: 'openai-compatible',
+      TRADER_PROPOSAL_PROVIDER_URL: 'https://crof.ai/v1/chat/completions',
+    })).toThrow(ConfigValidationErrorImpl);
+  });
+
   it('ConfigValidationError contains the field-level errors', () => {
     try {
       loadConfig({ PORT: 'xyz', NODE_ENV: 'staging' });

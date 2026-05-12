@@ -98,6 +98,25 @@ Healthy broker path should show:
 - `"state": "connected"`
 - `"isStale": false`
 
+### Runtime start with env-file precedence
+
+If proposal-provider env vars were previously exported in your shell, `node --env-file=.env` may keep using those stale parent values instead of the updated `.env` entries.
+
+For clean Crof / proposal-provider restarts, prefer:
+
+```bash
+env -u TRADER_PROPOSAL_PROVIDER_URL \
+    -u TRADER_PROPOSAL_PROVIDER_MODE \
+    -u TRADER_PROPOSAL_PROVIDER_MODEL \
+    -u TRADER_PROPOSAL_API_KEY \
+    node --env-file=.env --import tsx src/main.ts
+```
+
+Use this when:
+- proposal-provider settings were just changed in `.env`
+- the runtime still appears to use an old provider URL/model
+- the dashboard shows raw provider `404` refusals that do not match the saved `.env`
+
 ## Common failure modes
 
 ### 1. Approved token request but no token file arrives
@@ -121,7 +140,23 @@ If bridge token exists but quote calls are failing, inspect:
 - `tmp/upstox/logs/bridge.log`
 - `tmp/upstox/mcp-local/status.json`
 
-### 3. Upstox rejects a webhook URL
+### 3. Runtime is healthy but proposal-provider behavior looks stale
+
+Observed failure mode:
+- `.env` contains the updated Crof / proposal-provider settings
+- runtime boots and broker health is fine
+- recent proposals still show old-provider errors such as raw `404 Not Found` HTML
+
+Likely cause:
+- parent shell env vars overrode the intended `.env` proposal-provider values
+
+Recovery:
+- restart with the `env -u ... node --env-file=.env --import tsx src/main.ts` form shown above
+- then re-check `/health` and `/dashboard`
+
+If the clean restart worked, recent proposals should stop showing the stale provider URL failure and instead reflect current market/runtime conditions.
+
+### 4. Upstox rejects a webhook URL
 
 Observed behavior:
 - some domains are rejected by policy

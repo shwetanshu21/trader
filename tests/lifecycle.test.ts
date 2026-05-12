@@ -25,12 +25,22 @@ describe('LifecycleManager', () => {
       expect(lm.state).toBe(LifecycleState.Booting);
     });
 
-    it('recovers persisted state from DB', () => {
+    it('treats a persisted running state as a fresh boot', () => {
       const repo = createRepo();
       repo.insertLifecycleEvent({ state: LifecycleState.Running, reason: 'resume' });
 
       const lm = new LifecycleManager(repo);
-      expect(lm.state).toBe(LifecycleState.Running);
+      expect(lm.state).toBe(LifecycleState.Booting);
+      expect(lm.latestEvent?.state).toBe(LifecycleState.Running);
+    });
+
+    it('treats a persisted degraded state as a fresh boot', () => {
+      const repo = createRepo();
+      repo.insertLifecycleEvent({ state: LifecycleState.Degraded, reason: 'previous crash' });
+
+      const lm = new LifecycleManager(repo);
+      expect(lm.state).toBe(LifecycleState.Booting);
+      expect(lm.latestEvent?.state).toBe(LifecycleState.Degraded);
     });
 
     it('treats a persisted stopped state as a fresh boot', () => {

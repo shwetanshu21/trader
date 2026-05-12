@@ -81,7 +81,7 @@ export class ProposalEngine {
   }
 
   /**
-   * Generate proposals by calling the LLM provider.
+   * Generate proposals by calling the configured provider.
    *
    * Failure modes handled:
    *  - Provider timeout (AbortController)
@@ -89,36 +89,15 @@ export class ProposalEngine {
    *  - Malformed JSON response
    *  - Empty proposal list
    *  - Missing required fields in individual proposals
-   *
-   * @returns EngineResult containing normalized proposals or a refusal reason.
    */
   async generateProposals(context: EngineContext): Promise<EngineResult> {
     const startedAt = Date.now();
 
-    // ── Build request payload ─────────────────────────────────────────────
-    const payload = this._buildPayload(context);
-
-    // ── Perform bounded fetch ─────────────────────────────────────────────
-    let response: Response;
+    let parsed: ProviderProposalResponse;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this._config.timeoutMs);
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (this._config.apiKey) {
-        headers['Authorization'] = `Bearer ${this._config.apiKey}`;
-      }
-
-      response = await fetch(this._config.providerUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
+      parsed = this._config.providerMode === 'openai-compatible'
+        ? await this._fetchOpenAiCompatibleResponse(context)
+        : await this._fetchCustomResponse(context);
     } catch (err) {
       const elapsed = Date.now() - startedAt;
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -132,11 +111,12 @@ export class ProposalEngine {
           durationMs: elapsed,
         };
       }
+
       return {
         proposals: [],
         refusal: {
           reasonCode: ValidationReasonCode.QuoteMissing,
-          reasonMessage: `Proposal-engine request failed: ${err instanceof Error ? err.message : String(err)}`,
+          reasonMessage: err instanceof Error ? err.message : String(err),
         },
         reasoning: null,
         durationMs: elapsed,
@@ -145,40 +125,6 @@ export class ProposalEngine {
 
     const elapsed = Date.now() - startedAt;
 
-    // ── Check HTTP status ─────────────────────────────────────────────────
-    if (!response.ok) {
-      const statusText = `${response.status} ${response.statusText}`;
-      let body = '';
-      try { body = await response.text(); } catch { /* ignore */ }
-      return {
-        proposals: [],
-        refusal: {
-          reasonCode: ValidationReasonCode.QuoteMissing,
-          reasonMessage: `Proposal-engine returned HTTP ${statusText}${body ? ': ' + body.slice(0, 200) : ''}`,
-        },
-        reasoning: null,
-        durationMs: elapsed,
-      };
-    }
-
-    // ── Parse response body ───────────────────────────────────────────────
-    let parsed: ProviderProposalResponse;
-    try {
-      const text = await response.text();
-      parsed = JSON.parse(text) as ProviderProposalResponse;
-    } catch (err) {
-      return {
-        proposals: [],
-        refusal: {
-          reasonCode: ValidationReasonCode.QuoteMissing,
-          reasonMessage: `Malformed response from proposal-engine: ${err instanceof Error ? err.message : String(err)}`,
-        },
-        reasoning: null,
-        durationMs: elapsed,
-      };
-    }
-
-    // ── Validate response structure ───────────────────────────────────────
     if (!parsed.proposals || !Array.isArray(parsed.proposals)) {
       return {
         proposals: [],
@@ -203,7 +149,6 @@ export class ProposalEngine {
       };
     }
 
-    // ── Normalize each proposal ───────────────────────────────────────────
     const normalized: NormalizedProposal[] = [];
 
     for (const raw of parsed.proposals) {
@@ -245,13 +190,88 @@ export class ProposalEngine {
     };
   }
 
-  // ── Private helpers ─────────────────────────────────────────────────────
+  // ── Provider transport adapters ─────────────────────────────────────────
+
+  private async _fetchCustomResponse(context: EngineContext): Promise<ProviderProposalResponse> {
+    const payload = this._buildCanonicalPayload(context);
+    const response = await this._postJson(payload);
+    return this._parseDirectProviderResponse(response);
+  }
+
+  private async _fetchOpenAiCompatibleResponse(context: EngineContext): Promise<ProviderProposalResponse> {
+    const payload = this._buildOpenAiCompatiblePayload(context);
+    const response = await this._postJson(payload);
+    return this._parseOpenAiCompatibleResponse(response);
+  }
+
+  private async _postJson(payload: Record<string, unknown>): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this._config.timeoutMs);
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (this._config.apiKey) {
+        headers['Authorization'] = `Bearer ${this._config.apiKey}`;
+      }
+
+      return await fetch(this._config.providerUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private async _parseDirectProviderResponse(response: Response): Promise<ProviderProposalResponse> {
+    if (!response.ok) {
+      throw new Error(await this._formatHttpError(response));
+    }
+
+    try {
+      const text = await response.text();
+      return JSON.parse(text) as ProviderProposalResponse;
+    } catch (err) {
+      throw new Error(`Malformed response from proposal-engine: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async _parseOpenAiCompatibleResponse(response: Response): Promise<ProviderProposalResponse> {
+    if (!response.ok) {
+      throw new Error(await this._formatHttpError(response));
+    }
+
+    let outer: { choices?: Array<{ message?: { content?: unknown } }> };
+    try {
+      const text = await response.text();
+      outer = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown } }> };
+    } catch (err) {
+      throw new Error(`Malformed OpenAI-compatible response: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const content = outer.choices?.[0]?.message?.content;
+    const contentText = this._extractAssistantContent(content);
+    if (!contentText) {
+      throw new Error('OpenAI-compatible response missing choices[0].message.content');
+    }
+
+    try {
+      return JSON.parse(contentText) as ProviderProposalResponse;
+    } catch (err) {
+      throw new Error(`OpenAI-compatible assistant content is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // ── Request builders ────────────────────────────────────────────────────
 
   /**
-   * Build the request payload sent to the LLM provider.
-   * Includes market context and available instruments.
+   * Canonical business payload used by the legacy custom provider contract.
    */
-  private _buildPayload(context: EngineContext): Record<string, unknown> {
+  private _buildCanonicalPayload(context: EngineContext): Record<string, unknown> {
     const instrumentSummaries = context.instruments.map(entry => ({
       exchange: entry.instrument.exchange,
       tradingsymbol: entry.instrument.tradingsymbol,
@@ -279,6 +299,65 @@ export class ProposalEngine {
         + 'quantity, price (or null for MARKET), triggerPrice (or null), orderType (MARKET/LIMIT/SL/SLM).',
     };
   }
+
+  private _buildOpenAiCompatiblePayload(context: EngineContext): Record<string, unknown> {
+    const canonicalPayload = this._buildCanonicalPayload(context);
+
+    return {
+      model: this._config.providerModel,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: 'You generate Indian-market trade proposals. Return only valid JSON with a top-level proposals array and optional reasoning field.',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(canonicalPayload),
+        },
+      ],
+    };
+  }
+
+  // ── Parse helpers ───────────────────────────────────────────────────────
+
+  private _extractAssistantContent(content: unknown): string | null {
+    if (typeof content === 'string') {
+      return content;
+    }
+
+    if (Array.isArray(content)) {
+      const text = content
+        .map(part => {
+          if (typeof part === 'string') return part;
+          if (
+            part
+            && typeof part === 'object'
+            && 'type' in part
+            && (part as { type?: unknown }).type === 'text'
+            && 'text' in part
+          ) {
+            const value = (part as { text?: unknown }).text;
+            return typeof value === 'string' ? value : '';
+          }
+          return '';
+        })
+        .join('')
+        .trim();
+      return text || null;
+    }
+
+    return null;
+  }
+
+  private async _formatHttpError(response: Response): Promise<string> {
+    const statusText = `${response.status} ${response.statusText}`;
+    let body = '';
+    try { body = await response.text(); } catch { /* ignore */ }
+    return `Proposal-engine returned HTTP ${statusText}${body ? ': ' + body.slice(0, 200) : ''}`;
+  }
+
+  // ── Normalization ───────────────────────────────────────────────────────
 
   /**
    * Normalize a single raw provider proposal into a NewProposalAttempt.

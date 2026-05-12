@@ -310,6 +310,16 @@ function parseProposalEngineConfig(
     return null;
   }
 
+  const providerModeRaw = env.TRADER_PROPOSAL_PROVIDER_MODE?.trim().toLowerCase() || 'custom';
+  if (providerModeRaw !== 'custom' && providerModeRaw !== 'openai-compatible') {
+    errors.push({
+      field: 'TRADER_PROPOSAL_PROVIDER_MODE',
+      message: `Must be one of custom, openai-compatible, got "${providerModeRaw}".`,
+      provided: providerModeRaw,
+    });
+    return null;
+  }
+
   // Validate URL
   try {
     new URL(providerUrl);
@@ -318,6 +328,16 @@ function parseProposalEngineConfig(
       field: 'TRADER_PROPOSAL_PROVIDER_URL',
       message: `Invalid URL: "${providerUrl}".`,
       provided: providerUrl,
+    });
+    return null;
+  }
+
+  const providerModel = env.TRADER_PROPOSAL_PROVIDER_MODEL?.trim() || undefined;
+  if (providerModeRaw === 'openai-compatible' && !providerModel) {
+    errors.push({
+      field: 'TRADER_PROPOSAL_PROVIDER_MODEL',
+      message: 'TRADER_PROPOSAL_PROVIDER_MODEL is required when TRADER_PROPOSAL_PROVIDER_MODE=openai-compatible.',
+      provided: providerModel,
     });
     return null;
   }
@@ -350,7 +370,9 @@ function parseProposalEngineConfig(
   }
 
   return {
+    providerMode: providerModeRaw,
     providerUrl,
+    providerModel,
     timeoutMs,
     maxProposalsPerTick,
     apiKey,

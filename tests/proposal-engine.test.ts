@@ -11,6 +11,7 @@ import { ProposalEngine, type EngineContext } from '../src/proposals/proposal-en
 
 function makeConfig(overrides?: Partial<ProposalEngineConfig>): ProposalEngineConfig {
   return {
+    providerMode: overrides?.providerMode ?? 'custom',
     providerUrl: overrides?.providerUrl ?? 'https://api.example.com/proposals',
     timeoutMs: overrides?.timeoutMs ?? 5000,
     maxProposalsPerTick: overrides?.maxProposalsPerTick ?? 5,
@@ -414,7 +415,148 @@ describe('ProposalEngine', () => {
     }, 5000);
   });
 
+  describe('openai-compatible mode', () => {
+    it('parses a valid OpenAI-compatible response into proposals', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  proposals: [
+                    {
+                      exchange: 'NSE',
+                      tradingsymbol: 'RELIANCE',
+                      side: 'buy',
+                      product: 'MIS',
+                      quantity: 1,
+                      price: null,
+                      triggerPrice: null,
+                      orderType: 'MARKET',
+                    },
+                  ],
+                  reasoning: 'OpenAI-compatible reasoning',
+                }),
+              },
+            },
+          ],
+        }),
+      );
+
+      const engine = new ProposalEngine(makeConfig({
+        providerMode: 'openai-compatible',
+        providerUrl: 'https://crof.ai/v1/chat/completions',
+        providerModel: 'kimi-k2.6-precision',
+      }));
+      const result = await engine.generateProposals(makeContext());
+
+      expect(result.refusal).toBeNull();
+      expect(result.reasoning).toBe('OpenAI-compatible reasoning');
+      expect(result.proposals).toHaveLength(1);
+      expect(result.proposals[0].attempt.exchange).toBe('NSE');
+      expect(result.proposals[0].attempt.tradingsymbol).toBe('RELIANCE');
+    });
+
+    it('sends OpenAI-compatible chat completions request shape', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url: string, options?: RequestInit) => {
+          capturedBody = JSON.parse(String(options?.body ?? '{}')) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    proposals: [
+                      {
+                        exchange: 'NSE',
+                        tradingsymbol: 'RELIANCE',
+                        side: 'buy',
+                        product: 'MIS',
+                        quantity: 1,
+                        price: null,
+                        triggerPrice: null,
+                        orderType: 'MARKET',
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }));
+        },
+      );
+
+      const engine = new ProposalEngine(makeConfig({
+        providerMode: 'openai-compatible',
+        providerUrl: 'https://crof.ai/v1/chat/completions',
+        providerModel: 'kimi-k2.6-precision',
+      }));
+      await engine.generateProposals(makeContext());
+
+      expect(capturedBody).not.toBeNull();
+      expect(capturedBody!['model']).toBe('kimi-k2.6-precision');
+      expect(capturedBody!['messages']).toBeInstanceOf(Array);
+      expect(capturedBody!['response_format']).toEqual({ type: 'json_object' });
+    });
+
+    it('returns refusal when OpenAI-compatible response is missing assistant content', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse({ choices: [] }));
+
+      const engine = new ProposalEngine(makeConfig({
+        providerMode: 'openai-compatible',
+        providerUrl: 'https://crof.ai/v1/chat/completions',
+        providerModel: 'kimi-k2.6-precision',
+      }));
+      const result = await engine.generateProposals(makeContext());
+
+      expect(result.refusal).not.toBeNull();
+      expect(result.refusal!.reasonMessage).toContain('missing choices[0].message.content');
+      expect(result.proposals).toHaveLength(0);
+    });
+
+    it('returns refusal when OpenAI-compatible assistant content is not valid JSON', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({ choices: [{ message: { content: 'not json' } }] }),
+      );
+
+      const engine = new ProposalEngine(makeConfig({
+        providerMode: 'openai-compatible',
+        providerUrl: 'https://crof.ai/v1/chat/completions',
+        providerModel: 'kimi-k2.6-precision',
+      }));
+      const result = await engine.generateProposals(makeContext());
+
+      expect(result.refusal).not.toBeNull();
+      expect(result.refusal!.reasonMessage).toContain('assistant content is not valid JSON');
+      expect(result.proposals).toHaveLength(0);
+    });
+  });
+
   describe('config passthrough', () => {
+    it('custom mode still posts the canonical payload directly', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+
+      globalThis.fetch = vi.fn().mockImplementation(
+        (_url: string, options?: RequestInit) => {
+          capturedBody = JSON.parse(String(options?.body ?? '{}')) as Record<string, unknown>;
+          return Promise.resolve(jsonResponse({ proposals: [] }));
+        },
+      );
+
+      const engine = new ProposalEngine(makeConfig({ providerMode: 'custom' }));
+      await engine.generateProposals(makeContext());
+
+      expect(capturedBody).not.toBeNull();
+      expect(capturedBody!['version']).toBe('1.0');
+      expect(capturedBody!['marketPhase']).toBe('regular');
+      expect(capturedBody!['segment']).toBe('NSE');
+      expect(capturedBody!['maxProposals']).toBe(5);
+      expect(capturedBody!['instruments']).toBeInstanceOf(Array);
+      expect(typeof capturedBody!['instructions']).toBe('string');
+    });
+
     it('sends Authorization header when apiKey is configured', async () => {
       let capturedHeaders: Record<string, string> | null = null;
 

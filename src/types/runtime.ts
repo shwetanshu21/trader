@@ -269,10 +269,17 @@ export interface RuntimeConfig {
 // Proposal engine config
 // ---------------------------------------------------------------------------
 
+/** Supported transport shapes for the proposal-generation provider. */
+export type ProposalProviderMode = 'custom' | 'openai-compatible';
+
 /** Configuration for the proposal-generation provider (LLM). Null when not configured. */
 export interface ProposalEngineConfig {
+  /** Provider transport shape. Defaults to the legacy custom JSON contract. */
+  providerMode: ProposalProviderMode;
   /** Base URL of the proposal-generation provider API. */
   providerUrl: string;
+  /** Model identifier for OpenAI-compatible providers. */
+  providerModel?: string;
   /** Request timeout in ms. */
   timeoutMs: number;
   /** Maximum proposals to generate per tick. */
