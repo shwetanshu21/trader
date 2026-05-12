@@ -14,20 +14,19 @@ interface UpstoxTokenPayload {
 }
 
 const port = Number(process.env.TRADER_UPSTOX_NOTIFIER_PORT ?? '8788');
+const host = process.env.TRADER_UPSTOX_NOTIFIER_HOST?.trim() || '127.0.0.1';
 const tokenPath = process.env.TRADER_UPSTOX_TOKEN_PATH?.trim() || './tmp/upstox/notifier/latest-token.json';
 const startTime = Date.now();
+const MAX_BODY_BYTES = 64 * 1024;
 let lastDeliveryMeta: Record<string, unknown> | null = null;
 
 function ensureParent(filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
   });
   res.end(JSON.stringify(body, null, 2));
 }
@@ -41,14 +40,41 @@ function maskedToken(value: string | undefined): string | null {
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    let totalBytes = 0;
+
+    req.on('data', chunk => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        reject(new Error(`payload_too_large:${MAX_BODY_BYTES}`));
+        req.destroy();
+        return;
+      }
+      chunks.push(buffer);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
 }
 
 async function handleNotifier(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const raw = await readBody(req);
+  const contentType = req.headers['content-type'] ?? '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    json(res, 415, { error: 'unsupported_media_type' });
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith('payload_too_large:')) {
+      json(res, 413, { error: 'payload_too_large' });
+      return;
+    }
+    throw error;
+  }
   let payload: UpstoxTokenPayload;
 
   try {
@@ -70,7 +96,8 @@ async function handleNotifier(req: http.IncomingMessage, res: http.ServerRespons
   };
 
   ensureParent(tokenPath);
-  fs.writeFileSync(tokenPath, JSON.stringify(record, null, 2));
+  fs.writeFileSync(tokenPath, JSON.stringify(record, null, 2), { mode: 0o600 });
+  fs.chmodSync(tokenPath, 0o600);
 
   lastDeliveryMeta = {
     receivedAt: new Date(persistedAt).toISOString(),
@@ -134,10 +161,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, () => {
-  console.log(`[upstox-notifier] listening on http://localhost:${port}`);
-  console.log(`[upstox-notifier] health: http://localhost:${port}/health`);
-  console.log(`[upstox-notifier] webhook path: http://localhost:${port}/upstox/notifier`);
+server.listen(port, host, () => {
+  console.log(`[upstox-notifier] listening on http://${host}:${port}`);
+  console.log(`[upstox-notifier] health: http://${host}:${port}/health`);
+  console.log(`[upstox-notifier] webhook path: http://${host}:${port}/upstox/notifier`);
   console.log(`[upstox-notifier] token path: ${tokenPath}`);
 });
 

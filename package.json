@@ -9,6 +9,9 @@
     "dev": "tsx watch src/main.ts",
     "start": "node --experimental-specifier-resolution=node dist/main.js",
     "start:upstox:notifier": "tsx src/upstox/notifier-main.ts",
+    "start:upstox:mcp-local": "tsx src/upstox/mcp-local-main.ts",
+    "start:upstox:stack": "bash scripts/start-upstox-stack.sh",
+    "verify:upstox:bridge": "bash scripts/verify-upstox-bridge.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
@@ -25,6 +28,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^12.9.0"
+    "better-sqlite3": "^12.9.0",
+    "zod": "^3.24.2"
   }
 }
