@@ -666,6 +666,86 @@ export type ZerodhaSessionState = BrokerSessionState;
 export type ZerodhaSessionRow = BrokerSessionRow;
 export type ZerodhaSessionHealth = BrokerSessionHealth;
 
+// ---------------------------------------------------------------------------
+// Universe selection — tradable bounded-universe DTOs
+// ---------------------------------------------------------------------------
+
+/** Coverage verdict for the tradable universe. */
+export enum UniverseCoverageVerdict {
+  /** All or nearly all eligible members have fresh quotes. */
+  Sufficient = 'sufficient',
+  /** Most eligible members have quotes but some are stale. */
+  Stale = 'stale',
+  /** Significant number of eligible members have missing or stale quotes. */
+  Degraded = 'degraded',
+  /** Universe has never been evaluated (instrument sync never completed). */
+  Unknown = 'unknown',
+}
+
+/** Per-member coverage status within a universe snapshot. */
+export interface UniverseMemberCoverage {
+  exchange: string;
+  tradingsymbol: string;
+  instrumentToken: number | null;
+  /** Whether this member is in the eligible (tradable) set. */
+  isEligible: boolean;
+  /** Whether a quote snapshot exists for this member. */
+  hasQuote: boolean;
+  /** Staleness of the quote in ms. 0 when no quote exists. */
+  quoteStalenessMs: number;
+  /** Timestamp (ms) of the last quote received, or null. */
+  lastQuoteAt: number | null;
+  /** Human-readable reason if ineligible (e.g. 'not_in_allowlist', 'not_in_instrument_master'). */
+  ineligibilityReason: string | null;
+}
+
+/** Complete universe coverage snapshot. */
+export interface UniverseSnapshot {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Policy version that was applied. */
+  policyVersion: string;
+  /** Unix timestamp (ms) when this snapshot was computed. */
+  computedAt: number;
+  /** Coverage verdict. */
+  verdict: UniverseCoverageVerdict;
+  /** Number of eligible (tradable) members. */
+  eligibleCount: number;
+  /** Number of ineligible members. */
+  ineligibleCount: number;
+  /** Number of eligible members with a fresh quote. */
+  freshQuoteCount: number;
+  /** Number of eligible members with a stale quote. */
+  staleQuoteCount: number;
+  /** Number of eligible members with no quote at all. */
+  missingQuoteCount: number;
+  /** Threshold configuration label that was used. */
+  thresholdLabel: string;
+  /** Minimum fresh quote ratio required (0..1). */
+  thresholdRatio: number;
+  /** Maximum stale quote staleness in ms. */
+  maxStalenessMs: number;
+  /** Per-member coverage details. */
+  members: UniverseMemberCoverage[];
+}
+
+/** Shape for inserting a new universe snapshot (without id). */
+export type NewUniverseSnapshot = Omit<UniverseSnapshot, 'id'>;
+
+/** Universe policy — the deterministic allowlist and threshold rules. */
+export interface UniversePolicyConfig {
+  /** Policy version string (semver-style). */
+  version: string;
+  /** Human-readable label for the policy. */
+  label: string;
+  /** Map of exchange → array of eligible tradingsymbols. */
+  allowlist: Record<string, string[]>;
+  /** Minimum ratio of eligible members with fresh quotes to consider coverage sufficient. */
+  sufficientThresholdRatio: number;
+  /** Quote staleness in ms beyond which a quote is considered stale. */
+  maxQuoteStalenessMs: number;
+}
+
 export type {
   InstrumentRecord,
   InstrumentSyncState,

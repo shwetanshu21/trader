@@ -167,6 +167,34 @@ CREATE TABLE IF NOT EXISTS blocked_order_attempts (
 
 CREATE INDEX IF NOT EXISTS idx_blocked_order_blocked_at ON blocked_order_attempts(blocked_at);
 CREATE INDEX IF NOT EXISTS idx_blocked_order_proposal ON blocked_order_attempts(proposal_attempt_id);
+
+CREATE TABLE IF NOT EXISTS universe_members (
+  exchange       TEXT    NOT NULL,
+  tradingsymbol  TEXT    NOT NULL,
+  instrument_type TEXT   NOT NULL DEFAULT 'EQ',
+  added_at       INTEGER NOT NULL,
+  PRIMARY KEY (exchange, tradingsymbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_universe_members_exchange ON universe_members(exchange);
+
+CREATE TABLE IF NOT EXISTS universe_snapshots (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  policy_version      TEXT    NOT NULL,
+  computed_at         INTEGER NOT NULL,
+  verdict             TEXT    NOT NULL,
+  eligible_count      INTEGER NOT NULL,
+  ineligible_count    INTEGER NOT NULL,
+  fresh_quote_count   INTEGER NOT NULL,
+  stale_quote_count   INTEGER NOT NULL,
+  missing_quote_count INTEGER NOT NULL,
+  threshold_label     TEXT    NOT NULL,
+  threshold_ratio     REAL    NOT NULL,
+  max_staleness_ms    INTEGER NOT NULL,
+  members_json        TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_universe_snapshots_computed ON universe_snapshots(computed_at);
 `;
 
 export class DatabaseManager {
