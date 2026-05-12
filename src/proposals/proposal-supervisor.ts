@@ -7,6 +7,11 @@
 // Overlapping scheduler ticks cannot execute concurrent proposal generations.
 // The in-flight guard ensures only one run at a time; concurrent ticks skip
 // with an explicit overlap reason persisted to the proposal repository.
+//
+// Proposal context is bounded to the eligible universe members rather than
+// scanning the full instrument catalog. When coverage is insufficient
+// (Degraded or Stale), the supervisor skips deterministically instead of
+// falling back to the full catalog.
 
 import type { TickWork } from '../runtime/scheduler.js';
 import type {
@@ -18,12 +23,14 @@ import {
   ProposalStatus,
   ValidationReasonCode,
   MarketPhase,
+  UniverseCoverageVerdict,
 } from '../types/runtime.js';
 import type { SessionRuntimePort, InstrumentCatalogPort, QuoteStreamPort } from '../integrations/broker/ports.js';
 import type { MarketClock } from '../runtime/market-clock.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { ProposalEngine, type EngineContext } from './proposal-engine.js';
 import { IndiaProposalValidator } from './india-validator.js';
+import { UniverseService } from '../universe/universe-service.js';
 
 // ---------------------------------------------------------------------------
 // ProposalSupervisor
@@ -39,6 +46,7 @@ export class ProposalSupervisor implements TickWork {
   private readonly _instruments: InstrumentCatalogPort | null;
   private readonly _stream: QuoteStreamPort | null;
   private readonly _clock: MarketClock;
+  private readonly _universeService: UniverseService | null;
   private readonly _maxProposals: number;
 
   /** Local in-flight guard — true while a proposal generation is active. */
@@ -57,6 +65,7 @@ export class ProposalSupervisor implements TickWork {
     stream: QuoteStreamPort | null;
     clock: MarketClock;
     maxProposals?: number;
+    universeService?: UniverseService | null;
   }) {
     this._engine = options.engine;
     this._validator = options.validator;
@@ -66,6 +75,7 @@ export class ProposalSupervisor implements TickWork {
     this._stream = options.stream;
     this._clock = options.clock;
     this._maxProposals = options.maxProposals ?? 5;
+    this._universeService = options.universeService ?? null;
   }
 
   // ── TickWork ────────────────────────────────────────────────────────────
@@ -76,10 +86,6 @@ export class ProposalSupervisor implements TickWork {
       this._persistOverlapSkip();
       return;
     }
-
-    // ── Check 2: Proposal engine configured ──────────────────────────────
-    // If engine wasn't configured, the supervisor wouldn't be instantiated,
-    // but guard against misuse.
 
     // ── Acquire in-flight guard ──────────────────────────────────────────
     this._inFlight = true;
@@ -154,7 +160,26 @@ export class ProposalSupervisor implements TickWork {
       };
     }
 
-    // ── Phase 3: Build instrument context ────────────────────────────────
+    // ── Phase 3: Check universe coverage and build bounded context ──────
+    const coverageSummary = this._universeService
+      ? this._universeService.getCoverageSummary()
+      : null;
+
+    // If universe service is available and coverage is insufficient,
+    // skip deterministically instead of falling back to the full catalog.
+    if (coverageSummary) {
+      const verdict = coverageSummary.verdict;
+      if (verdict === UniverseCoverageVerdict.Degraded) {
+        this._persistCoverageSkip('Degraded', `Universe coverage is degraded: ${coverageSummary.freshQuoteCount}/${coverageSummary.eligibleCount} fresh quotes`);
+        return;
+      }
+      if (verdict === UniverseCoverageVerdict.Stale) {
+        this._persistCoverageSkip('Stale', `Universe coverage is stale: ${coverageSummary.freshQuoteCount}/${coverageSummary.eligibleCount} fresh quotes, ${coverageSummary.staleQuoteCount} stale`);
+        return;
+      }
+    }
+
+    // ── Phase 4: Build instrument context from eligible universe ────────
     const context = await this._buildEngineContext(phase);
 
     if (context.instruments.length === 0) {
@@ -176,13 +201,13 @@ export class ProposalSupervisor implements TickWork {
         },
         [{
           reasonCode: ValidationReasonCode.InstrumentLookupFailed,
-          reasonMessage: 'No instruments available in the instrument master',
+          reasonMessage: 'No eligible universe members available for proposal generation',
         }],
       );
       return;
     }
 
-    // ── Phase 4: Generate proposals via LLM ─────────────────────────────
+    // ── Phase 5: Generate proposals via LLM ─────────────────────────────
     const engineResult = await this._engine.generateProposals(context);
 
     if (engineResult.refusal) {
@@ -207,7 +232,7 @@ export class ProposalSupervisor implements TickWork {
       return;
     }
 
-    // ── Phase 5: Resolve instrument tokens and validate each proposal ───
+    // ── Phase 6: Resolve instrument tokens and validate each proposal ───
     for (const normalized of engineResult.proposals) {
       const { attempt, raw } = normalized;
 
@@ -265,15 +290,55 @@ export class ProposalSupervisor implements TickWork {
   }
 
   /**
-   * Build the EngineContext from available instrument and quote data.
-   * Gathers all instruments with their latest quotes, filtered by active segment.
+   * Build the EngineContext from eligible universe members.
+   * Gathers only eligible instruments with their latest quotes.
+   * If universe service is not available, falls back to scanning the
+   * full instrument catalog (legacy mode).
    */
   private async _buildEngineContext(phase: MarketPhase): Promise<EngineContext> {
+    // If universe service is available, use eligible members only
+    if (this._universeService && this._instruments) {
+      const eligibleMembers = this._universeService.getLatestSnapshot();
+      if (eligibleMembers) {
+        const eligibleSymbols = eligibleMembers.members
+          .filter(m => m.isEligible)
+          .map(m => ({ exchange: m.exchange, tradingsymbol: m.tradingsymbol }));
+
+        const entries: EngineContext['instruments'] = [];
+        for (const { exchange, tradingsymbol } of eligibleSymbols) {
+          const instrument = this._instruments.getInstrument(exchange, tradingsymbol);
+          const quote = this._stream
+            ? this._stream.getLatestQuote(exchange, tradingsymbol)
+            : null;
+          if (instrument) {
+            entries.push({ instrument, quote });
+          }
+        }
+
+        // Sort: instruments with quotes first, then by volume if available
+        entries.sort((a, b) => {
+          const aHasQuote = a.quote !== null ? 1 : 0;
+          const bHasQuote = b.quote !== null ? 1 : 0;
+          if (aHasQuote !== bHasQuote) return bHasQuote - aHasQuote;
+          return (b.quote?.volume ?? 0) - (a.quote?.volume ?? 0);
+        });
+
+        return {
+          instruments: entries,
+          marketPhase: phase,
+          maxProposals: this._maxProposals,
+        };
+      }
+
+      // No snapshot yet — or no eligible members — return empty
+      return { instruments: [], marketPhase: phase, maxProposals: this._maxProposals };
+    }
+
+    // Legacy fallback: scan all NSE/NFO instruments
     if (!this._instruments) {
       return { instruments: [], marketPhase: phase, maxProposals: this._maxProposals };
     }
 
-    // Get instruments for both NSE and NFO
     const nseInstruments = this._instruments.getInstrumentsBySegment('NSE');
     const nfoInstruments = this._instruments.getInstrumentsBySegment('NFO');
     const allInstruments = [...nseInstruments, ...nfoInstruments];
@@ -282,7 +347,6 @@ export class ProposalSupervisor implements TickWork {
       return { instruments: [], marketPhase: phase, maxProposals: this._maxProposals };
     }
 
-    // Attach quotes where available
     const entries: EngineContext['instruments'] = [];
     for (const instrument of allInstruments) {
       const quote = this._stream
@@ -291,7 +355,6 @@ export class ProposalSupervisor implements TickWork {
       entries.push({ instrument, quote });
     }
 
-    // Sort: instruments with quotes first, then by volume if available
     entries.sort((a, b) => {
       const aHasQuote = a.quote !== null ? 1 : 0;
       const bHasQuote = b.quote !== null ? 1 : 0;
@@ -304,6 +367,38 @@ export class ProposalSupervisor implements TickWork {
       marketPhase: phase,
       maxProposals: this._maxProposals,
     };
+  }
+
+  /**
+   * Persist a skip record when universe coverage is insufficient.
+   */
+  private _persistCoverageSkip(verdictLabel: string, message: string): void {
+    try {
+      this._repo.insertAttemptWithReasons(
+        {
+          exchange: '',
+          tradingsymbol: '',
+          instrumentToken: null,
+          side: '',
+          product: '',
+          quantity: 0,
+          price: null,
+          triggerPrice: null,
+          orderType: '',
+          tag: `coverage-skip-${verdictLabel.toLowerCase()}`,
+          proposalStatus: ProposalStatus.Skipped,
+          createdAt: Date.now(),
+        },
+        [{
+          reasonCode: ValidationReasonCode.QuoteMissing,
+          reasonMessage: message,
+        }],
+      );
+    } catch {
+      // Best-effort — persistence failure should not crash the scheduler
+    }
+
+    console.warn(`[proposal-supervisor] Coverage skip (${verdictLabel}): ${message}`);
   }
 
   /**

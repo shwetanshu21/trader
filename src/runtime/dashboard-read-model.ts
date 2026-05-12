@@ -12,6 +12,7 @@ import type {
   DashboardHealth,
   DashboardRuntime,
   DashboardBroker,
+  DashboardUniverse,
   DashboardRecentProposal,
   DashboardBlockedOrder,
   DashboardLifecycleEvent,
@@ -25,6 +26,7 @@ import type { ZerodhaRepository } from '../persistence/broker-repo.js';
 import type { ProposalRepository } from '../persistence/proposal-repo.js';
 import type { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import type { MarketClock } from './market-clock.js';
+import type { UniverseService } from '../universe/universe-service.js';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -45,6 +47,7 @@ export interface DashboardReadModelOptions {
   proposalRepo: ProposalRepository | null;
   blockedOrderRepo: BlockedOrderRepository | null;
   clock: MarketClock;
+  universeService: UniverseService;
 }
 
 export class DashboardReadModel {
@@ -54,6 +57,7 @@ export class DashboardReadModel {
   private readonly _proposalRepo: ProposalRepository | null;
   private readonly _blockedOrderRepo: BlockedOrderRepository | null;
   private readonly _clock: MarketClock;
+  private readonly _universeService: UniverseService;
 
   constructor(options: DashboardReadModelOptions) {
     this._healthService = options.healthService;
@@ -62,6 +66,7 @@ export class DashboardReadModel {
     this._proposalRepo = options.proposalRepo;
     this._blockedOrderRepo = options.blockedOrderRepo;
     this._clock = options.clock;
+    this._universeService = options.universeService;
   }
 
   /** Assemble a full dashboard snapshot. */
@@ -79,6 +84,7 @@ export class DashboardReadModel {
       recentProposals: this._getRecentProposals(),
       recentBlockedOrders: this._getRecentBlockedOrders(),
       recentLifecycleEvents: this._getRecentLifecycleEvents(),
+      universe: this._getDashboardUniverse(),
     };
   }
 
@@ -190,6 +196,25 @@ export class DashboardReadModel {
       }));
     } catch {
       return [];
+    }
+  }
+
+  private _getDashboardUniverse(): DashboardUniverse | null {
+    try {
+      const summary = this._universeService.getCoverageSummary();
+      if (!summary) return null;
+      return {
+        policyVersion: summary.policyVersion,
+        computedAt: summary.computedAt ? new Date(summary.computedAt).toISOString() : null,
+        verdict: summary.verdict,
+        eligibleCount: summary.eligibleCount,
+        freshQuoteCount: summary.freshQuoteCount,
+        staleQuoteCount: summary.staleQuoteCount,
+        missingQuoteCount: summary.missingQuoteCount,
+        thresholdLabel: summary.thresholdLabel,
+      };
+    } catch {
+      return null;
     }
   }
 }

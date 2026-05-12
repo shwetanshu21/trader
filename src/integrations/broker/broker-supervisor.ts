@@ -8,19 +8,7 @@ import type { TickWork } from '../../runtime/scheduler.js';
 import type { HealthStatus, BrokerHealth } from '../../types/runtime.js';
 import type { SessionRuntimePort, InstrumentCatalogPort, QuoteStreamPort, BrokerMcpDriver } from './ports.js';
 import { BrokerRepository } from '../../persistence/broker-repo.js';
-
-const DEFAULT_QUOTE_BOOTSTRAP_SYMBOLS = [
-  'RELIANCE',
-  'TCS',
-  'INFY',
-  'HDFCBANK',
-  'ICICIBANK',
-  'SBIN',
-  'LT',
-  'ITC',
-  'BHARTIARTL',
-  'AXISBANK',
-] as const;
+import { getEligibleSymbols } from '../../universe/policy.js';
 
 export class BrokerSupervisor implements TickWork {
   readonly label = 'broker';
@@ -157,7 +145,10 @@ export class BrokerSupervisor implements TickWork {
     const diagnostics = this._stream.getDiagnostics();
     if (diagnostics.subscribedCount > 0) return;
 
-    const tokens = DEFAULT_QUOTE_BOOTSTRAP_SYMBOLS
+    const symbols = getEligibleSymbols('NSE');
+    // Sort for deterministic ordering
+    const sortedSymbols = [...symbols].sort();
+    const tokens = sortedSymbols
       .map(symbol => this._instruments.getInstrument('NSE', symbol))
       .filter((instrument): instrument is NonNullable<typeof instrument> => Boolean(instrument))
       .map(instrument => instrument.instrumentToken);

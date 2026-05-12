@@ -538,6 +538,8 @@ export interface DashboardSnapshot {
   recentBlockedOrders: DashboardBlockedOrder[];
   /** Recent lifecycle transition events (newest first, max 10). */
   recentLifecycleEvents: DashboardLifecycleEvent[];
+  /** Universe coverage summary — null when no snapshot has been computed. */
+  universe: DashboardUniverse | null;
 }
 
 /** Market profile identity and session metadata. */
@@ -608,6 +610,26 @@ export interface DashboardBroker {
   };
   /** Number of recent ingestion events. */
   recentEventCount: number;
+}
+
+/** Universe coverage summary as shown on the dashboard. */
+export interface DashboardUniverse {
+  /** Policy version that was applied. */
+  policyVersion: string;
+  /** ISO‑8601 timestamp when the snapshot was computed (or null if never). */
+  computedAt: string | null;
+  /** Coverage verdict string. */
+  verdict: string;
+  /** Number of eligible (tradable) members. */
+  eligibleCount: number;
+  /** Number of eligible members with a fresh quote. */
+  freshQuoteCount: number;
+  /** Number of eligible members with a stale quote. */
+  staleQuoteCount: number;
+  /** Number of eligible members with no quote at all. */
+  missingQuoteCount: number;
+  /** Threshold configuration label. */
+  thresholdLabel: string;
 }
 
 /** A recent proposal attempt for the dashboard (redacted — no tokens). */

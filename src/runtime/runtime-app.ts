@@ -12,6 +12,7 @@ import path from 'node:path';
 import { DatabaseManager } from '../persistence/sqlite.js';
 import { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
 import { BrokerRepository } from '../persistence/broker-repo.js';
+import { UniverseRepository } from '../persistence/universe-repo.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import { LifecycleManager } from './lifecycle.js';
@@ -31,6 +32,8 @@ import { ProposalEngine } from '../proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../proposals/india-validator.js';
 import { ProposalSupervisor } from '../proposals/proposal-supervisor.js';
 import { ExecutionGateSupervisor } from '../execution/execution-gate-supervisor.js';
+import { UniverseService } from '../universe/universe-service.js';
+import { UniverseSupervisor } from '../universe/universe-supervisor.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
 import { SchedulerStatus, type RuntimeConfig } from '../types/runtime.js';
 
@@ -43,6 +46,9 @@ export interface RuntimeAppHandles {
   runtimeStateRepo: RuntimeStateRepository;
   brokerRepo: BrokerRepository;
   zerodhaRepo: BrokerRepository;
+  universeRepo: UniverseRepository;
+  universeService: UniverseService;
+  universeSupervisor: UniverseSupervisor;
   proposalRepo: ProposalRepository | null;
   blockedOrderRepo: BlockedOrderRepository | null;
   lifecycle: LifecycleManager;
@@ -167,7 +173,13 @@ export class RuntimeApp {
       logBoot('Broker integration: not configured (degraded broker mode)');
     }
 
-    // ── Phase 5: initialise Proposal subsystem ────────────────────────────
+    // ── Phase 5: initialise Universe subsystem ────────────────────────────
+    const universeRepo = new UniverseRepository(dbManager.db);
+    const universeService = new UniverseService(brokerRepo, universeRepo);
+    const universeSupervisor = new UniverseSupervisor(universeService);
+    logBoot('Universe services initialised');
+
+    // ── Phase 6: initialise Proposal subsystem ────────────────────────────
     let proposalRepo: ProposalRepository | null = null;
     let blockedOrderRepo: BlockedOrderRepository | null = null;
     let proposalSupervisor: ProposalSupervisor | null = null;
@@ -190,6 +202,7 @@ export class RuntimeApp {
         stream: marketDataStream,
         clock,
         maxProposals: this.config.proposalEngine.maxProposalsPerTick,
+        universeService,
       });
 
       executionGateSupervisor = new ExecutionGateSupervisor({ blockedRepo: blockedOrderRepo });
@@ -200,9 +213,11 @@ export class RuntimeApp {
       logBoot('Proposal engine: not configured (proposal generation disabled)');
     }
 
-    // ── Phase 6: build scheduler ─────────────────────────────────────────
+    // ── Phase 7: build scheduler with ordered tick work ──────────────────
+    // Order: broker -> universe -> proposal -> execution gate
     const tickWork = [
       ...(brokerSupervisor ? [brokerSupervisor] : []),
+      universeSupervisor,
       ...(proposalSupervisor ? [proposalSupervisor] : []),
       ...(executionGateSupervisor ? [executionGateSupervisor] : []),
     ];
@@ -225,6 +240,7 @@ export class RuntimeApp {
       proposalRepo,
       blockedOrderRepo,
       clock,
+      universeService,
     });
 
     // ── Phase 8: create health HTTP server with dashboard routes ───────────
@@ -236,6 +252,9 @@ export class RuntimeApp {
       runtimeStateRepo,
       brokerRepo,
       zerodhaRepo: brokerRepo,
+      universeRepo,
+      universeService,
+      universeSupervisor,
       proposalRepo,
       blockedOrderRepo,
       lifecycle,
