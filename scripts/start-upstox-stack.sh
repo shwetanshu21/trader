@@ -72,7 +72,39 @@ log_file_for() {
 
 is_pid_running() {
   local pid="$1"
-  kill -0 "$pid" 2>/dev/null
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  local stat
+  stat="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$stat" ] && [[ "$stat" != Z* ]]
+}
+
+cleanup_stale_pid() {
+  local pid_file="$1"
+  [ -f "$pid_file" ] || return 0
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if ! is_pid_running "$pid"; then
+    rm -f "$pid_file"
+  fi
+}
+
+require_running() {
+  local name="$1"
+  local pid_file log_file pid
+  pid_file="$(pid_file_for "$name")"
+  log_file="$(log_file_for "$name")"
+  cleanup_stale_pid "$pid_file"
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if ! is_pid_running "$pid"; then
+    echo "  ⚠ $name is not running" >&2
+    if [ -f "$log_file" ]; then
+      echo "  ⚠ recent $name log tail:" >&2
+      tail -n 20 "$log_file" >&2 || true
+    fi
+    return 1
+  fi
+  return 0
 }
 
 start_bg() {
@@ -82,6 +114,7 @@ start_bg() {
   pid_file="$(pid_file_for "$name")"
   log_file="$(log_file_for "$name")"
 
+  cleanup_stale_pid "$pid_file"
   if [ -f "$pid_file" ]; then
     local pid
     pid="$(cat "$pid_file")"
@@ -92,16 +125,23 @@ start_bg() {
     rm -f "$pid_file"
   fi
 
+  : > "$log_file"
   info "starting $name"
-  nohup bash -lc "$command" >>"$log_file" 2>&1 &
+  nohup bash -lc "exec $command" >>"$log_file" 2>&1 &
   local pid=$!
   echo "$pid" > "$pid_file"
-  sleep 1
-  if is_pid_running "$pid"; then
-    pass "$name started (pid $pid)"
-  else
-    fail "$name failed to start; inspect $log_file"
-  fi
+
+  local deadline=$((SECONDS + 5))
+  while [ $SECONDS -lt $deadline ]; do
+    if is_pid_running "$pid"; then
+      sleep 1
+      continue
+    fi
+    rm -f "$pid_file"
+    fail "$name failed to stay running; inspect $log_file"
+  done
+
+  pass "$name started (pid $pid)"
 }
 
 wait_for_http() {
@@ -122,6 +162,7 @@ wait_for_tunnel_url() {
   local log_file="$1"
   local deadline=$((SECONDS + 45))
   while [ $SECONDS -lt $deadline ]; do
+    require_running tunnel || return 1
     if [ -f "$log_file" ]; then
       local line
       line="$(python3 - "$log_file" <<'PY'
@@ -177,6 +218,9 @@ fi
 start_bg tunnel "$TUNNEL_CMD"
 TUNNEL_LOG="$(log_file_for tunnel)"
 TUNNEL_URL="$(wait_for_tunnel_url "$TUNNEL_LOG" || true)"
+require_running notifier || fail "notifier died after startup"
+require_running bridge || fail "bridge died after startup"
+require_running tunnel || fail "tunnel died after startup"
 if [ -n "$TUNNEL_URL" ]; then
   pass "notifier tunnel URL: ${TUNNEL_URL}/upstox/notifier"
 else
