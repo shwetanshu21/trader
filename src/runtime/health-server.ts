@@ -121,6 +121,25 @@ export function createHealthServer(
           break;
         }
 
+        // ── Universe coverage route ───────────────────────────────────────
+
+        case '/health/universe': {
+          if (!dashboard) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Dashboard not available' }));
+            break;
+          }
+          const dSnapshot = dashboard.getSnapshot();
+          if (dSnapshot.universe) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(dSnapshot.universe, null, 2));
+          } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No universe coverage snapshot computed yet' }));
+          }
+          break;
+        }
+
         default: {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found', path: url.pathname }));

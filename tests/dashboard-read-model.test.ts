@@ -7,6 +7,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { RuntimeStateRepository } from '../src/persistence/runtime-state-repo.js';
 import { ZerodhaRepository } from '../src/persistence/zerodha-repo.js';
+import { BrokerRepository } from '../src/persistence/broker-repo.js';
+import { UniverseRepository } from '../src/persistence/universe-repo.js';
+import { UniverseService } from '../src/universe/universe-service.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
@@ -22,6 +25,7 @@ import {
   ProposalStatus,
   ZerodhaSessionState,
   BlockCode,
+  UniverseCoverageVerdict,
   type DashboardSnapshot,
 } from '../src/types/runtime.js';
 
@@ -33,6 +37,9 @@ function createTestContext() {
   const db = new DatabaseManager(':memory:');
   const runtimeStateRepo = new RuntimeStateRepository(db.db);
   const zerodhaRepo = new ZerodhaRepository(db.db);
+  const brokerRepo = new BrokerRepository(db.db);
+  const universeRepo = new UniverseRepository(db.db);
+  const universeService = new UniverseService(brokerRepo, universeRepo);
   const proposalRepo = new ProposalRepository(db.db);
   const blockedOrderRepo = new BlockedOrderRepository(db.db);
   const lifecycle = new LifecycleManager(runtimeStateRepo);
@@ -47,12 +54,16 @@ function createTestContext() {
     proposalRepo,
     blockedOrderRepo,
     clock,
+    universeService,
   });
 
   return {
     db,
     runtimeStateRepo,
     zerodhaRepo,
+    brokerRepo,
+    universeRepo,
+    universeService,
     proposalRepo,
     blockedOrderRepo,
     lifecycle,
@@ -512,6 +523,138 @@ describe('DashboardReadModel — snapshot contract', () => {
       const ids = snapshot.recentBlockedOrders.map(b => b.id);
       // If all inserted in order, newest = highest id
       expect(ids[0]).toBeGreaterThanOrEqual(ids[ids.length - 1]);
+    });
+  });
+
+  // ── Universe coverage ─────────────────────────────────────────────────
+
+  describe('Universe coverage', () => {
+    it('returns null universe when no snapshot has been computed', () => {
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.universe).toBeNull();
+    });
+
+    it('returns sufficient coverage from seeded snapshot', () => {
+      const now = Date.now();
+      ctx.universeRepo.insertSnapshot({
+        policyVersion: '1.0.0',
+        computedAt: now,
+        verdict: UniverseCoverageVerdict.Sufficient,
+        eligibleCount: 50,
+        ineligibleCount: 0,
+        freshQuoteCount: 48,
+        staleQuoteCount: 0,
+        missingQuoteCount: 2,
+        thresholdLabel: 'fresh>=90%_stale<=120000ms',
+        thresholdRatio: 0.9,
+        maxStalenessMs: 120000,
+        members: [],
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.universe).not.toBeNull();
+      expect(snapshot.universe!.policyVersion).toBe('1.0.0');
+      expect(snapshot.universe!.verdict).toBe('sufficient');
+      expect(snapshot.universe!.eligibleCount).toBe(50);
+      expect(snapshot.universe!.freshQuoteCount).toBe(48);
+      expect(snapshot.universe!.staleQuoteCount).toBe(0);
+      expect(snapshot.universe!.missingQuoteCount).toBe(2);
+      expect(snapshot.universe!.thresholdLabel).toBe('fresh>=90%_stale<=120000ms');
+      expect(snapshot.universe!.computedAt).toBe(new Date(now).toISOString());
+    });
+
+    it('returns stale coverage from seeded snapshot', () => {
+      ctx.universeRepo.insertSnapshot({
+        policyVersion: '1.0.0',
+        computedAt: Date.now(),
+        verdict: UniverseCoverageVerdict.Stale,
+        eligibleCount: 50,
+        ineligibleCount: 0,
+        freshQuoteCount: 35,
+        staleQuoteCount: 10,
+        missingQuoteCount: 5,
+        thresholdLabel: 'fresh>=90%_stale<=120000ms',
+        thresholdRatio: 0.9,
+        maxStalenessMs: 120000,
+        members: [],
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.universe!.verdict).toBe('stale');
+      expect(snapshot.universe!.staleQuoteCount).toBe(10);
+    });
+
+    it('returns degraded coverage from seeded snapshot', () => {
+      ctx.universeRepo.insertSnapshot({
+        policyVersion: '1.0.0',
+        computedAt: Date.now(),
+        verdict: UniverseCoverageVerdict.Degraded,
+        eligibleCount: 50,
+        ineligibleCount: 0,
+        freshQuoteCount: 10,
+        staleQuoteCount: 5,
+        missingQuoteCount: 35,
+        thresholdLabel: 'fresh>=90%_stale<=120000ms',
+        thresholdRatio: 0.9,
+        maxStalenessMs: 120000,
+        members: [],
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.universe!.verdict).toBe('degraded');
+      expect(snapshot.universe!.missingQuoteCount).toBe(35);
+    });
+
+    it('does NOT include token/secret material', () => {
+      ctx.universeRepo.insertSnapshot({
+        policyVersion: '1.0.0',
+        computedAt: Date.now(),
+        verdict: UniverseCoverageVerdict.Sufficient,
+        eligibleCount: 50,
+        ineligibleCount: 0,
+        freshQuoteCount: 48,
+        staleQuoteCount: 0,
+        missingQuoteCount: 2,
+        thresholdLabel: 'fresh>=90%_stale<=120000ms',
+        thresholdRatio: 0.9,
+        maxStalenessMs: 120000,
+        members: [],
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const json = JSON.stringify(snapshot);
+      expect(json).not.toContain('accessToken');
+      expect(json).not.toContain('apiKey');
+      expect(json).not.toContain('apiSecret');
+    });
+
+    it('gracefully handles missing universe snapshot', () => {
+      // No snapshot seeded — universe should be null, but rest of snapshot intact
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.universe).toBeNull();
+      expect(snapshot.health).toBeDefined();
+      expect(snapshot.runtime).toBeDefined();
+    });
+
+    it('snapshot section remains bounded in JSON size', () => {
+      ctx.universeRepo.insertSnapshot({
+        policyVersion: '1.0.0',
+        computedAt: Date.now(),
+        verdict: UniverseCoverageVerdict.Sufficient,
+        eligibleCount: 50,
+        ineligibleCount: 0,
+        freshQuoteCount: 48,
+        staleQuoteCount: 0,
+        missingQuoteCount: 2,
+        thresholdLabel: 'fresh>=90%_stale<=120000ms',
+        thresholdRatio: 0.9,
+        maxStalenessMs: 120000,
+        members: [],
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const json = JSON.stringify(snapshot);
+      expect(json.length).toBeLessThan(50_000);
     });
   });
 });

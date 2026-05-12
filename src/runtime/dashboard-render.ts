@@ -62,7 +62,7 @@ function maybeValue(val: string | null): string {
 // ---------------------------------------------------------------------------
 
 export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
-  const { marketProfile, health, runtime, broker, recentProposals, recentBlockedOrders, recentLifecycleEvents } = snapshot;
+  const { marketProfile, health, runtime, broker, universe, recentProposals, recentBlockedOrders, recentLifecycleEvents } = snapshot;
 
   const healthColor = verdictColor(health.verdict);
 
@@ -82,6 +82,27 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
       <div class="section">
         <h2>Broker</h2>
         <p class="muted">Not configured — running in degraded broker mode</p>
+      </div>`;
+
+  // ── Universe coverage section ─────────────────────────────────────────
+
+  const universeSection = (universe && universe.computedAt) ? `
+      <div class="section">
+        <h2>Universe Coverage</h2>
+        <table>
+          <tr><td>Policy</td><td class="td-value">${escapeHtml(universe.policyVersion)}</td></tr>
+          <tr><td>Verdict</td><td class="td-value"><span class="verdict" style="background:${verdictColor(universe.verdict)}22;color:${verdictColor(universe.verdict)}">${escapeHtml(universe.verdict)}</span></td></tr>
+          <tr><td>Eligible</td><td class="td-value">${universe.eligibleCount}</td></tr>
+          <tr><td>Fresh Quotes</td><td class="td-value">${universe.freshQuoteCount}</td></tr>
+          <tr><td>Stale Quotes</td><td class="td-value">${universe.staleQuoteCount}</td></tr>
+          <tr><td>Missing Quotes</td><td class="td-value">${universe.missingQuoteCount}</td></tr>
+          <tr><td>Threshold</td><td class="td-value">${escapeHtml(universe.thresholdLabel)}</td></tr>
+          <tr><td>Last Snapshot</td><td class="td-value">${escapeHtml(universe.computedAt)}</td></tr>
+        </table>
+      </div>` : `
+      <div class="section">
+        <h2>Universe Coverage</h2>
+        <p class="muted">No coverage snapshot computed yet</p>
       </div>`;
 
   const proposalsRows = recentProposals.length === 0
@@ -204,6 +225,8 @@ ${degradedSection}
 </div>
 
 ${brokerSection}
+
+${universeSection}
 
 <div class="section">
   <h2>Recent Proposals (${recentProposals.length})</h2>

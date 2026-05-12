@@ -10,6 +10,9 @@ import http from 'node:http';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { RuntimeStateRepository } from '../src/persistence/runtime-state-repo.js';
 import { ZerodhaRepository } from '../src/persistence/zerodha-repo.js';
+import { BrokerRepository } from '../src/persistence/broker-repo.js';
+import { UniverseRepository } from '../src/persistence/universe-repo.js';
+import { UniverseService } from '../src/universe/universe-service.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
@@ -23,6 +26,7 @@ import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
 import {
   ProposalStatus,
   BlockCode,
+  UniverseCoverageVerdict,
   type DashboardSnapshot,
 } from '../src/types/runtime.js';
 
@@ -79,6 +83,9 @@ function createServerAndDashboard() {
   const db = new DatabaseManager(':memory:');
   const runtimeStateRepo = new RuntimeStateRepository(db.db);
   const zerodhaRepo = new ZerodhaRepository(db.db);
+  const brokerRepo = new BrokerRepository(db.db);
+  const universeRepo = new UniverseRepository(db.db);
+  const universeService = new UniverseService(brokerRepo, universeRepo);
   const proposalRepo = new ProposalRepository(db.db);
   const blockedOrderRepo = new BlockedOrderRepository(db.db);
   const lifecycle = new LifecycleManager(runtimeStateRepo);
@@ -94,11 +101,13 @@ function createServerAndDashboard() {
     proposalRepo,
     blockedOrderRepo,
     clock,
+    universeService,
   });
   const server = createHealthServer(healthService, scheduler, telemetry, db, dashboard);
 
   return {
-    db, runtimeStateRepo, zerodhaRepo, proposalRepo, blockedOrderRepo,
+    db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
+    proposalRepo, blockedOrderRepo,
     lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
   };
 }
@@ -158,6 +167,33 @@ function seedBlockedOrder(
     price: null,
     triggerPrice: null,
     orderType: 'MARKET',
+  });
+}
+
+/** Seed a universe coverage snapshot. */
+function seedUniverseSnapshot(
+  repo: UniverseRepository,
+  overrides?: Partial<{
+    verdict: UniverseCoverageVerdict;
+    eligibleCount: number;
+    freshQuoteCount: number;
+    staleQuoteCount: number;
+    missingQuoteCount: number;
+  }>,
+) {
+  repo.insertSnapshot({
+    policyVersion: '1.0.0',
+    computedAt: Date.now(),
+    verdict: overrides?.verdict ?? UniverseCoverageVerdict.Sufficient,
+    eligibleCount: overrides?.eligibleCount ?? 50,
+    ineligibleCount: 0,
+    freshQuoteCount: overrides?.freshQuoteCount ?? 48,
+    staleQuoteCount: overrides?.staleQuoteCount ?? 0,
+    missingQuoteCount: overrides?.missingQuoteCount ?? 2,
+    thresholdLabel: 'fresh>=90%_stale<=120000ms',
+    thresholdRatio: 0.9,
+    maxStalenessMs: 120000,
+    members: [],
   });
 }
 
@@ -519,6 +555,166 @@ describe('Health server — dashboard routes', () => {
   });
 });
 
+// ── Universe coverage ──────────────────────────────────────────────────
+
+describe('Health server — universe coverage routes', () => {
+  let ctx: ReturnType<typeof createServerAndDashboard>;
+
+  beforeEach(async () => {
+    ctx = createServerAndDashboard();
+    await new Promise<void>((resolve, reject) => {
+      ctx.server.listen(0, '127.0.0.1', () => resolve());
+      ctx.server.on('error', reject);
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => {
+      ctx.server.close(() => {
+        ctx.db.close();
+        resolve();
+      });
+    });
+  });
+
+  describe('/health/universe', () => {
+    it('returns 404 when no snapshot exists', async () => {
+      const res = await fetchUrl(ctx.server, '/health/universe');
+      expect(res.status).toBe(404);
+      const data = JSON.parse(res.body);
+      expect(data.error).toBe('No universe coverage snapshot computed yet');
+    });
+
+    it('returns 200 with universe coverage data when snapshot exists', async () => {
+      seedUniverseSnapshot(ctx.universeRepo, { verdict: UniverseCoverageVerdict.Sufficient });
+
+      const res = await fetchUrl(ctx.server, '/health/universe');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.policyVersion).toBe('1.0.0');
+      expect(data.verdict).toBe('sufficient');
+      expect(data.eligibleCount).toBe(50);
+      expect(data.freshQuoteCount).toBe(48);
+      expect(data.thresholdLabel).toBe('fresh>=90%_stale<=120000ms');
+    });
+
+    it('returns stale verdict correctly', async () => {
+      seedUniverseSnapshot(ctx.universeRepo, {
+        verdict: UniverseCoverageVerdict.Stale,
+        freshQuoteCount: 35,
+        staleQuoteCount: 10,
+        missingQuoteCount: 5,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/universe');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.verdict).toBe('stale');
+      expect(data.staleQuoteCount).toBe(10);
+    });
+
+    it('returns degraded verdict correctly', async () => {
+      seedUniverseSnapshot(ctx.universeRepo, {
+        verdict: UniverseCoverageVerdict.Degraded,
+        freshQuoteCount: 10,
+        staleQuoteCount: 5,
+        missingQuoteCount: 35,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/universe');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.verdict).toBe('degraded');
+      expect(data.missingQuoteCount).toBe(35);
+    });
+
+    it('does NOT include tokens or secret material', async () => {
+      seedUniverseSnapshot(ctx.universeRepo);
+
+      const res = await fetchUrl(ctx.server, '/health/universe');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+      expect(body).not.toContain('apiSecret');
+    });
+  });
+
+  describe('Dashboard universe block in HTML', () => {
+    it('shows "No coverage snapshot computed yet" when no snapshot exists', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No coverage snapshot computed yet');
+    });
+
+    it('shows universe coverage section with sufficient verdict', async () => {
+      seedUniverseSnapshot(ctx.universeRepo, { verdict: UniverseCoverageVerdict.Sufficient });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Universe Coverage');
+      expect(res.body).toContain('sufficient');
+      expect(res.body).toContain('1.0.0');
+      expect(res.body).toContain('50');
+      expect(res.body).toContain('48');
+      expect(res.body).toContain('fresh&gt;=90%');
+    });
+
+    it('shows degraded verdict in HTML', async () => {
+      seedUniverseSnapshot(ctx.universeRepo, {
+        verdict: UniverseCoverageVerdict.Degraded,
+        freshQuoteCount: 10,
+        staleQuoteCount: 5,
+        missingQuoteCount: 35,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('degraded');
+      expect(res.body).toContain('35');
+    });
+
+    it('shows stale verdict in HTML', async () => {
+      seedUniverseSnapshot(ctx.universeRepo, {
+        verdict: UniverseCoverageVerdict.Stale,
+        freshQuoteCount: 35,
+        staleQuoteCount: 10,
+        missingQuoteCount: 5,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('stale');
+      expect(res.body).toContain('10');
+    });
+  });
+
+  describe('Dashboard universe block in JSON', () => {
+    it('includes null universe when no snapshot exists', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body) as DashboardSnapshot;
+      expect(data.universe).toBeNull();
+    });
+
+    it('includes universe coverage snapshot when seeded', async () => {
+      seedUniverseSnapshot(ctx.universeRepo, { verdict: UniverseCoverageVerdict.Sufficient });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body) as DashboardSnapshot;
+      expect(data.universe).not.toBeNull();
+      expect(data.universe!.policyVersion).toBe('1.0.0');
+      expect(data.universe!.verdict).toBe('sufficient');
+      expect(data.universe!.eligibleCount).toBe(50);
+      expect(data.universe!.freshQuoteCount).toBe(48);
+    });
+
+    it('does NOT include secret material', async () => {
+      seedUniverseSnapshot(ctx.universeRepo);
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+      expect(body).not.toContain('apiSecret');
+    });
+  });
+});
+
 import type { DashboardSnapshot } from '../src/types/runtime.js';
 
 // ── Renderer escaping unit tests ──────────────────────────────────────────
@@ -628,5 +824,60 @@ describe('Dashboard renderer — HTML escaping', () => {
     expect(html).toContain('Error: x &gt; y');
     expect(html).toContain('z &lt;');
     expect(html).toContain('&quot;quote&quot;');
+  });
+
+  it('escapes HTML in universe policy version and threshold label', async () => {
+    const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+    const snapshot: DashboardSnapshot = {
+      assembledAt: '2025-01-01T00:00:00.000Z',
+      marketProfile: {
+        marketId: 'TEST',
+        displayName: 'Test Market',
+        timezone: 'UTC',
+        currentPhase: 'closed',
+        isTradingDay: false,
+        settlementCycle: 'T+1',
+      },
+      health: {
+        verdict: 'healthy',
+        uptimeMs: 1000,
+        lifecycleState: 'running',
+        degradedReasons: [],
+        checkedAt: '2025-01-01T00:00:00.000Z',
+      },
+      runtime: {
+        schedulerStatus: 'idle',
+        marketPhase: 'closed',
+        lastTickTimestamp: null,
+        startedAt: null,
+        tickCount: 0,
+        lastError: null,
+      },
+      broker: null,
+      recentProposals: [],
+      recentBlockedOrders: [],
+      recentLifecycleEvents: [],
+      universe: {
+        policyVersion: '1.0.0',
+        computedAt: '2025-01-01T00:00:00.000Z',
+        verdict: 'sufficient',
+        eligibleCount: 50,
+        freshQuoteCount: 45,
+        staleQuoteCount: 3,
+        missingQuoteCount: 2,
+        thresholdLabel: 'fresh>=90%_stale<120000ms',
+      },
+    };
+
+    const html = renderDashboardHtml(snapshot);
+    // The threshold label contains < and % which should be escaped
+    expect(html).toContain('fresh&gt;=90%');
+    expect(html).toContain('_stale&lt;120000ms');
+    // Policy version is safe but should be present
+    expect(html).toContain('1.0.0');
+    // Verdict should be rendered
+    expect(html).toContain('sufficient');
+    expect(html).toContain('50');
+    expect(html).toContain('45');
   });
 });
