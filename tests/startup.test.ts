@@ -189,11 +189,6 @@ describe('loadConfig', () => {
 
 describe('main entrypoint', () => {
   it('compiles without error (type-check)', () => {
-    // This is a compile-time smoke check — the import at the top of this file
-    // already validates the config module. We verify the main module can be
-    // loaded without crashing when env defaults apply.
-    // In a real startup test we'd spawn a child process, but for T01 the
-    // config + type layer verification is sufficient.
     expect(typeof loadConfig).toBe('function');
   });
 
@@ -209,5 +204,92 @@ describe('main entrypoint', () => {
     });
     expect(cfg.port).toBeGreaterThan(0);
     expect(cfg.schedulerIntervalMs).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S05 — Execution risk config tests
+// ---------------------------------------------------------------------------
+
+describe('execution risk config', () => {
+  it('defaults operatorBindHost to 127.0.0.1', () => {
+    const cfg = loadConfig({});
+    expect(cfg.execution.operatorBindHost).toBe('127.0.0.1');
+  });
+
+  it('reads TRADER_EXECUTION_OPERATOR_BIND_HOST', () => {
+    const cfg = loadConfig({ TRADER_EXECUTION_OPERATOR_BIND_HOST: '0.0.0.0' });
+    expect(cfg.execution.operatorBindHost).toBe('0.0.0.0');
+  });
+
+  it('defaults risk limits to safe values', () => {
+    const cfg = loadConfig({});
+    expect(cfg.execution.riskLimits).toMatchObject({
+      maxOpenPositions: 10,
+      maxOrdersPerInstrument: 1,
+      maxDailyLossRupees: 0,
+      maxExposureRupees: 0,
+      marketHoursStalenessMs: 120_000,
+    });
+  });
+
+  it('reads risk limit env vars', () => {
+    const cfg = loadConfig({
+      TRADER_EXECUTION_MAX_OPEN_POSITIONS: '5',
+      TRADER_EXECUTION_MAX_ORDERS_PER_INSTRUMENT: '2',
+      TRADER_EXECUTION_MAX_DAILY_LOSS_RUPEES: '5000',
+      TRADER_EXECUTION_MAX_EXPOSURE_RUPEES: '100000',
+      TRADER_EXECUTION_MARKET_HOURS_STALENESS_MS: '60000',
+    });
+    expect(cfg.execution.riskLimits).toMatchObject({
+      maxOpenPositions: 5,
+      maxOrdersPerInstrument: 2,
+      maxDailyLossRupees: 5000,
+      maxExposureRupees: 100000,
+      marketHoursStalenessMs: 60_000,
+    });
+  });
+
+  it('rejects invalid maxOpenPositions (too low)', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_MAX_OPEN_POSITIONS: '0' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects invalid maxOpenPositions (too high)', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_MAX_OPEN_POSITIONS: '1001' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects invalid maxOrdersPerInstrument (zero)', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_MAX_ORDERS_PER_INSTRUMENT: '0' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects negative maxDailyLossRupees', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_MAX_DAILY_LOSS_RUPEES: '-1' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects negative maxExposureRupees', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_MAX_EXPOSURE_RUPEES: '-100' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects invalid marketHoursStalenessMs (below min)', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_MARKET_HOURS_STALENESS_MS: '500' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects invalid marketHoursStalenessMs (above max)', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_MARKET_HOURS_STALENESS_MS: '5000000' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('accepts zero daily loss and exposure (no limit)', () => {
+    const cfg = loadConfig({
+      TRADER_EXECUTION_MAX_DAILY_LOSS_RUPEES: '0',
+      TRADER_EXECUTION_MAX_EXPOSURE_RUPEES: '0',
+    });
+    expect(cfg.execution.riskLimits.maxDailyLossRupees).toBe(0);
+    expect(cfg.execution.riskLimits.maxExposureRupees).toBe(0);
+  });
+
+  it('operatorBindHost is present in default execution config', () => {
+    const cfg = loadConfig({});
+    expect(cfg.execution).toHaveProperty('operatorBindHost');
+    expect(cfg.execution).toHaveProperty('riskLimits');
   });
 });

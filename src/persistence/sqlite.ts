@@ -348,6 +348,35 @@ CREATE TABLE IF NOT EXISTS paper_positions (
 
 CREATE INDEX IF NOT EXISTS idx_paper_positions_side ON paper_positions(side);
 CREATE INDEX IF NOT EXISTS idx_paper_positions_open ON paper_positions(quantity) WHERE quantity != 0;
+
+-- S05: Execution risk state singleton table
+CREATE TABLE IF NOT EXISTS execution_risk_state (
+  id                        INTEGER PRIMARY KEY CHECK (id = 1),
+  halt_state                TEXT    NOT NULL DEFAULT 'no_halt',
+  halt_source               TEXT,
+  halt_reason               TEXT,
+  halted_at                 INTEGER,
+  acknowledged_at           INTEGER,
+  open_position_count_at_halt INTEGER,
+  daily_pnl_at_halt         REAL,
+  latch_count               INTEGER NOT NULL DEFAULT 0,
+  updated_at                INTEGER NOT NULL
+);
+
+-- S05: Append-only risk events
+CREATE TABLE IF NOT EXISTS risk_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type  TEXT    NOT NULL,
+  source      TEXT,
+  severity    TEXT    NOT NULL DEFAULT 'info',
+  message     TEXT    NOT NULL DEFAULT '',
+  diagnostic  TEXT,
+  recorded_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_risk_events_recorded ON risk_events(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_risk_events_type ON risk_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_risk_events_severity ON risk_events(severity);
 `;
 
 export class DatabaseManager {

@@ -34,10 +34,11 @@ import type { StrategyDecisionRepository } from '../persistence/strategy-decisio
 import type { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import type { MarketClock } from './market-clock.js';
 import type { UniverseService } from '../universe/universe-service.js';
-import { ExecutionMode, type ExecutionHealth } from '../types/runtime.js';
+import { ExecutionMode, type ExecutionHealth, type DashboardRiskState, type DashboardRiskEvent } from '../types/runtime.js';
 import type { PaperOrderRepository } from '../persistence/paper-order-repo.js';
 import type { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import type { PaperPositionRepository } from '../persistence/paper-position-repo.js';
+import type { ExecutionRiskRepository } from '../persistence/execution-risk-repo.js';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -69,6 +70,8 @@ export interface DashboardReadModelOptions {
   paperFillRepo?: PaperFillRepository | null;
   /** Optional — paper trading repositories for execution evidence enrichment. */
   paperPositionRepo?: PaperPositionRepository | null;
+  /** Optional — execution risk repository for halt state and risk events. */
+  riskRepo?: ExecutionRiskRepository | null;
 }
 
 export class DashboardReadModel {
@@ -85,6 +88,7 @@ export class DashboardReadModel {
   private readonly _paperOrderRepo: PaperOrderRepository | null;
   private readonly _paperFillRepo: PaperFillRepository | null;
   private readonly _paperPositionRepo: PaperPositionRepository | null;
+  private readonly _riskRepo: ExecutionRiskRepository | null;
 
   constructor(options: DashboardReadModelOptions) {
     this._healthService = options.healthService;
@@ -100,6 +104,7 @@ export class DashboardReadModel {
     this._paperOrderRepo = options.paperOrderRepo ?? null;
     this._paperFillRepo = options.paperFillRepo ?? null;
     this._paperPositionRepo = options.paperPositionRepo ?? null;
+    this._riskRepo = options.riskRepo ?? null;
   }
 
   /** Assemble a full dashboard snapshot. */
@@ -396,9 +401,46 @@ export class DashboardReadModel {
         recentPaperFills,
         currentPositions,
         recentPositionEvents,
+        riskState: this._getRiskState(),
+        recentRiskEvents: this._getRecentRiskEvents(),
       };
     } catch {
       return null;
+    }
+  }
+
+  private _getRiskState(): DashboardRiskState | null {
+    if (!this._riskRepo) return null;
+    try {
+      const state = this._riskRepo.getCurrentState();
+      return {
+        haltState: state.haltState,
+        haltSource: state.haltSource,
+        haltReason: state.haltReason,
+        haltedAt: state.haltedAt ? new Date(state.haltedAt).toISOString() : null,
+        isRefusing: state.haltState === 'active_halt',
+        latchCount: state.latchCount,
+        openPositionCountAtHalt: state.openPositionCountAtHalt,
+        dailyPnlAtHalt: state.dailyPnlAtHalt,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private _getRecentRiskEvents(): DashboardRiskEvent[] {
+    if (!this._riskRepo) return [];
+    try {
+      return this._riskRepo.getRecentEvents(10).map(e => ({
+        id: e.id,
+        recordedAt: new Date(e.recordedAt).toISOString(),
+        eventType: e.eventType,
+        source: e.source,
+        severity: e.severity,
+        message: e.message,
+      }));
+    } catch {
+      return [];
     }
   }
 }

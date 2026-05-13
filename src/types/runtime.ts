@@ -1192,6 +1192,10 @@ export interface ExecutionHealth {
   currentPositions: DashboardPaperPosition[];
   /** Recent position events (newest first, max 10). */
   recentPositionEvents: DashboardPositionEvent[];
+  /** Current risk state — null when no risk state has been loaded. */
+  riskState: DashboardRiskState | null;
+  /** Recent risk events (newest first, max 10). */
+  recentRiskEvents: DashboardRiskEvent[];
 }
 
 /** Execution config block within RuntimeConfig. */
@@ -1202,6 +1206,134 @@ export interface ExecutionConfig {
   paperBrokerUrl?: string;
   /** Max retry attempts for failed dispatches. */
   maxRetries: number;
+  /** Operator HTTP bind host (loopback-first). Default: '127.0.0.1'. */
+  operatorBindHost: string;
+  /** Risk limits for execution gating. */
+  riskLimits: RiskLimits;
+}
+
+// ---------------------------------------------------------------------------
+// Execution risk — halt state, risk events, limits
+// ---------------------------------------------------------------------------
+
+/** Current halt state of the execution boundary. */
+export enum HaltState {
+  /** No halt is active — execution proceeds through normal gating. */
+  NoHalt = 'no_halt',
+  /** A halt condition has been triggered — execution is stopped. */
+  ActiveHalt = 'active_halt',
+  /** Halt was acknowledged by operator; resume is pending approval. */
+  PendingResume = 'pending_resume',
+}
+
+/** Source/trigger of a halt condition. */
+export enum HaltSource {
+  /** Operator manually triggered the kill-switch. */
+  Operator = 'operator',
+  /** Market hours gate: outside regular session. */
+  MarketHours = 'market_hours',
+  /** Duplicate order / exposure cap exceeded. */
+  DuplicateCap = 'duplicate_cap',
+  /** Position exposure limit exceeded. */
+  ExposureLimit = 'exposure_limit',
+  /** Daily loss limit exceeded. */
+  DailyLoss = 'daily_loss',
+  /** System-level halt (e.g. config error, unrecoverable state). */
+  System = 'system',
+}
+
+/** Configurable risk limits for the execution boundary. */
+export interface RiskLimits {
+  /** Maximum number of open positions across all symbols. */
+  maxOpenPositions: number;
+  /** Maximum number of concurrent orders per instrument. */
+  maxOrdersPerInstrument: number;
+  /** Maximum intraday drawdown (absolute rupees). 0 = no limit. */
+  maxDailyLossRupees: number;
+  /** Maximum notional exposure across all positions (rupees). 0 = no limit. */
+  maxExposureRupees: number;
+  /** Maximum timestamp staleness for market-hours checks (ms). Default: 120_000. */
+  marketHoursStalenessMs: number;
+}
+
+/** Durable risk-latch state persisted in the singleton execution_risk_state table. */
+export interface ExecutionRiskStateRow {
+  /** Singular row (id = 1). */
+  id: number;
+  /** Current halt state. */
+  haltState: HaltState;
+  /** Halt source that triggered the current state, or null if no halt. */
+  haltSource: HaltSource | null;
+  /** Human-readable reason for the current halt state, or null. */
+  haltReason: string | null;
+  /** Unix timestamp (ms) when the halt was triggered, or null. */
+  haltedAt: number | null;
+  /** Unix timestamp (ms) when the halt was last acknowledged, or null. */
+  acknowledgedAt: number | null;
+  /** Open position count at halt time, or null. */
+  openPositionCountAtHalt: number | null;
+  /** Running daily P&L at halt time, or null. */
+  dailyPnlAtHalt: number | null;
+  /** Counter of repeated latch on the same source (for backoff). */
+  latchCount: number;
+  /** Unix timestamp (ms) when this row was last updated. */
+  updatedAt: number;
+}
+
+/** A single append-only risk event. */
+export interface RiskEventRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Event type (e.g. 'halt', 'resume', 'refusal', 'limit_breach', 'daily_loss'). */
+  eventType: string;
+  /** Halt source that produced this event, or null. */
+  source: HaltSource | null;
+  /** Event severity: 'info', 'warning', 'critical'. */
+  severity: string;
+  /** Human-readable event message. */
+  message: string;
+  /** Optional diagnostic JSON payload. */
+  diagnostic: string | null;
+  /** Unix timestamp (ms) when this event was recorded. */
+  recordedAt: number;
+}
+
+/** Shape for inserting a new risk event (without id). */
+export type NewRiskEvent = Omit<RiskEventRow, 'id'>;
+
+/** Risk state block for the operator dashboard. */
+export interface DashboardRiskState {
+  /** Current halt state string. */
+  haltState: string;
+  /** Halt source string, or null. */
+  haltSource: string | null;
+  /** Halt reason, or null. */
+  haltReason: string | null;
+  /** ISO‑8601 timestamp when halted, or null. */
+  haltedAt: string | null;
+  /** Whether the execution boundary is actively refusing. */
+  isRefusing: boolean;
+  /** Counter of repeated latch on the same source. */
+  latchCount: number;
+  /** Open position count at halt time, or null. */
+  openPositionCountAtHalt: number | null;
+  /** Running daily P&L at halt time, or null. */
+  dailyPnlAtHalt: number | null;
+}
+
+/** A recent risk event for the operator dashboard. */
+export interface DashboardRiskEvent {
+  id: number;
+  /** ISO‑8601 timestamp when the event was recorded. */
+  recordedAt: string;
+  /** Event type. */
+  eventType: string;
+  /** Source string, or null. */
+  source: string | null;
+  /** Severity. */
+  severity: string;
+  /** Human-readable message. */
+  message: string;
 }
 
 // ---------------------------------------------------------------------------

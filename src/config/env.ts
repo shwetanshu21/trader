@@ -442,12 +442,84 @@ function parseExecutionConfig(
     }
   }
 
+  // ── Operator bind host ──────────────────────────────────────────────────
+  const operatorBindHost = env.TRADER_EXECUTION_OPERATOR_BIND_HOST?.trim() || '127.0.0.1';
+
+  // ── Risk limits ─────────────────────────────────────────────────────────
+  const maxOpenPositionsRaw = env.TRADER_EXECUTION_MAX_OPEN_POSITIONS ?? '10';
+  const maxOpenPositions = Number(maxOpenPositionsRaw);
+  if (!Number.isFinite(maxOpenPositions) || maxOpenPositions < 1 || maxOpenPositions > 1000) {
+    errors.push({
+      field: 'TRADER_EXECUTION_MAX_OPEN_POSITIONS',
+      message: `Must be between 1 and 1000, got "${maxOpenPositionsRaw}". Defaulting to 10.`,
+      provided: maxOpenPositionsRaw,
+    });
+  }
+
+  const maxOrdersPerInstrumentRaw = env.TRADER_EXECUTION_MAX_ORDERS_PER_INSTRUMENT ?? '1';
+  const maxOrdersPerInstrument = Number(maxOrdersPerInstrumentRaw);
+  if (!Number.isFinite(maxOrdersPerInstrument) || maxOrdersPerInstrument < 1 || maxOrdersPerInstrument > 100) {
+    errors.push({
+      field: 'TRADER_EXECUTION_MAX_ORDERS_PER_INSTRUMENT',
+      message: `Must be between 1 and 100, got "${maxOrdersPerInstrumentRaw}". Defaulting to 1.`,
+      provided: maxOrdersPerInstrumentRaw,
+    });
+  }
+
+  const maxDailyLossRupeesRaw = env.TRADER_EXECUTION_MAX_DAILY_LOSS_RUPEES ?? '0';
+  const maxDailyLossRupees = Number(maxDailyLossRupeesRaw);
+  if (!Number.isFinite(maxDailyLossRupees) || maxDailyLossRupees < 0 || maxDailyLossRupees > 10_000_000) {
+    errors.push({
+      field: 'TRADER_EXECUTION_MAX_DAILY_LOSS_RUPEES',
+      message: `Must be between 0 and 10000000, got "${maxDailyLossRupeesRaw}". Defaulting to 0 (no limit).`,
+      provided: maxDailyLossRupeesRaw,
+    });
+  }
+
+  const maxExposureRupeesRaw = env.TRADER_EXECUTION_MAX_EXPOSURE_RUPEES ?? '0';
+  const maxExposureRupees = Number(maxExposureRupeesRaw);
+  if (!Number.isFinite(maxExposureRupees) || maxExposureRupees < 0 || maxExposureRupees > 100_000_000) {
+    errors.push({
+      field: 'TRADER_EXECUTION_MAX_EXPOSURE_RUPEES',
+      message: `Must be between 0 and 100000000, got "${maxExposureRupeesRaw}". Defaulting to 0 (no limit).`,
+      provided: maxExposureRupeesRaw,
+    });
+  }
+
+  const marketHoursStalenessMsRaw = env.TRADER_EXECUTION_MARKET_HOURS_STALENESS_MS ?? '120000';
+  const marketHoursStalenessMs = Number(marketHoursStalenessMsRaw);
+  if (!Number.isFinite(marketHoursStalenessMs) || marketHoursStalenessMs < 1000 || marketHoursStalenessMs > 3_600_000) {
+    errors.push({
+      field: 'TRADER_EXECUTION_MARKET_HOURS_STALENESS_MS',
+      message: `Must be between 1000 and 3600000, got "${marketHoursStalenessMsRaw}". Defaulting to 120000.`,
+      provided: marketHoursStalenessMsRaw,
+    });
+  }
+
   return {
     mode,
     paperBrokerUrl,
     maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 && maxRetries <= 10
       ? maxRetries
       : 0,
+    operatorBindHost,
+    riskLimits: {
+      maxOpenPositions: Number.isFinite(maxOpenPositions) && maxOpenPositions >= 1 && maxOpenPositions <= 1000
+        ? maxOpenPositions
+        : 10,
+      maxOrdersPerInstrument: Number.isFinite(maxOrdersPerInstrument) && maxOrdersPerInstrument >= 1 && maxOrdersPerInstrument <= 100
+        ? maxOrdersPerInstrument
+        : 1,
+      maxDailyLossRupees: Number.isFinite(maxDailyLossRupees) && maxDailyLossRupees >= 0 && maxDailyLossRupees <= 10_000_000
+        ? maxDailyLossRupees
+        : 0,
+      maxExposureRupees: Number.isFinite(maxExposureRupees) && maxExposureRupees >= 0 && maxExposureRupees <= 100_000_000
+        ? maxExposureRupees
+        : 0,
+      marketHoursStalenessMs: Number.isFinite(marketHoursStalenessMs) && marketHoursStalenessMs >= 1000 && marketHoursStalenessMs <= 3_600_000
+        ? marketHoursStalenessMs
+        : 120_000,
+    },
   };
 }
 
