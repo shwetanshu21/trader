@@ -7,6 +7,9 @@
 //   GET /health/ready   → 200 if lifecycle is Running or Degraded, 503 otherwise
 //   GET /health/broker  → Neutral broker health block, or 404
 //   GET /health/scheduler → Detailed scheduler state
+//
+// Security: binds to loopback by default, restricts CORS to loopback origins,
+// and redacts internal exception detail from 500 responses.
 
 import http from 'node:http';
 import type { HealthService } from './health-service.js';
@@ -28,6 +31,24 @@ export interface HealthServerOptions {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Build a safe CORS origin from the bind host. Never returns wildcard '*'. */
+function corsOriginForBindHost(bindHost: string): string {
+  if (bindHost === '127.0.0.1' || bindHost === 'localhost') {
+    return 'http://127.0.0.1';
+  }
+  // For explicit non-loopback binds, restrict to the specific host
+  if (bindHost === '0.0.0.0') {
+    // 0.0.0.0 means all interfaces — restrict to localhost as safest default
+    return 'http://127.0.0.1';
+  }
+  // For any explicit hostname/IP, use it as the origin
+  return `http://${bindHost}`;
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -37,10 +58,13 @@ export function createHealthServer(
   telemetry: Telemetry,
   dbManager: DatabaseManager,
   dashboard?: DashboardReadModel,
+  bindHost = '127.0.0.1',
 ): http.Server {
+  const corsOrigin = corsOriginForBindHost(bindHost);
+
   return http.createServer((req, res) => {
-    // CORS headers for local health monitoring
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // CORS headers restricted to the bind-host origin (never wildcard)
+    res.setHeader('Access-Control-Allow-Origin', corsOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET');
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -195,10 +219,9 @@ export function createHealthServer(
           break;
         }
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    } catch {
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal server error', detail: message }));
+      res.end(JSON.stringify({ error: 'Internal server error' }));
     }
   });
 }

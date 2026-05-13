@@ -292,4 +292,23 @@ describe('execution risk config', () => {
     expect(cfg.execution).toHaveProperty('operatorBindHost');
     expect(cfg.execution).toHaveProperty('riskLimits');
   });
+
+  it('rejects bind host with special characters (malformed)', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_OPERATOR_BIND_HOST: '; rm -rf /' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('rejects bind host with spaces', () => {
+    expect(() => loadConfig({ TRADER_EXECUTION_OPERATOR_BIND_HOST: 'my host' })).toThrow(ConfigValidationErrorImpl);
+  });
+
+  it('accepts valid bind host values', () => {
+    expect(loadConfig({ TRADER_EXECUTION_OPERATOR_BIND_HOST: '0.0.0.0' }).execution.operatorBindHost).toBe('0.0.0.0');
+    expect(loadConfig({ TRADER_EXECUTION_OPERATOR_BIND_HOST: 'localhost' }).execution.operatorBindHost).toBe('localhost');
+    expect(loadConfig({ TRADER_EXECUTION_OPERATOR_BIND_HOST: '127.0.0.1' }).execution.operatorBindHost).toBe('127.0.0.1');
+  });
+
+  it('accepts IPv6 bind host', () => {
+    const cfg = loadConfig({ TRADER_EXECUTION_OPERATOR_BIND_HOST: '::1' });
+    expect(cfg.execution.operatorBindHost).toBe('::1');
+  });
 });

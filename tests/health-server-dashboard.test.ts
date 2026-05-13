@@ -769,14 +769,52 @@ describe('Health server — dashboard routes', () => {
   // ── CORS headers ───────────────────────────────────────────────────
 
   describe('CORS headers', () => {
-    it('sets Access-Control-Allow-Origin on /dashboard', async () => {
+    it('sets restricted Access-Control-Allow-Origin on /dashboard', async () => {
       const res = await fetchUrl(ctx.server, '/dashboard');
-      expect(res.headers['access-control-allow-origin']).toBe('*');
+      expect(res.headers['access-control-allow-origin']).toBe('http://127.0.0.1');
     });
 
-    it('sets Access-Control-Allow-Origin on /dashboard.json', async () => {
+    it('sets restricted Access-Control-Allow-Origin on /dashboard.json', async () => {
       const res = await fetchUrl(ctx.server, '/dashboard.json');
-      expect(res.headers['access-control-allow-origin']).toBe('*');
+      expect(res.headers['access-control-allow-origin']).toBe('http://127.0.0.1');
+    });
+  });
+
+  // ── Error redaction ────────────────────────────────────────────────
+
+  describe('Error redaction (no raw internal detail leakage)', () => {
+    it('returns generic 500 with redacted error — no detail field', async () => {
+      // Create a server where a dependency throws to trigger the catch block
+      const throwingHealth: HealthService = {
+        getHealth: () => { throw new Error('SENSITIVE_INTERNAL: db_connection_string=postgres://secret'); },
+        recordHealthCheck: () => ({ verdict: 'healthy' as any, uptimeMs: 0 }),
+        getLifecycleState: () => 'running' as any,
+        setBrokerSupervisor: () => {},
+      } as unknown as HealthService;
+
+      const throwingScheduler = createMockScheduler();
+      const throwingTelemetry = createMockTelemetry();
+      const throwingDb = new DatabaseManager(':memory:');
+      const throwingServer = createHealthServer(throwingHealth, throwingScheduler, throwingTelemetry, throwingDb);
+
+      await new Promise<void>((resolve) => throwingServer.listen(0, '127.0.0.1', resolve));
+
+      const res = await fetchUrl(throwingServer, '/health');
+      expect(res.status).toBe(500);
+      const body = JSON.parse(res.body);
+
+      // Must have error field
+      expect(body).toHaveProperty('error');
+      expect(body.error).toBe('Internal server error');
+
+      // Must NOT have detail field (no raw exception leakage)
+      expect(body).not.toHaveProperty('detail');
+
+      // Must NOT contain the sensitive content from the thrown error
+      expect(res.body).not.toContain('SENSITIVE_INTERNAL');
+      expect(res.body).not.toContain('db_connection_string');
+
+      await new Promise<void>((resolve) => throwingServer.close(() => { throwingDb.close(); resolve(); }));
     });
   });
 });

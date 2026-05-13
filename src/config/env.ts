@@ -443,7 +443,18 @@ function parseExecutionConfig(
   }
 
   // ── Operator bind host ──────────────────────────────────────────────────
-  const operatorBindHost = env.TRADER_EXECUTION_OPERATOR_BIND_HOST?.trim() || '127.0.0.1';
+  const operatorBindHostRaw = env.TRADER_EXECUTION_OPERATOR_BIND_HOST?.trim() ?? '';
+  let operatorBindHost = operatorBindHostRaw || '127.0.0.1';
+
+  // Validate explicit bind host (if set to something non-empty, it must look valid)
+  if (operatorBindHostRaw && !/^[\w.:[\]]+$/.test(operatorBindHostRaw)) {
+    errors.push({
+      field: 'TRADER_EXECUTION_OPERATOR_BIND_HOST',
+      message: `Invalid bind host "${operatorBindHostRaw}". Expected a valid hostname or IP address (e.g. "127.0.0.1", "localhost", "0.0.0.0").`,
+      provided: operatorBindHostRaw,
+    });
+    operatorBindHost = '127.0.0.1';
+  }
 
   // ── Risk limits ─────────────────────────────────────────────────────────
   const maxOpenPositionsRaw = env.TRADER_EXECUTION_MAX_OPEN_POSITIONS ?? '10';

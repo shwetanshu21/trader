@@ -388,7 +388,7 @@ export class RuntimeApp {
     });
 
     // ── Phase 8: create health HTTP server with dashboard routes ───────────
-    const server = createHealthServer(healthService, scheduler, telemetry, dbManager, dashboard);
+    const server = createHealthServer(healthService, scheduler, telemetry, dbManager, dashboard, this.config.execution.operatorBindHost);
 
     // Build handles
     this._handles = {
@@ -434,8 +434,8 @@ export class RuntimeApp {
     logBoot(`scheduler started — phase: ${h.scheduler.getState().marketPhase}`);
 
     // Start health HTTP server
-    h.server.listen(this.config.port, () => {
-      logBoot(`health HTTP server listening on port ${this.config.port}`);
+    h.server.listen(this.config.port, this.config.execution.operatorBindHost, () => {
+      logBoot(`health HTTP server listening on ${this.config.execution.operatorBindHost}:${this.config.port}`);
     });
 
     logBoot(`startup complete. Health endpoint: http://localhost:${this.config.port}/health`);
