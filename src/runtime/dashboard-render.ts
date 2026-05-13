@@ -167,17 +167,65 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
       ? `${escapeHtml(execution.recentAttempts[0].exchange)}:${escapeHtml(execution.recentAttempts[0].tradingsymbol)}`
       : '—';
 
+    // ── Paper orders table ──────────────────────────────────────────
+    const paperOrdersRows = execution.recentPaperOrders.length === 0
+      ? '<tr><td colspan="6" class="muted">No paper orders</td></tr>'
+      : execution.recentPaperOrders.map(o => `<tr>
+          <td>${escapeHtml(o.tradingsymbol)}</td>
+          <td>${escapeHtml(o.side)}</td>
+          <td>${o.quantity}</td>
+          <td>${o.price != null ? o.price.toFixed(2) : '—'}</td>
+          <td class="status-${o.status}">${escapeHtml(o.status)}</td>
+          <td><code>${escapeHtml(o.brokerOrderId)}</code></td>
+        </tr>`).join('');
+
+    // ── Paper fills table ───────────────────────────────────────────
+    const paperFillsRows = execution.recentPaperFills.length === 0
+      ? '<tr><td colspan="5" class="muted">No paper fills</td></tr>'
+      : execution.recentPaperFills.map(f => `<tr>
+          <td>${escapeHtml(f.tradingsymbol)}</td>
+          <td>${escapeHtml(f.side)}</td>
+          <td>${f.filledQuantity} @ ${f.filledPrice.toFixed(2)}</td>
+          <td><code>${escapeHtml(f.brokerOrderId)}</code></td>
+          <td>${escapeHtml(f.filledAt)}</td>
+        </tr>`).join('');
+
+    // ── Current positions table ─────────────────────────────────────
+    const positionsRows = execution.currentPositions.length === 0
+      ? '<tr><td colspan="5" class="muted">No positions</td></tr>'
+      : execution.currentPositions.map(p => `<tr>
+          <td>${escapeHtml(p.tradingsymbol)}</td>
+          <td>${escapeHtml(p.product)}</td>
+          <td class="status-${p.side === 'flat' ? 'skipped' : p.side === 'long' ? 'accepted' : 'refused'}">${escapeHtml(p.side)}</td>
+          <td>${p.quantity}</td>
+          <td>${p.avgCostPrice.toFixed(2)}</td>
+          <td>${p.realizedPnl.toFixed(2)}</td>
+        </tr>`).join('');
+
+    // ── Recent position events table ─────────────────────────────────
+    const positionEventsRows = execution.recentPositionEvents.length === 0
+      ? '<tr><td colspan="4" class="muted">No position events</td></tr>'
+      : execution.recentPositionEvents.map(e => `<tr>
+          <td>${escapeHtml(e.tradingsymbol)}</td>
+          <td class="status-${e.eventType === 'open' || e.eventType === 'fill' ? 'accepted' : 'refused'}">${escapeHtml(e.eventType)}</td>
+          <td>${e.quantityDelta > 0 ? '+' : ''}${e.quantityDelta} @ ${e.price.toFixed(2)}</td>
+          <td>${e.realizedPnl.toFixed(2)}</td>
+        </tr>`).join('');
+
     executionSection = `
       <div class="section">
         <h2>Execution</h2>
         <table>
           <tr><td>Mode</td><td class="td-value"><span class="verdict" style="background:${modeColor}22;color:${modeColor}">${escapeHtml(modeLabel)}</span></td></tr>
           <tr><td>Total Attempts</td><td class="td-value">${execution.totalAttempts}</td></tr>
+          <tr><td>Orders / Fills</td><td class="td-value">${execution.totalOrders} orders, ${execution.totalFills} fills</td></tr>
+          <tr><td>Open Positions</td><td class="td-value">${execution.openPositionCount}</td></tr>
           <tr><td>Gate Refusing</td><td class="td-value">${execution.isGateRefusing ? 'Yes' : 'No'}</td></tr>
           <tr><td>Gate Reason</td><td class="td-value">${execution.gateRefusalReason ? escapeHtml(execution.gateRefusalReason) : '—'}</td></tr>
           <tr><td>Last Attempt</td><td class="td-value">${lastAttemptSymbol} (${escapeHtml(lastAttemptVerdict)})</td></tr>
         </table>
         ${execution.recentAttempts.length > 0 ? `
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Recent Attempts</h3>
         <table style="margin-top:0.5rem;">
           <thead><tr><td>#</td><td>Symbol</td><td>Mode</td><td>Status</td><td>Outcome</td><td>Message</td></tr></thead>
           <tbody>${execution.recentAttempts.map(a => `
@@ -190,6 +238,26 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
               <td>${escapeHtml(a.message)}${a.refusalReasons.length > 0 ? `<div class="reasons" style="margin-top:0.25rem;">${a.refusalReasons.map(r => `<span class="reason">${escapeHtml(r)}</span>`).join('')}</div>` : ''}</td>
             </tr>`).join('')}</tbody>
         </table>` : '<p class="muted" style="margin-top:0.5rem;">No recent execution attempts</p>'}
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Paper Orders (${execution.totalOrders})</h3>
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>Symbol</td><td>Side</td><td>Qty</td><td>Price</td><td>Status</td><td>Order ID</td></tr></thead>
+          <tbody>${paperOrdersRows}</tbody>
+        </table>
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Paper Fills (${execution.totalFills})</h3>
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>Symbol</td><td>Side</td><td>Fill</td><td>Order ID</td><td>Filled At</td></tr></thead>
+          <tbody>${paperFillsRows}</tbody>
+        </table>
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Current Positions (${execution.currentPositions.length})</h3>
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>Symbol</td><td>Product</td><td>Side</td><td>Qty</td><td>Avg Cost</td><td>Realized P&amp;L</td></tr></thead>
+          <tbody>${positionsRows}</tbody>
+        </table>
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Position Events (${execution.recentPositionEvents.length})</h3>
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>Symbol</td><td>Type</td><td>Delta</td><td>Realized P&amp;L</td></tr></thead>
+          <tbody>${positionEventsRows}</tbody>
+        </table>
       </div>`;
   } else {
     executionSection = `

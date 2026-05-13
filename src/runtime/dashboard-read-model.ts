@@ -17,6 +17,10 @@ import type {
   DashboardBlockedOrder,
   DashboardLifecycleEvent,
   DashboardStrategyDecision,
+  DashboardPaperOrder,
+  DashboardPaperFill,
+  DashboardPaperPosition,
+  DashboardPositionEvent,
   ProposalAttemptWithReasons,
   BlockedOrderRow,
   LifecycleEvent,
@@ -31,6 +35,9 @@ import type { ExecutionAttemptRepository } from '../persistence/execution-attemp
 import type { MarketClock } from './market-clock.js';
 import type { UniverseService } from '../universe/universe-service.js';
 import { ExecutionMode, type ExecutionHealth } from '../types/runtime.js';
+import type { PaperOrderRepository } from '../persistence/paper-order-repo.js';
+import type { PaperFillRepository } from '../persistence/paper-fill-repo.js';
+import type { PaperPositionRepository } from '../persistence/paper-position-repo.js';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -56,6 +63,12 @@ export interface DashboardReadModelOptions {
   universeService: UniverseService;
   attemptRepo: ExecutionAttemptRepository | null;
   executionMode: ExecutionMode;
+  /** Optional — paper trading repositories for execution evidence enrichment. */
+  paperOrderRepo?: PaperOrderRepository | null;
+  /** Optional — paper trading repositories for execution evidence enrichment. */
+  paperFillRepo?: PaperFillRepository | null;
+  /** Optional — paper trading repositories for execution evidence enrichment. */
+  paperPositionRepo?: PaperPositionRepository | null;
 }
 
 export class DashboardReadModel {
@@ -69,6 +82,9 @@ export class DashboardReadModel {
   private readonly _universeService: UniverseService;
   private readonly _attemptRepo: ExecutionAttemptRepository | null;
   private readonly _executionMode: ExecutionMode;
+  private readonly _paperOrderRepo: PaperOrderRepository | null;
+  private readonly _paperFillRepo: PaperFillRepository | null;
+  private readonly _paperPositionRepo: PaperPositionRepository | null;
 
   constructor(options: DashboardReadModelOptions) {
     this._healthService = options.healthService;
@@ -81,6 +97,9 @@ export class DashboardReadModel {
     this._universeService = options.universeService;
     this._attemptRepo = options.attemptRepo;
     this._executionMode = options.executionMode;
+    this._paperOrderRepo = options.paperOrderRepo ?? null;
+    this._paperFillRepo = options.paperFillRepo ?? null;
+    this._paperPositionRepo = options.paperPositionRepo ?? null;
   }
 
   /** Assemble a full dashboard snapshot. */
@@ -271,10 +290,79 @@ export class DashboardReadModel {
   private _getExecutionEvidence(): ExecutionHealth | null {
     if (!this._attemptRepo || !this._strategyDecisionRepo) return null;
 
+    const MAX_RECENT_PAPER_ITEMS = 10;
+
     try {
       const totalAttempts = this._attemptRepo.count();
       const recent = this._attemptRepo.getRecent(5);
       const isGateRefusing = this._executionMode === ExecutionMode.Blocked;
+
+      // ── Paper order/fill/position evidence ────────────────────────────
+      let totalOrders = 0;
+      let totalFills = 0;
+      let openPositionCount = 0;
+      let recentPaperOrders: DashboardPaperOrder[] = [];
+      let recentPaperFills: DashboardPaperFill[] = [];
+      let currentPositions: DashboardPaperPosition[] = [];
+      let recentPositionEvents: DashboardPositionEvent[] = [];
+
+      if (this._paperOrderRepo) {
+        totalOrders = this._paperOrderRepo.count();
+        recentPaperOrders = this._paperOrderRepo.getRecent(MAX_RECENT_PAPER_ITEMS).map(o => ({
+          id: o.id,
+          createdAt: new Date(o.createdAt).toISOString(),
+          exchange: o.exchange,
+          tradingsymbol: o.tradingsymbol,
+          side: o.side,
+          product: o.product,
+          quantity: o.quantity,
+          price: o.price,
+          orderType: o.orderType,
+          status: o.status,
+          brokerOrderId: o.brokerOrderId,
+        }));
+      }
+
+      if (this._paperFillRepo) {
+        totalFills = this._paperFillRepo.count();
+        recentPaperFills = this._paperFillRepo.getRecent(MAX_RECENT_PAPER_ITEMS).map(f => ({
+          id: f.id,
+          filledAt: new Date(f.filledAt).toISOString(),
+          paperOrderId: f.paperOrderId,
+          exchange: f.exchange,
+          tradingsymbol: f.tradingsymbol,
+          side: f.side,
+          filledQuantity: f.filledQuantity,
+          filledPrice: f.filledPrice,
+          brokerOrderId: f.brokerOrderId,
+        }));
+      }
+
+      if (this._paperPositionRepo) {
+        openPositionCount = this._paperPositionRepo.countOpenPositions();
+        currentPositions = this._paperPositionRepo.getAllPositions().map(p => ({
+          exchange: p.exchange,
+          tradingsymbol: p.tradingsymbol,
+          product: p.product,
+          side: p.side,
+          quantity: p.quantity,
+          avgCostPrice: p.avgCostPrice,
+          realizedPnl: p.realizedPnl,
+          updatedAt: new Date(p.updatedAt).toISOString(),
+        }));
+        recentPositionEvents = this._paperPositionRepo.getRecentEvents(MAX_RECENT_PAPER_ITEMS).map(e => ({
+          id: e.id,
+          createdAt: new Date(e.createdAt).toISOString(),
+          eventType: e.eventType,
+          exchange: e.exchange,
+          tradingsymbol: e.tradingsymbol,
+          product: e.product,
+          quantityDelta: e.quantityDelta,
+          price: e.price,
+          newQuantity: e.newQuantity,
+          realizedPnl: e.realizedPnl,
+        }));
+      }
 
       return {
         mode: this._executionMode,
@@ -301,9 +389,13 @@ export class DashboardReadModel {
         gateRefusalReason: isGateRefusing
           ? 'Execution mode is blocked: all attempts refused'
           : null,
-        openPositionCount: 0,
-        totalOrders: 0,
-        totalFills: 0,
+        openPositionCount,
+        totalOrders,
+        totalFills,
+        recentPaperOrders,
+        recentPaperFills,
+        currentPositions,
+        recentPositionEvents,
       };
     } catch {
       return null;

@@ -17,6 +17,9 @@ import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
 import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
 import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt-repo.js';
+import { PaperOrderRepository } from '../src/persistence/paper-order-repo.js';
+import { PaperFillRepository } from '../src/persistence/paper-fill-repo.js';
+import { PaperPositionRepository } from '../src/persistence/paper-position-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -132,6 +135,9 @@ function createServerAndDashboardWithExecution(mode: ExecutionMode = ExecutionMo
   const blockedOrderRepo = new BlockedOrderRepository(db.db);
   const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
   const attemptRepo = new ExecutionAttemptRepository(db.db);
+  const paperOrderRepo = new PaperOrderRepository(db.db);
+  const paperFillRepo = new PaperFillRepository(db.db);
+  const paperPositionRepo = new PaperPositionRepository(db.db);
   const lifecycle = new LifecycleManager(runtimeStateRepo);
   lifecycle.start('Test setup');
   const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
@@ -149,12 +155,16 @@ function createServerAndDashboardWithExecution(mode: ExecutionMode = ExecutionMo
     universeService,
     attemptRepo,
     executionMode: mode,
+    paperOrderRepo,
+    paperFillRepo,
+    paperPositionRepo,
   });
   const server = createHealthServer(healthService, scheduler, telemetry, db, dashboard);
 
   return {
     db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
     proposalRepo, blockedOrderRepo, strategyDecisionRepo, attemptRepo,
+    paperOrderRepo, paperFillRepo, paperPositionRepo,
     lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
   };
 }
@@ -1279,6 +1289,304 @@ describe('Health server — execution evidence routes', () => {
       expect(body).not.toContain('apiKey');
     });
   });
+
+  // ── Paper order/fill/position evidence on /health/execution ───────────
+
+  describe('/health/execution — paper order/fill/position evidence', () => {
+    it('returns zero counts when no paper evidence exists', async () => {
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.totalOrders).toBe(0);
+      expect(data.totalFills).toBe(0);
+      expect(data.openPositionCount).toBe(0);
+      expect(data.recentPaperOrders).toEqual([]);
+      expect(data.recentPaperFills).toEqual([]);
+      expect(data.currentPositions).toEqual([]);
+      expect(data.recentPositionEvents).toEqual([]);
+    });
+
+    it('shows paper orders when seeded', async () => {
+      const { attempt } = seedExecutionChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-TCS-001',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.totalOrders).toBe(1);
+      expect(data.recentPaperOrders.length).toBe(1);
+      expect(data.recentPaperOrders[0].tradingsymbol).toBe('TCS');
+      expect(data.recentPaperOrders[0].brokerOrderId).toBe('PAPER-TCS-001');
+    });
+
+    it('shows paper fills when seeded', async () => {
+      const { attempt } = seedExecutionChain(ctx, {
+        tradingsymbol: 'INFY',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      const order = ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 100,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-INFY-001',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      ctx.paperFillRepo.insert({
+        paperOrderId: order.id,
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+        side: 'buy',
+        product: 'MIS',
+        filledQuantity: 100,
+        filledPrice: 1500.50,
+        brokerOrderId: 'PAPER-INFY-001',
+        filledAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.totalFills).toBe(1);
+      expect(data.recentPaperFills.length).toBe(1);
+      expect(data.recentPaperFills[0].tradingsymbol).toBe('INFY');
+      expect(data.recentPaperFills[0].filledQuantity).toBe(100);
+      expect(data.recentPaperFills[0].filledPrice).toBe(1500.50);
+    });
+
+    it('shows positions when seeded', async () => {
+      ctx.paperPositionRepo.upsertPosition({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        product: 'MIS',
+        side: 'long' as any,
+        quantity: 100,
+        avgCostPrice: 2500.00,
+        realizedPnl: 500.00,
+        updatedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.openPositionCount).toBe(1);
+      expect(data.currentPositions.length).toBe(1);
+      expect(data.currentPositions[0].tradingsymbol).toBe('RELIANCE');
+      expect(data.currentPositions[0].quantity).toBe(100);
+      expect(data.currentPositions[0].realizedPnl).toBe(500.00);
+    });
+
+    it('shows position events when seeded', async () => {
+      const { attempt } = seedExecutionChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      const order = ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-TCS-EVT',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      ctx.paperPositionRepo.insertEvent({
+        paperOrderId: order.id,
+        paperFillId: null,
+        executionAttemptId: attempt.id,
+        eventType: 'fill' as any,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        product: 'MIS',
+        quantityDelta: 75,
+        price: 2850.50,
+        previousQuantity: 0,
+        previousAvgCost: 0,
+        newQuantity: 75,
+        newAvgCost: 2850.50,
+        realizedPnl: 0,
+        createdAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.recentPositionEvents.length).toBe(1);
+      expect(data.recentPositionEvents[0].tradingsymbol).toBe('TCS');
+      expect(data.recentPositionEvents[0].quantityDelta).toBe(75);
+    });
+  });
+
+  // ── Paper order/fill/position evidence in dashboard HTML ──────────────
+
+  describe('Dashboard HTML — paper order/fill/position evidence', () => {
+    it('shows "No paper orders" when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No paper orders');
+    });
+
+    it('shows "No paper fills" when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No paper fills');
+    });
+
+    it('shows "No positions" when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No positions');
+    });
+
+    it('shows "No position events" when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No position events');
+    });
+
+    it('shows paper orders section in HTML when seeded', async () => {
+      const { attempt } = seedExecutionChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-TCS-001',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Paper Orders');
+      expect(res.body).toContain('TCS');
+      expect(res.body).toContain('PAPER-TCS-001');
+    });
+
+    it('does NOT include secret material in HTML with paper evidence', async () => {
+      const { attempt } = seedExecutionChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+      });
+
+      ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-TCS-001',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).not.toContain('accessToken');
+      expect(res.body).not.toContain('apiKey');
+    });
+  });
+
+  // ── Paper order/fill/position evidence in dashboard JSON ──────────────
+
+  describe('Dashboard JSON — paper order/fill/position evidence', () => {
+    it('includes paper evidence fields in execution block', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.execution).toHaveProperty('totalOrders');
+      expect(data.execution).toHaveProperty('totalFills');
+      expect(data.execution).toHaveProperty('openPositionCount');
+      expect(data.execution).toHaveProperty('recentPaperOrders');
+      expect(data.execution).toHaveProperty('recentPaperFills');
+      expect(data.execution).toHaveProperty('currentPositions');
+      expect(data.execution).toHaveProperty('recentPositionEvents');
+    });
+
+    it('populates paper evidence when seeded', async () => {
+      const { attempt } = seedExecutionChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-TCS-001',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.execution.totalOrders).toBe(1);
+      expect(data.execution.recentPaperOrders.length).toBe(1);
+      expect(data.execution.recentPaperOrders[0].brokerOrderId).toBe('PAPER-TCS-001');
+    });
+  });
 });
 
 import type { DashboardSnapshot } from '../src/types/runtime.js';
@@ -1493,6 +1801,13 @@ describe('Dashboard renderer — HTML escaping', () => {
         ],
         isGateRefusing: true,
         gateRefusalReason: 'Execution mode is <blocked>: all & attempts refused',
+        openPositionCount: 0,
+        totalOrders: 0,
+        totalFills: 0,
+        recentPaperOrders: [],
+        recentPaperFills: [],
+        currentPositions: [],
+        recentPositionEvents: [],
       },
     };
 

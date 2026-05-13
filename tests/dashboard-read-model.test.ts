@@ -14,6 +14,9 @@ import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
 import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
 import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt-repo.js';
+import { PaperOrderRepository } from '../src/persistence/paper-order-repo.js';
+import { PaperFillRepository } from '../src/persistence/paper-fill-repo.js';
+import { PaperPositionRepository } from '../src/persistence/paper-position-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -857,6 +860,9 @@ describe('DashboardReadModel — execution evidence', () => {
     const blockedOrderRepo = new BlockedOrderRepository(db.db);
     const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
     const attemptRepo = new ExecutionAttemptRepository(db.db);
+    const paperOrderRepo = new PaperOrderRepository(db.db);
+    const paperFillRepo = new PaperFillRepository(db.db);
+    const paperPositionRepo = new PaperPositionRepository(db.db);
     const lifecycle = new LifecycleManager(runtimeStateRepo);
     lifecycle.start('Test setup');
     const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
@@ -872,6 +878,9 @@ describe('DashboardReadModel — execution evidence', () => {
       universeService,
       attemptRepo,
       executionMode: mode,
+      paperOrderRepo,
+      paperFillRepo,
+      paperPositionRepo,
     });
 
     return {
@@ -885,6 +894,9 @@ describe('DashboardReadModel — execution evidence', () => {
       blockedOrderRepo,
       strategyDecisionRepo,
       attemptRepo,
+      paperOrderRepo,
+      paperFillRepo,
+      paperPositionRepo,
       lifecycle,
       healthService,
       clock,
@@ -1155,6 +1167,244 @@ describe('DashboardReadModel — execution evidence', () => {
       const ctx = createContextWithExecution(ExecutionMode.Paper);
       const snapshot = ctx.dashboard.getSnapshot();
       expect(snapshot).toHaveProperty('execution');
+      ctx.db.close();
+    });
+  });
+
+  // ── Paper order/fill/position evidence ────────────────────────────────
+
+  describe('Execution evidence — paper order/fill/position', () => {
+    it('returns zero counts and empty arrays when no paper evidence exists', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.totalOrders).toBe(0);
+      expect(snapshot.execution!.totalFills).toBe(0);
+      expect(snapshot.execution!.openPositionCount).toBe(0);
+      expect(snapshot.execution!.recentPaperOrders).toEqual([]);
+      expect(snapshot.execution!.recentPaperFills).toEqual([]);
+      expect(snapshot.execution!.currentPositions).toEqual([]);
+      expect(snapshot.execution!.recentPositionEvents).toEqual([]);
+      ctx.db.close();
+    });
+
+    it('populates paper orders from repo', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const { attempt } = seedFullChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      // Insert a paper order linked to the execution attempt
+      ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-001',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.totalOrders).toBe(1);
+      expect(snapshot.execution!.recentPaperOrders.length).toBe(1);
+      expect(snapshot.execution!.recentPaperOrders[0].tradingsymbol).toBe('TCS');
+      expect(snapshot.execution!.recentPaperOrders[0].brokerOrderId).toBe('PAPER-001');
+      ctx.db.close();
+    });
+
+    it('populates paper fills from repo', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const { attempt } = seedFullChain(ctx, {
+        tradingsymbol: 'INFY',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      const order = ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-002',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      ctx.paperFillRepo.insert({
+        paperOrderId: order.id,
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+        side: 'buy',
+        product: 'MIS',
+        filledQuantity: 75,
+        filledPrice: 1500.50,
+        brokerOrderId: 'PAPER-002',
+        filledAt: Date.now(),
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.totalFills).toBe(1);
+      expect(snapshot.execution!.recentPaperFills.length).toBe(1);
+      expect(snapshot.execution!.recentPaperFills[0].tradingsymbol).toBe('INFY');
+      expect(snapshot.execution!.recentPaperFills[0].filledQuantity).toBe(75);
+      expect(snapshot.execution!.recentPaperFills[0].filledPrice).toBe(1500.50);
+      ctx.db.close();
+    });
+
+    it('populates open positions from repo', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+
+      ctx.paperPositionRepo.upsertPosition({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        product: 'MIS',
+        side: 'long' as any,
+        quantity: 100,
+        avgCostPrice: 2500.00,
+        realizedPnl: 0,
+        updatedAt: Date.now(),
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.openPositionCount).toBe(1);
+      expect(snapshot.execution!.currentPositions.length).toBe(1);
+      expect(snapshot.execution!.currentPositions[0].tradingsymbol).toBe('RELIANCE');
+      expect(snapshot.execution!.currentPositions[0].quantity).toBe(100);
+      ctx.db.close();
+    });
+
+    it('populates position events from repo', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const { attempt } = seedFullChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+      });
+
+      const order = ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-003',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      ctx.paperPositionRepo.insertEvent({
+        paperOrderId: order.id,
+        paperFillId: null,
+        executionAttemptId: attempt.id,
+        eventType: 'open' as any,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        product: 'MIS',
+        quantityDelta: 75,
+        price: 2850.50,
+        previousQuantity: 0,
+        previousAvgCost: 0,
+        newQuantity: 75,
+        newAvgCost: 2850.50,
+        realizedPnl: 0,
+        createdAt: Date.now(),
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.recentPositionEvents.length).toBe(1);
+      expect(snapshot.execution!.recentPositionEvents[0].tradingsymbol).toBe('TCS');
+      expect(snapshot.execution!.recentPositionEvents[0].quantityDelta).toBe(75);
+      ctx.db.close();
+    });
+
+    it('limits recent paper items to 10', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      for (let i = 0; i < 15; i++) {
+        const { attempt } = seedFullChain(ctx, {
+          tradingsymbol: `SYM${i}`,
+          executionMode: ExecutionMode.Paper,
+          attemptStatus: ExecutionAttemptStatus.Completed,
+          outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+        });
+        ctx.paperOrderRepo.insert({
+          executionAttemptId: attempt.id,
+          exchange: 'NSE',
+          tradingsymbol: `SYM${i}`,
+          side: 'buy',
+          product: 'MIS',
+          quantity: 1,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          tag: null,
+          status: 'filled' as any,
+          brokerOrderId: `PAPER-${i}`,
+          createdAt: Date.now() + i,
+          updatedAt: Date.now(),
+        });
+      }
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.totalOrders).toBe(15);
+      expect(snapshot.execution!.recentPaperOrders.length).toBeLessThanOrEqual(10);
+      ctx.db.close();
+    });
+
+    it('does NOT include access tokens or secret material with paper evidence', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const { attempt } = seedFullChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+      });
+
+      ctx.paperOrderRepo.insert({
+        executionAttemptId: attempt.id,
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        status: 'filled' as any,
+        brokerOrderId: 'PAPER-001',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const json = JSON.stringify(snapshot);
+      expect(json).not.toContain('accessToken');
+      expect(json).not.toContain('apiKey');
+      expect(json).not.toContain('apiSecret');
       ctx.db.close();
     });
   });

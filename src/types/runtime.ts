@@ -1184,6 +1184,14 @@ export interface ExecutionHealth {
   totalOrders: number;
   /** Total paper fills recorded. */
   totalFills: number;
+  /** Recent paper orders (newest first, max 10). */
+  recentPaperOrders: DashboardPaperOrder[];
+  /** Recent paper fills (newest first, max 10). */
+  recentPaperFills: DashboardPaperFill[];
+  /** Current open positions. */
+  currentPositions: DashboardPaperPosition[];
+  /** Recent position events (newest first, max 10). */
+  recentPositionEvents: DashboardPositionEvent[];
 }
 
 /** Execution config block within RuntimeConfig. */
