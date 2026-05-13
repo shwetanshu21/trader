@@ -18,6 +18,7 @@
 
 import type { TickWork } from '../runtime/scheduler.js';
 import type { HealthStatus } from '../types/runtime.js';
+import { BrokerRepository } from '../persistence/broker-repo.js';
 import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
 import { ModeAwareExecutionService } from './mode-aware-execution-service.js';
@@ -32,15 +33,18 @@ export class ExecutionGateSupervisor implements TickWork {
   private readonly _strategyDecisionRepo: StrategyDecisionRepository;
   private readonly _executionService: ModeAwareExecutionService;
   private readonly _attemptRepo: ExecutionAttemptRepository;
+  private readonly _brokerRepo: BrokerRepository | null;
 
   constructor(options: {
     strategyDecisionRepo: StrategyDecisionRepository;
     executionService: ModeAwareExecutionService;
     attemptRepo: ExecutionAttemptRepository;
+    brokerRepo?: BrokerRepository | null;
   }) {
     this._strategyDecisionRepo = options.strategyDecisionRepo;
     this._executionService = options.executionService;
     this._attemptRepo = options.attemptRepo;
+    this._brokerRepo = options.brokerRepo ?? null;
   }
 
   // ── Public accessors ────────────────────────────────────────────────────
@@ -62,9 +66,18 @@ export class ExecutionGateSupervisor implements TickWork {
         return;
       }
 
-      // Execute each candidate through the mode-aware service
+      // Execute each candidate through the mode-aware service,
+      // enriching with persisted quote and instrument data when available.
       for (const candidate of candidates) {
-        await this._executionService.execute(candidate, null, null);
+        let quote = null;
+        let instrument = null;
+
+        if (this._brokerRepo !== null) {
+          quote = this._brokerRepo.getQuote(candidate.exchange, candidate.tradingsymbol) ?? null;
+          instrument = this._brokerRepo.getInstrument(candidate.exchange, candidate.tradingsymbol) ?? null;
+        }
+
+        await this._executionService.execute(candidate, quote, instrument);
       }
 
       console.log(

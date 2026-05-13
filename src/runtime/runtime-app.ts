@@ -36,6 +36,10 @@ import { ProposalSupervisor } from '../proposals/proposal-supervisor.js';
 import { ExecutionGateSupervisor } from '../execution/execution-gate-supervisor.js';
 import { ModeAwareExecutionService } from '../execution/mode-aware-execution-service.js';
 import { PaperExecutionPolicy } from '../execution/paper-execution-policy.js';
+import { PaperExecutionLedger } from '../execution/paper-execution-ledger.js';
+import { PaperOrderRepository } from '../persistence/paper-order-repo.js';
+import { PaperFillRepository } from '../persistence/paper-fill-repo.js';
+import { PaperPositionRepository } from '../persistence/paper-position-repo.js';
 import { BlockedExecutionAdapter, LiveExecutionAdapter } from '../execution/execution-adapters.js';
 import {
   StrategyRiskSupervisor,
@@ -265,12 +269,24 @@ export class RuntimeApp {
       });
 
       // Build ModeAwareExecutionService with the configured mode
+      // and the paper execution ledger for atomic downstream persistence
       const paperPolicy = new PaperExecutionPolicy();
+      const orderRepo = new PaperOrderRepository(dbManager.db);
+      const fillRepo = new PaperFillRepository(dbManager.db);
+      const positionRepo = new PaperPositionRepository(dbManager.db);
+      const paperLedger = new PaperExecutionLedger({
+        db: dbManager.db,
+        attemptRepo: executionAttemptRepo,
+        orderRepo,
+        fillRepo,
+        positionRepo,
+      });
       const liveAdapter = new LiveExecutionAdapter(null);
       const blockedAdapter = new BlockedExecutionAdapter();
       executionService = new ModeAwareExecutionService({
         attemptRepo: executionAttemptRepo,
         paperPolicy,
+        paperLedger,
         liveAdapter,
         blockedAdapter,
         mode: this.config.execution.mode,
@@ -280,6 +296,7 @@ export class RuntimeApp {
         strategyDecisionRepo,
         executionService,
         attemptRepo: executionAttemptRepo,
+        brokerRepo,
       });
 
       // StrategyRiskSupervisor — evaluates accepted proposals via the

@@ -23,9 +23,14 @@ import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt
 import { ProposalEngine, type EngineContext } from '../src/proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../src/proposals/india-validator.js';
 import { ProposalSupervisor } from '../src/proposals/proposal-supervisor.js';
+import { BrokerRepository } from '../src/persistence/broker-repo.js';
 import { ExecutionGateSupervisor } from '../src/execution/execution-gate-supervisor.js';
 import { ModeAwareExecutionService } from '../src/execution/mode-aware-execution-service.js';
 import { PaperExecutionPolicy } from '../src/execution/paper-execution-policy.js';
+import { PaperExecutionLedger } from '../src/execution/paper-execution-ledger.js';
+import { PaperOrderRepository } from '../src/persistence/paper-order-repo.js';
+import { PaperFillRepository } from '../src/persistence/paper-fill-repo.js';
+import { PaperPositionRepository } from '../src/persistence/paper-position-repo.js';
 import { BlockedExecutionAdapter, LiveExecutionAdapter } from '../src/execution/execution-adapters.js';
 import {
   ProposalStatus,
@@ -36,6 +41,9 @@ import {
   ValidationReasonCode,
   MarketPhase,
   ZerodhaSessionState,
+  PaperOrderStatus,
+  PositionSide,
+  PositionEventType,
   type ProposalEngineConfig,
   type HealthStatus,
   type NewStrategyDecision,
@@ -206,6 +214,7 @@ function createTestContext(options?: {
   const proposalRepo = new ProposalRepository(db.db);
   const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
   const attemptRepo = new ExecutionAttemptRepository(db.db);
+  const brokerRepo = new BrokerRepository(db.db);
   const engine = new ProposalEngine(options?.engineConfig ?? makeEngineConfig());
   const validator = new IndiaProposalValidator();
   const session = new MockSessionService();
@@ -252,6 +261,7 @@ function createTestContext(options?: {
     strategyDecisionRepo,
     executionService,
     attemptRepo,
+    brokerRepo,
   });
 
   return {
@@ -259,6 +269,7 @@ function createTestContext(options?: {
     proposalRepo,
     strategyDecisionRepo,
     attemptRepo,
+    brokerRepo,
     engine,
     validator,
     supervisor,
@@ -633,7 +644,7 @@ describe('S04 Runtime — Execution gate composition', () => {
 
   describe('Paper mode routing', () => {
     it('routes candidates through paper evaluation when mode is paper', async () => {
-      const { proposalRepo, strategyDecisionRepo, attemptRepo, clock } = createTestContext({
+      const { brokerRepo, proposalRepo, strategyDecisionRepo, attemptRepo, clock } = createTestContext({
         executionMode: ExecutionMode.Paper,
       });
       clock.setPhase(MarketPhase.Regular);
@@ -653,6 +664,7 @@ describe('S04 Runtime — Execution gate composition', () => {
         strategyDecisionRepo,
         executionService,
         attemptRepo,
+        brokerRepo,
       });
 
       // Insert an accepted proposal with a strategy decision
@@ -715,11 +727,450 @@ describe('S04 Runtime — Execution gate composition', () => {
     });
   });
 
+  // ── Paper mode with persisted broker data ──────────────────────────────
+
+  describe('Paper mode with persisted broker data', () => {
+    it('produces full persistence when quote and instrument are in the broker repo', async () => {
+      const { db, proposalRepo, strategyDecisionRepo, attemptRepo, brokerRepo } = createTestContext({
+        executionMode: ExecutionMode.Paper,
+      });
+
+      // Seed instrument and quote data into the broker repo tables
+      brokerRepo.upsertInstruments([sampleNseInstrument()]);
+      brokerRepo.upsertQuote(sampleQuote());
+
+      // Wire up the PaperExecutionLedger for downstream persistence
+      const orderRepo = new PaperOrderRepository(db.db);
+      const fillRepo = new PaperFillRepository(db.db);
+      const positionRepo = new PaperPositionRepository(db.db);
+      const paperPolicy = new PaperExecutionPolicy();
+      const paperLedger = new PaperExecutionLedger({
+        db: db.db,
+        attemptRepo,
+        orderRepo,
+        fillRepo,
+        positionRepo,
+      });
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      const executionService = new ModeAwareExecutionService({
+        attemptRepo,
+        paperPolicy,
+        paperLedger,
+        liveAdapter,
+        blockedAdapter,
+        mode: ExecutionMode.Paper,
+      });
+      const executionGate = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo,
+        brokerRepo,
+      });
+
+      // Insert accepted proposal with strategy decision
+      const proposal = proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2950.00,
+        quoteBid: 2949.50,
+        quoteAsk: 2950.00,
+        quoteVolume: 1000000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 2950.00,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 147.50,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      });
+
+      // Run the gate — it should find the candidate and enrich with persisted data
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      // 1. Execution attempt: Completed with PaperSimulated
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Completed);
+      expect(attempts[0].outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+      expect(attempts[0].executionMode).toBe(ExecutionMode.Paper);
+
+      // 2. Paper order created
+      const orders = orderRepo.getRecent();
+      expect(orders.length).toBe(1);
+      expect(orders[0].executionAttemptId).toBe(attempts[0].id);
+      expect(orders[0].status).toBe(PaperOrderStatus.Filled);
+      expect(orders[0].tradingsymbol).toBe('RELIANCE');
+      expect(orders[0].side).toBe('buy');
+
+      // 3. Paper fill created
+      const fills = fillRepo.getRecent();
+      expect(fills.length).toBe(1);
+      expect(fills[0].paperOrderId).toBe(orders[0].id);
+      expect(fills[0].filledQuantity).toBe(1);
+      expect(fills[0].filledPrice).toBeGreaterThan(0);
+
+      // 4. Position event created
+      const events = positionRepo.getRecentEvents();
+      expect(events.length).toBe(1);
+      expect(events[0].eventType).toBe(PositionEventType.Open);
+      expect(events[0].newQuantity).toBe(1);
+      expect(events[0].exchange).toBe('NSE');
+      expect(events[0].tradingsymbol).toBe('RELIANCE');
+
+      // 5. Paper position created (non-flat, long)
+      const position = positionRepo.getPosition('NSE', 'RELIANCE', 'MIS');
+      expect(position).not.toBeNull();
+      expect(position!.quantity).toBe(1);
+      expect(position!.side).toBe(PositionSide.Long);
+      expect(position!.avgCostPrice).toBeGreaterThan(0);
+
+      // 6. Decision is consumed
+      const unconsumed = strategyDecisionRepo.getApprovedUnconsumedCandidates();
+      expect(unconsumed.length).toBe(0);
+    });
+
+    it('refuses with missing quote when broker repo has no data (preserves refusal path)', async () => {
+      const { db, proposalRepo, strategyDecisionRepo, attemptRepo, brokerRepo } = createTestContext({
+        executionMode: ExecutionMode.Paper,
+      });
+
+      // Seed instrument but NOT quote — quote lookup returns null
+      brokerRepo.upsertInstruments([sampleNseInstrument()]);
+
+      const orderRepo = new PaperOrderRepository(db.db);
+      const fillRepo = new PaperFillRepository(db.db);
+      const positionRepo = new PaperPositionRepository(db.db);
+      const paperPolicy = new PaperExecutionPolicy();
+      const paperLedger = new PaperExecutionLedger({
+        db: db.db,
+        attemptRepo,
+        orderRepo,
+        fillRepo,
+        positionRepo,
+      });
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      const executionService = new ModeAwareExecutionService({
+        attemptRepo,
+        paperPolicy,
+        paperLedger,
+        liveAdapter,
+        blockedAdapter,
+        mode: ExecutionMode.Paper,
+      });
+      const executionGate = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo,
+        brokerRepo,
+      });
+
+      const proposal = proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      });
+
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      // Should refuse with stale_or_missing_quote — no quote in repo
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Refused);
+
+      const reasons = attemptRepo.getRefusalReasons(attempts[0].id);
+      expect(reasons.length).toBeGreaterThanOrEqual(1);
+      expect(reasons[0].reasonCode).toBe('stale_or_missing_quote');
+
+      // No downstream rows should be created
+      expect(orderRepo.count()).toBe(0);
+      expect(fillRepo.count()).toBe(0);
+      expect(positionRepo.countEvents()).toBe(0);
+      expect(positionRepo.countPositions()).toBe(0);
+    });
+
+    it('repeated ticks do not duplicate orders/fills/positions (idempotency)', async () => {
+      const { db, proposalRepo, strategyDecisionRepo, attemptRepo, brokerRepo } = createTestContext({
+        executionMode: ExecutionMode.Paper,
+      });
+
+      brokerRepo.upsertInstruments([sampleNseInstrument()]);
+      brokerRepo.upsertQuote(sampleQuote());
+
+      const orderRepo = new PaperOrderRepository(db.db);
+      const fillRepo = new PaperFillRepository(db.db);
+      const positionRepo = new PaperPositionRepository(db.db);
+      const paperPolicy = new PaperExecutionPolicy();
+      const paperLedger = new PaperExecutionLedger({
+        db: db.db,
+        attemptRepo,
+        orderRepo,
+        fillRepo,
+        positionRepo,
+      });
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      const executionService = new ModeAwareExecutionService({
+        attemptRepo,
+        paperPolicy,
+        paperLedger,
+        liveAdapter,
+        blockedAdapter,
+        mode: ExecutionMode.Paper,
+      });
+      const executionGate = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo,
+        brokerRepo,
+      });
+
+      const proposal = proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2950.00,
+        quoteBid: 2949.50,
+        quoteAsk: 2950.00,
+        quoteVolume: 1000000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 2950.00,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 147.50,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      });
+
+      // Tick 1: consume
+      await executionGate.doWork(new Date(), minimalHealth());
+      expect(attemptRepo.count()).toBe(1);
+      expect(orderRepo.count()).toBe(1);
+      expect(fillRepo.count()).toBe(1);
+      expect(positionRepo.countEvents()).toBe(1);
+      expect(positionRepo.countPositions()).toBe(1);
+
+      // Tick 2: no new candidates, idempotent
+      await executionGate.doWork(new Date(), minimalHealth());
+      expect(attemptRepo.count()).toBe(1);
+      expect(orderRepo.count()).toBe(1);
+      expect(fillRepo.count()).toBe(1);
+
+      // Tick 3: still idempotent
+      await executionGate.doWork(new Date(), minimalHealth());
+      expect(attemptRepo.count()).toBe(1);
+      expect(orderRepo.count()).toBe(1);
+      expect(fillRepo.count()).toBe(1);
+    });
+
+    it('survives restart reconstruction from position events', async () => {
+      const { db, proposalRepo, strategyDecisionRepo, attemptRepo, brokerRepo } = createTestContext({
+        executionMode: ExecutionMode.Paper,
+      });
+
+      brokerRepo.upsertInstruments([sampleNseInstrument()]);
+      brokerRepo.upsertQuote(sampleQuote());
+
+      const orderRepo = new PaperOrderRepository(db.db);
+      const fillRepo = new PaperFillRepository(db.db);
+      const positionRepo = new PaperPositionRepository(db.db);
+      const paperPolicy = new PaperExecutionPolicy();
+      const paperLedger = new PaperExecutionLedger({
+        db: db.db,
+        attemptRepo,
+        orderRepo,
+        fillRepo,
+        positionRepo,
+      });
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      const executionService = new ModeAwareExecutionService({
+        attemptRepo,
+        paperPolicy,
+        paperLedger,
+        liveAdapter,
+        blockedAdapter,
+        mode: ExecutionMode.Paper,
+      });
+      const executionGate = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo,
+        brokerRepo,
+      });
+
+      const proposal = proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2950.00,
+        quoteBid: 2949.50,
+        quoteAsk: 2950.00,
+        quoteVolume: 1000000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 2950.00,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 147.50,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      });
+
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      // Verify normal state
+      expect(attemptRepo.count()).toBe(1);
+      expect(orderRepo.count()).toBe(1);
+      expect(positionRepo.countEvents()).toBe(1);
+
+      // Scramble the position projection to simulate a stale cache
+      positionRepo.upsertPosition({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        product: 'MIS',
+        side: PositionSide.Flat,
+        quantity: 0,
+        avgCostPrice: 0,
+        realizedPnl: 0,
+        updatedAt: Date.now(),
+      });
+
+      // Verify projection is now flat
+      const flatPos = positionRepo.getPosition('NSE', 'RELIANCE', 'MIS');
+      expect(flatPos!.quantity).toBe(0);
+
+      // Reconstruct all positions from events (simulates restart)
+      const reconstructed = positionRepo.reconstructAllPositions();
+
+      // Verify reconstruction restored the position
+      expect(reconstructed.length).toBe(1);
+      expect(reconstructed[0].exchange).toBe('NSE');
+      expect(reconstructed[0].tradingsymbol).toBe('RELIANCE');
+      expect(reconstructed[0].quantity).toBe(1);
+      expect(reconstructed[0].side).toBe(PositionSide.Long);
+      expect(reconstructed[0].avgCostPrice).toBeGreaterThan(0);
+
+      // Also verify using the in-memory computation
+      const computed = positionRepo.computePositionFromEvents('NSE', 'RELIANCE', 'MIS');
+      expect(computed.quantity).toBe(1);
+      expect(computed.side).toBe(PositionSide.Long);
+    });
+  });
+
   // ── Fail-closed live mode ──────────────────────────────────────────────
 
   describe('Fail-closed live mode', () => {
     it('refuses all candidates when live mode has no broker placement port', async () => {
-      const { proposalRepo, strategyDecisionRepo, attemptRepo, clock } = createTestContext({
+      const { brokerRepo, proposalRepo, strategyDecisionRepo, attemptRepo, clock } = createTestContext({
         executionMode: ExecutionMode.Live,
       });
       clock.setPhase(MarketPhase.Regular);
@@ -739,6 +1190,7 @@ describe('S04 Runtime — Execution gate composition', () => {
         strategyDecisionRepo,
         executionService,
         attemptRepo,
+        brokerRepo,
       });
 
       // Insert an accepted proposal with a strategy decision
@@ -1088,7 +1540,7 @@ describe('S04 Runtime — Execution gate composition', () => {
     });
 
     it('reports paper mode correctly', async () => {
-      const { attemptRepo, strategyDecisionRepo, proposalRepo } = createTestContext();
+      const { brokerRepo, attemptRepo, strategyDecisionRepo, proposalRepo } = createTestContext();
 
       const paperPolicy = new PaperExecutionPolicy();
       const liveAdapter = new LiveExecutionAdapter(null);
@@ -1104,6 +1556,7 @@ describe('S04 Runtime — Execution gate composition', () => {
         strategyDecisionRepo,
         executionService,
         attemptRepo,
+        brokerRepo,
       });
 
       expect(executionGate.mode).toBe(ExecutionMode.Paper);
