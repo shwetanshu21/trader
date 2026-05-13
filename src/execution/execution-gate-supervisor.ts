@@ -1,32 +1,26 @@
-// ── ExecutionGateSupervisor — TickWork that hard-blocks every accepted proposal ──
+// ── ExecutionGateSupervisor — TickWork that consumes approved candidates ──
 //
-// This is the M001 execution gate. Its sole downstream action for an accepted
-// proposal is writing a blocked-order ledger row. It never:
-//   - Calls any broker order API
-//   - Re-runs India validation
-//   - Fetches fresh broker state
-//   - Mutates prior proposal verdicts
+// This is the M003 execution gate. It replaces the legacy blocked-order
+// ledger writes with mode-aware execution-attempt orchestration:
+//   1. Loads strategy-approved candidates that have NOT yet been consumed
+//      (query uses LEFT JOIN with execution_attempts as the canonical seam)
+//   2. Routes each candidate through ModeAwareExecutionService which
+//      dispatches to the active mode adapter (blocked | paper | live)
+//   3. Persists the execution attempt row (idempotent per strategy decision)
 //
-// Invariant block metadata is encoded once here:
-//   blockCode: MilestoneExecutionBlockM001
-//   gateTag:   'M001-hard-block'
-//   blockMessage: descriptive hard-block notice
-//
-// Idempotency is handled by BlockedOrderRepository.insertBlockedOrder which
-// uses INSERT OR IGNORE + fallback read for UNIQUE(proposal_attempt_id).
+// Invariants:
+//   - A candidate is only consumed when an execution attempt row is written
+//   - Repeated ticks cannot duplicate execution for the same strategy decision
+//   - blocked_order_attempts is kept only as legacy evidence; canonical
+//     consumption checks use execution_attempts exclusively
+//   - Failures from the execution service re-throw so the scheduler can
+//     degrade the lifecycle; they never silently skip consumption
 
 import type { TickWork } from '../runtime/scheduler.js';
 import type { HealthStatus } from '../types/runtime.js';
-import { BlockCode } from '../types/runtime.js';
-import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
-
-// ---------------------------------------------------------------------------
-// Constants — M001 invariant block metadata
-// ---------------------------------------------------------------------------
-
-const M001_BLOCK_MESSAGE =
-  'M001 hard block: live order placement is disabled for this milestone';
-const M001_GATE_TAG = 'M001-hard-block';
+import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
+import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
+import { ModeAwareExecutionService } from './mode-aware-execution-service.js';
 
 // ---------------------------------------------------------------------------
 // ExecutionGateSupervisor
@@ -35,57 +29,53 @@ const M001_GATE_TAG = 'M001-hard-block';
 export class ExecutionGateSupervisor implements TickWork {
   readonly label = 'execution-gate';
 
-  private readonly _blockedRepo: BlockedOrderRepository;
+  private readonly _strategyDecisionRepo: StrategyDecisionRepository;
+  private readonly _executionService: ModeAwareExecutionService;
+  private readonly _attemptRepo: ExecutionAttemptRepository;
 
-  constructor(options: { blockedRepo: BlockedOrderRepository }) {
-    this._blockedRepo = options.blockedRepo;
+  constructor(options: {
+    strategyDecisionRepo: StrategyDecisionRepository;
+    executionService: ModeAwareExecutionService;
+    attemptRepo: ExecutionAttemptRepository;
+  }) {
+    this._strategyDecisionRepo = options.strategyDecisionRepo;
+    this._executionService = options.executionService;
+    this._attemptRepo = options.attemptRepo;
+  }
+
+  // ── Public accessors ────────────────────────────────────────────────────
+
+  /** The active execution mode. */
+  get mode(): string {
+    return this._executionService.mode;
   }
 
   // ── TickWork ────────────────────────────────────────────────────────────
 
   async doWork(_now: Date, _health: HealthStatus): Promise<void> {
     try {
-      // Query strategy-approved candidates that have NOT yet been blocked
-      // (M003: execution authority moved from raw accepted proposals to
-      //  strategy-approved candidates with deterministic derived fields)
-      const candidates = this._blockedRepo.getStrategyApprovedUnblocked();
+      // Query strategy-approved candidates that have NOT yet been consumed
+      // (Uses execution_attempts LEFT JOIN — canonical consumption seam)
+      const candidates = this._strategyDecisionRepo.getApprovedUnconsumedCandidates();
 
       if (candidates.length === 0) {
-        // No work to do — this is not an error
         return;
       }
 
-      // Insert a blocked-order ledger row for every unblocked candidate
+      // Execute each candidate through the mode-aware service
       for (const candidate of candidates) {
-        this._blockedRepo.insertBlockedOrder({
-          proposalAttemptId: candidate.proposalAttemptId,
-          blockedAt: Date.now(),
-          blockCode: BlockCode.MilestoneExecutionBlockM001,
-          blockMessage: M001_BLOCK_MESSAGE,
-          gateTag: M001_GATE_TAG,
-
-          // Proposal snapshot fields (copied at block time from strategy decisions)
-          exchange: candidate.exchange,
-          tradingsymbol: candidate.tradingsymbol,
-          instrumentToken: candidate.instrumentToken,
-          side: candidate.side,
-          product: candidate.product,
-          quantity: candidate.quantity,
-          price: candidate.price,
-          triggerPrice: candidate.triggerPrice,
-          orderType: candidate.orderType,
-        });
+        await this._executionService.execute(candidate, null, null);
       }
 
       console.log(
-        `[execution-gate] blocked ${candidates.length} strategy-approved candidate(s) ` +
-        `(M001 hard block)`,
+        `[execution-gate] consumed ${candidates.length} strategy-approved candidate(s) ` +
+        `via ${this._executionService.mode} mode`,
       );
     } catch (err) {
       // Fail-closed: gate errors degrade the lifecycle but do not:
       //   - attempt live execution fallback
       //   - crash the scheduler
-      //   - mutate prior proposal verdicts
+      //   - mutate prior proposal/strategy/execution verdicts
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`[execution-gate] Gate failure: ${errorMsg}`);
 
@@ -96,8 +86,8 @@ export class ExecutionGateSupervisor implements TickWork {
 
   // ── Diagnostics ─────────────────────────────────────────────────────────
 
-  /** Return count of blocked rows for health/observability surfaces. */
-  getBlockedCount(): number {
-    return this._blockedRepo.count();
+  /** Return total execution attempt count for health/observability surfaces. */
+  getExecutionAttemptCount(): number {
+    return this._attemptRepo.count();
   }
 }

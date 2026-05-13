@@ -27,8 +27,10 @@ import type { ZerodhaRepository } from '../persistence/broker-repo.js';
 import type { ProposalRepository } from '../persistence/proposal-repo.js';
 import type { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import type { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
+import type { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import type { MarketClock } from './market-clock.js';
 import type { UniverseService } from '../universe/universe-service.js';
+import { ExecutionMode, type ExecutionHealth } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -52,6 +54,8 @@ export interface DashboardReadModelOptions {
   strategyDecisionRepo: StrategyDecisionRepository | null;
   clock: MarketClock;
   universeService: UniverseService;
+  attemptRepo: ExecutionAttemptRepository | null;
+  executionMode: ExecutionMode;
 }
 
 export class DashboardReadModel {
@@ -63,6 +67,8 @@ export class DashboardReadModel {
   private readonly _strategyDecisionRepo: StrategyDecisionRepository | null;
   private readonly _clock: MarketClock;
   private readonly _universeService: UniverseService;
+  private readonly _attemptRepo: ExecutionAttemptRepository | null;
+  private readonly _executionMode: ExecutionMode;
 
   constructor(options: DashboardReadModelOptions) {
     this._healthService = options.healthService;
@@ -73,6 +79,8 @@ export class DashboardReadModel {
     this._strategyDecisionRepo = options.strategyDecisionRepo;
     this._clock = options.clock;
     this._universeService = options.universeService;
+    this._attemptRepo = options.attemptRepo;
+    this._executionMode = options.executionMode;
   }
 
   /** Assemble a full dashboard snapshot. */
@@ -92,6 +100,7 @@ export class DashboardReadModel {
       recentLifecycleEvents: this._getRecentLifecycleEvents(),
       recentStrategyDecisions: this._getRecentStrategyDecisions(),
       universe: this._getDashboardUniverse(),
+      execution: this._getExecutionEvidence(),
     };
   }
 
@@ -253,6 +262,45 @@ export class DashboardReadModel {
         staleQuoteCount: summary.staleQuoteCount,
         missingQuoteCount: summary.missingQuoteCount,
         thresholdLabel: summary.thresholdLabel,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private _getExecutionEvidence(): ExecutionHealth | null {
+    if (!this._attemptRepo || !this._strategyDecisionRepo) return null;
+
+    try {
+      const totalAttempts = this._attemptRepo.count();
+      const recent = this._attemptRepo.getRecent(5);
+      const isGateRefusing = this._executionMode === ExecutionMode.Blocked;
+
+      return {
+        mode: this._executionMode,
+        totalAttempts,
+        recentAttempts: recent.map(a => {
+          const decision = this._strategyDecisionRepo!.getDecisionById(a.strategyDecisionId);
+          const reasons = this._attemptRepo!.getRefusalReasons(a.id);
+          return {
+            id: a.id,
+            strategyDecisionId: a.strategyDecisionId,
+            executionMode: a.executionMode,
+            status: a.status,
+            outcomeCode: a.outcomeCode,
+            brokerOrderId: a.brokerOrderId,
+            message: a.message,
+            attemptedAt: new Date(a.attemptedAt).toISOString(),
+            completedAt: a.completedAt ? new Date(a.completedAt).toISOString() : null,
+            tradingsymbol: decision?.tradingsymbol ?? 'unknown',
+            exchange: decision?.exchange ?? 'unknown',
+            refusalReasons: reasons.map(r => r.reasonMessage),
+          };
+        }),
+        isGateRefusing,
+        gateRefusalReason: isGateRefusing
+          ? 'Execution mode is blocked: all attempts refused'
+          : null,
       };
     } catch {
       return null;

@@ -15,6 +15,7 @@ import { BrokerRepository } from '../persistence/broker-repo.js';
 import { UniverseRepository } from '../persistence/universe-repo.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
+import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import { LifecycleManager } from './lifecycle.js';
 import { HealthService } from './health-service.js';
@@ -33,6 +34,9 @@ import { ProposalEngine } from '../proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../proposals/india-validator.js';
 import { ProposalSupervisor } from '../proposals/proposal-supervisor.js';
 import { ExecutionGateSupervisor } from '../execution/execution-gate-supervisor.js';
+import { ModeAwareExecutionService } from '../execution/mode-aware-execution-service.js';
+import { PaperExecutionPolicy } from '../execution/paper-execution-policy.js';
+import { BlockedExecutionAdapter, LiveExecutionAdapter } from '../execution/execution-adapters.js';
 import {
   StrategyRiskSupervisor,
   type StrategyRiskPort,
@@ -42,7 +46,7 @@ import {
 import { UniverseService } from '../universe/universe-service.js';
 import { UniverseSupervisor } from '../universe/universe-supervisor.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
-import { SchedulerStatus, type RuntimeConfig } from '../types/runtime.js';
+import { ExecutionMode, SchedulerStatus, type RuntimeConfig } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // RuntimeAppHandles — typed references to all composed subsystems
@@ -59,6 +63,8 @@ export interface RuntimeAppHandles {
   proposalRepo: ProposalRepository | null;
   blockedOrderRepo: BlockedOrderRepository | null;
   strategyDecisionRepo: StrategyDecisionRepository | null;
+  executionAttemptRepo: ExecutionAttemptRepository | null;
+  executionService: ModeAwareExecutionService | null;
   lifecycle: LifecycleManager;
   healthService: HealthService;
   telemetry: Telemetry;
@@ -219,6 +225,9 @@ export class RuntimeApp {
       logBoot('Broker integration: not configured (degraded broker mode)');
     }
 
+    // ── Phase 4b: execution services (standalone DB wrapper) ────────────
+    const executionAttemptRepo = new ExecutionAttemptRepository(dbManager.db);
+
     // ── Phase 5: initialise Universe subsystem ────────────────────────────
     const universeRepo = new UniverseRepository(dbManager.db);
     const universeService = new UniverseService(brokerRepo, universeRepo);
@@ -232,6 +241,7 @@ export class RuntimeApp {
     let executionGateSupervisor: ExecutionGateSupervisor | null = null;
     let strategyRiskSupervisor: StrategyRiskSupervisor | null = null;
     let strategyDecisionRepo: StrategyDecisionRepository | null = null;
+    let executionService: ModeAwareExecutionService | null = null;
 
     if (this.config.proposalEngine) {
       logBoot('Proposal engine: configured');
@@ -254,7 +264,23 @@ export class RuntimeApp {
         universeService,
       });
 
-      executionGateSupervisor = new ExecutionGateSupervisor({ blockedRepo: blockedOrderRepo });
+      // Build ModeAwareExecutionService with the configured mode
+      const paperPolicy = new PaperExecutionPolicy();
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      executionService = new ModeAwareExecutionService({
+        attemptRepo: executionAttemptRepo,
+        paperPolicy,
+        liveAdapter,
+        blockedAdapter,
+        mode: this.config.execution.mode,
+      });
+
+      executionGateSupervisor = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo: executionAttemptRepo,
+      });
 
       // StrategyRiskSupervisor — evaluates accepted proposals via the
       // strategy-risk service (T02). Uses a lazy port wrapper so build()
@@ -272,7 +298,7 @@ export class RuntimeApp {
 
       logBoot('Proposal supervisor initialised');
       logBoot('Strategy risk supervisor initialised');
-      logBoot('Execution gate supervisor initialised');
+      logBoot(`Execution gate supervisor initialised (mode: ${this.config.execution.mode})`);
     } else {
       logBoot('Proposal engine: not configured (proposal generation disabled)');
     }
@@ -307,6 +333,8 @@ export class RuntimeApp {
       strategyDecisionRepo,
       clock,
       universeService,
+      attemptRepo: executionAttemptRepo,
+      executionMode: this.config.execution.mode,
     });
 
     // ── Phase 8: create health HTTP server with dashboard routes ───────────
@@ -324,6 +352,8 @@ export class RuntimeApp {
       proposalRepo,
       blockedOrderRepo,
       strategyDecisionRepo,
+      executionAttemptRepo,
+      executionService,
       lifecycle,
       healthService,
       telemetry,

@@ -1,11 +1,16 @@
 // ── S04 Runtime Integration Test ──
 // Proves that the execution gate supervisor composes correctly with
-// proposal generation on scheduler ticks. Covers:
-//   - Same-tick composition: accepted proposals get blocked in the same tick
-//   - Refused/skipped proposals never create blocked rows
-//   - Gate replay idempotency (re-running gate doesn't duplicate rows)
-//   - Empty gate (no accepted proposals → no blocked rows)
+// proposal generation and strategy-risk evaluation on scheduler ticks.
+// Covers:
+//   - Same-tick composition: approved proposals get consumed via execution attempts
+//   - Refused/skipped proposals never create execution attempt rows
+//   - Gate replay idempotency (re-running gate doesn't duplicate attempts)
+//   - Empty gate (no approved candidates → no execution attempts)
 //   - Gate error handling
+//   - Blocked mode routing (BlockedExecutionAdapter)
+//   - Paper mode routing (PaperExecutionPolicy)
+//   - Fail-closed live mode (LiveExecutionAdapter with null port)
+//   - Exact-once consumption across repeated ticks
 //
 // Uses :memory: SQLite — no disk persistence required.
 // Deterministic guards (no real-time sleeps).
@@ -14,18 +19,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
-import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
+import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt-repo.js';
 import { ProposalEngine, type EngineContext } from '../src/proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../src/proposals/india-validator.js';
 import { ProposalSupervisor } from '../src/proposals/proposal-supervisor.js';
 import { ExecutionGateSupervisor } from '../src/execution/execution-gate-supervisor.js';
+import { ModeAwareExecutionService } from '../src/execution/mode-aware-execution-service.js';
+import { PaperExecutionPolicy } from '../src/execution/paper-execution-policy.js';
+import { BlockedExecutionAdapter, LiveExecutionAdapter } from '../src/execution/execution-adapters.js';
 import {
   ProposalStatus,
   StrategyDecisionStatus,
+  ExecutionMode,
+  ExecutionAttemptStatus,
+  ExecutionOutcomeCode,
   ValidationReasonCode,
   MarketPhase,
   ZerodhaSessionState,
-  BlockCode,
   type ProposalEngineConfig,
   type HealthStatus,
   type NewStrategyDecision,
@@ -34,7 +44,7 @@ import type {
   InstrumentRecord,
   QuoteSnapshot,
   InstrumentSyncState,
-} from '../src/integrations/zerodha/types.js';
+} from '../src/integrations/broker/types.js';
 import type { MarketClock } from '../src/runtime/market-clock.js';
 
 // ---------------------------------------------------------------------------
@@ -190,11 +200,12 @@ function createTestContext(options?: {
   engineConfig?: ProposalEngineConfig;
   marketPhase?: MarketPhase;
   sessionState?: ZerodhaSessionState;
+  executionMode?: ExecutionMode;
 }) {
   const db = new DatabaseManager(':memory:');
   const proposalRepo = new ProposalRepository(db.db);
-  const blockedRepo = new BlockedOrderRepository(db.db);
   const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
+  const attemptRepo = new ExecutionAttemptRepository(db.db);
   const engine = new ProposalEngine(options?.engineConfig ?? makeEngineConfig());
   const validator = new IndiaProposalValidator();
   const session = new MockSessionService();
@@ -224,17 +235,35 @@ function createTestContext(options?: {
     maxProposals: 3,
   });
 
-  const executionGate = new ExecutionGateSupervisor({ blockedRepo });
+  // Build execution service with configurable mode (default: blocked)
+  const mode = options?.executionMode ?? ExecutionMode.Blocked;
+  const paperPolicy = new PaperExecutionPolicy();
+  const liveAdapter = new LiveExecutionAdapter(null);
+  const blockedAdapter = new BlockedExecutionAdapter();
+  const executionService = new ModeAwareExecutionService({
+    attemptRepo,
+    paperPolicy,
+    liveAdapter,
+    blockedAdapter,
+    mode,
+  });
+
+  const executionGate = new ExecutionGateSupervisor({
+    strategyDecisionRepo,
+    executionService,
+    attemptRepo,
+  });
 
   return {
     db,
     proposalRepo,
-    blockedRepo,
     strategyDecisionRepo,
+    attemptRepo,
     engine,
     validator,
     supervisor,
     executionGate,
+    executionService,
     session,
     instruments,
     stream,
@@ -326,9 +355,9 @@ describe('S04 Runtime — Execution gate composition', () => {
 
   // ── Same-tick composition ──────────────────────────────────────────────
 
-  describe('Same-tick composition — generate then block', () => {
-    it('blocks accepted proposals from the same tick in the gate pass', async () => {
-      const { supervisor, executionGate, proposalRepo, blockedRepo, strategyDecisionRepo, clock } =
+  describe('Same-tick composition — generate, approve, then execute', () => {
+    it('consumes approved proposals from the same tick via execution attempts', async () => {
+      const { supervisor, executionGate, proposalRepo, attemptRepo, strategyDecisionRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -356,29 +385,19 @@ describe('S04 Runtime — Execution gate composition', () => {
       const accepted = proposalRepo.getRecentAttempts(10, ProposalStatus.Accepted);
       expect(accepted.length).toBe(1);
 
-      // Verify: one blocked-order row with correct metadata
-      const blocked = blockedRepo.getRecent();
-      expect(blocked.length).toBe(1);
-      expect(blocked[0].proposalAttemptId).toBe(accepted[0].id);
-      expect(blocked[0].blockCode).toBe(BlockCode.MilestoneExecutionBlockM001);
-      expect(blocked[0].blockMessage).toContain('M001 hard block');
-      expect(blocked[0].gateTag).toBe('M001-hard-block');
+      // Verify: one execution attempt row was created (consumed)
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Refused);
+      expect(attempts[0].executionMode).toBe(ExecutionMode.Blocked);
 
-      // Verify: proposal snapshot fields match
-      expect(blocked[0].exchange).toBe('NSE');
-      expect(blocked[0].tradingsymbol).toBe('RELIANCE');
-      expect(blocked[0].side).toBe('buy');
-      expect(blocked[0].product).toBe('MIS');
-      expect(blocked[0].quantity).toBe(1);
-      expect(blocked[0].orderType).toBe('MARKET');
-
-      // Verify: no unblocked strategy-approved candidates remain
-      const approvedUnblocked = blockedRepo.getStrategyApprovedUnblocked();
-      expect(approvedUnblocked.length).toBe(0);
+      // Verify: no unconsumed candidates remain
+      const remaining = strategyDecisionRepo.getApprovedUnconsumedCandidates();
+      expect(remaining.length).toBe(0);
     });
 
-    it('blocks multiple accepted proposals from the same tick', async () => {
-      const { supervisor, executionGate, blockedRepo, strategyDecisionRepo, proposalRepo, clock } =
+    it('consumes multiple approved proposals from the same tick', async () => {
+      const { supervisor, executionGate, attemptRepo, strategyDecisionRepo, proposalRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -411,13 +430,13 @@ describe('S04 Runtime — Execution gate composition', () => {
       approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
       await executionGate.doWork(new Date(), minimalHealth());
 
-      const blocked = blockedRepo.getRecent();
-      expect(blocked.length).toBe(2);
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(2);
 
-      // Both rows should have M001 block metadata
-      for (const row of blocked) {
-        expect(row.blockCode).toBe(BlockCode.MilestoneExecutionBlockM001);
-        expect(row.gateTag).toBe('M001-hard-block');
+      // Both should be refused with blocked mode
+      for (const attempt of attempts) {
+        expect(attempt.status).toBe(ExecutionAttemptStatus.Refused);
+        expect(attempt.executionMode).toBe(ExecutionMode.Blocked);
       }
     });
   });
@@ -425,8 +444,8 @@ describe('S04 Runtime — Execution gate composition', () => {
   // ── Refused/skipped exclusion ──────────────────────────────────────────
 
   describe('Refused/skipped exclusion', () => {
-    it('creates zero blocked rows when all proposals are refused (market closed)', async () => {
-      const { supervisor, executionGate, blockedRepo, clock } =
+    it('creates zero execution attempts when all proposals are refused (market closed)', async () => {
+      const { supervisor, executionGate, attemptRepo, clock } =
         createTestContext({ marketPhase: MarketPhase.Closed });
 
       mockFetchJson({
@@ -447,11 +466,11 @@ describe('S04 Runtime — Execution gate composition', () => {
       await supervisor.doWork(new Date(), minimalHealth());
       await executionGate.doWork(new Date(), minimalHealth());
 
-      expect(blockedRepo.count()).toBe(0);
+      expect(attemptRepo.count()).toBe(0);
     });
 
-    it('creates zero blocked rows when provider returns empty proposals', async () => {
-      const { supervisor, executionGate, blockedRepo, clock } =
+    it('creates zero execution attempts when provider returns empty proposals', async () => {
+      const { supervisor, executionGate, attemptRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -460,12 +479,12 @@ describe('S04 Runtime — Execution gate composition', () => {
       await supervisor.doWork(new Date(), minimalHealth());
       await executionGate.doWork(new Date(), minimalHealth());
 
-      // Engine persisted refusal; gate should produce no blocked rows
-      expect(blockedRepo.count()).toBe(0);
+      // Engine persisted refusal; gate should produce no execution attempts
+      expect(attemptRepo.count()).toBe(0);
     });
 
-    it('creates zero blocked rows on provider network error', async () => {
-      const { supervisor, executionGate, blockedRepo, clock } =
+    it('creates zero execution attempts on provider network error', async () => {
+      const { supervisor, executionGate, attemptRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -480,15 +499,15 @@ describe('S04 Runtime — Execution gate composition', () => {
 
       console.error = originalError;
 
-      expect(blockedRepo.count()).toBe(0);
+      expect(attemptRepo.count()).toBe(0);
     });
   });
 
   // ── Gate replay idempotency ────────────────────────────────────────────
 
   describe('Gate replay idempotency', () => {
-    it('does not create duplicate blocked rows on repeated gate runs', async () => {
-      const { supervisor, executionGate, blockedRepo, strategyDecisionRepo, proposalRepo, clock } =
+    it('does not create duplicate execution attempts on repeated gate runs', async () => {
+      const { supervisor, executionGate, attemptRepo, strategyDecisionRepo, proposalRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -507,110 +526,53 @@ describe('S04 Runtime — Execution gate composition', () => {
         ],
       });
 
-      // First tick: generate → approve → block
+      // First tick: generate → approve → execute
       await supervisor.doWork(new Date(), minimalHealth());
       approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
       await executionGate.doWork(new Date(), minimalHealth());
 
       // Second tick: no new proposals, but gate runs again
-      // Mock fetch again so supervisor doesn't error on empty data (no new proposals expected)
       mockFetchJson({ proposals: [] });
       await supervisor.doWork(new Date(), minimalHealth());
       await executionGate.doWork(new Date(), minimalHealth());
 
-      // Still exactly 1 blocked row
-      expect(blockedRepo.count()).toBe(1);
+      // Still exactly 1 execution attempt row
+      expect(attemptRepo.count()).toBe(1);
     });
 
-    it('handles repeated gate runs without any accepted proposals', async () => {
-      const { executionGate, blockedRepo, clock } = createTestContext();
+    it('handles repeated gate runs without any approved candidates', async () => {
+      const { executionGate, attemptRepo, clock } = createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
-      // Do three gate runs with no prior accepted proposals
+      // Do three gate runs with no prior approved candidates
       await executionGate.doWork(new Date(), minimalHealth());
       await executionGate.doWork(new Date(), minimalHealth());
       await executionGate.doWork(new Date(), minimalHealth());
 
-      expect(blockedRepo.count()).toBe(0);
+      expect(attemptRepo.count()).toBe(0);
     });
   });
 
-  // ── Gate standalone (no proposal supervisor) ───────────────────────────
+  // ── Gate standalone (no proposals) ─────────────────────────────────────
 
   describe('Gate standalone — no proposals', () => {
-    it('produces zero blocked rows when no proposals exist in the DB', async () => {
-      const { executionGate, blockedRepo } = createTestContext();
+    it('produces zero execution attempts when no proposals exist in the DB', async () => {
+      const { executionGate, attemptRepo } = createTestContext();
 
       await executionGate.doWork(new Date(), minimalHealth());
 
-      expect(blockedRepo.count()).toBe(0);
-      expect(blockedRepo.getAcceptedUnblockedAttempts()).toEqual([]);
+      expect(attemptRepo.count()).toBe(0);
+      expect(attemptRepo.getRecent()).toEqual([]);
     });
   });
 
-  // ── Block metadata correctness ─────────────────────────────────────────
+  // ── Blocked mode routing ───────────────────────────────────────────────
 
-  describe('Block metadata correctness', () => {
-    it('uses the correct M001 block code enum value', () => {
-      expect(BlockCode.MilestoneExecutionBlockM001).toBe('milestone_execution_block_m001');
-    });
+  describe('Blocked mode routing', () => {
+    it('refuses all candidates with ModeBlocked in blocked mode', async () => {
+      const { proposalRepo, strategyDecisionRepo, executionGate, attemptRepo } = createTestContext();
 
-    it('records blockedAt timestamp within expected bounds', async () => {
-      const { supervisor, executionGate, blockedRepo, strategyDecisionRepo, proposalRepo, clock } =
-        createTestContext();
-      clock.setPhase(MarketPhase.Regular);
-
-      mockFetchJson({
-        proposals: [
-          {
-            exchange: 'NSE',
-            tradingsymbol: 'RELIANCE',
-            side: 'buy',
-            product: 'MIS',
-            quantity: 1,
-            price: null,
-            triggerPrice: null,
-            orderType: 'MARKET',
-          },
-        ],
-      });
-
-      const before = Date.now();
-      await supervisor.doWork(new Date(), minimalHealth());
-      approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
-      await executionGate.doWork(new Date(), minimalHealth());
-      const after = Date.now();
-
-      const blocked = blockedRepo.getRecent();
-      expect(blocked.length).toBe(1);
-      expect(blocked[0].blockedAt).toBeGreaterThanOrEqual(before);
-      expect(blocked[0].blockedAt).toBeLessThanOrEqual(after);
-    });
-  });
-
-  // ── Error handling ─────────────────────────────────────────────────────
-
-  describe('Gate error handling', () => {
-    it('throws on DB failure but does not crash process', async () => {
-      const { executionGate } = createTestContext();
-
-      // Close the DB to simulate a failure
-      executionGate['_blockedRepo']['_db'].close();
-
-      // The gate should throw (which the scheduler will catch and degrade)
-      await expect(
-        executionGate.doWork(new Date(), minimalHealth()),
-      ).rejects.toThrow();
-    });
-  });
-
-  // ── Negative tests (malformed inputs) ──────────────────────────────────
-
-  describe('Negative tests — proposal snapshot edge cases', () => {
-    it('handles accepted proposals with null price and triggerPrice', async () => {
-      const { proposalRepo, executionGate, blockedRepo, strategyDecisionRepo } = createTestContext();
-
-      // Insert an accepted proposal with null prices directly (bypass supervisor)
+      // Insert an accepted proposal with a strategy decision directly
       const proposal = proposalRepo.insertAttempt({
         exchange: 'NSE',
         tradingsymbol: 'RELIANCE',
@@ -626,7 +588,175 @@ describe('S04 Runtime — Execution gate composition', () => {
         createdAt: Date.now(),
       });
 
-      // Create a strategy decision for this proposal (required by M003 gate)
+      const decision = strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
+      });
+
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].strategyDecisionId).toBe(decision.id);
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Refused);
+      expect(attempts[0].outcomeCode).toBeNull();
+
+      // Verify refusal reason
+      const reasons = attemptRepo.getRefusalReasons(attempts[0].id);
+      expect(reasons.length).toBe(1);
+      expect(reasons[0].reasonCode).toBe('mode_blocked');
+    });
+  });
+
+  // ── Paper mode routing ─────────────────────────────────────────────────
+
+  describe('Paper mode routing', () => {
+    it('routes candidates through paper evaluation when mode is paper', async () => {
+      const { proposalRepo, strategyDecisionRepo, attemptRepo, clock } = createTestContext({
+        executionMode: ExecutionMode.Paper,
+      });
+      clock.setPhase(MarketPhase.Regular);
+
+      // Create the execution gate with paper mode
+      const paperPolicy = new PaperExecutionPolicy();
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      const executionService = new ModeAwareExecutionService({
+        attemptRepo,
+        paperPolicy,
+        liveAdapter,
+        blockedAdapter,
+        mode: ExecutionMode.Paper,
+      });
+      const executionGate = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo,
+      });
+
+      // Insert an accepted proposal with a strategy decision
+      const proposal = proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
+      const decision = strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
+      });
+
+      // Since we pass null quote/instrument from the gate, paper policy will
+      // refuse with StaleOrMissingQuote — that's expected behavior when no
+      // market data is available
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].strategyDecisionId).toBe(decision.id);
+      expect(attempts[0].executionMode).toBe(ExecutionMode.Paper);
+
+      // With null quote, paper policy will refuse
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Refused);
+      const reasons = attemptRepo.getRefusalReasons(attempts[0].id);
+      expect(reasons.length).toBeGreaterThanOrEqual(1);
+      expect(reasons[0].reasonCode).toBe('stale_or_missing_quote');
+    });
+  });
+
+  // ── Fail-closed live mode ──────────────────────────────────────────────
+
+  describe('Fail-closed live mode', () => {
+    it('refuses all candidates when live mode has no broker placement port', async () => {
+      const { proposalRepo, strategyDecisionRepo, attemptRepo, clock } = createTestContext({
+        executionMode: ExecutionMode.Live,
+      });
+      clock.setPhase(MarketPhase.Regular);
+
+      // Create the execution gate with live mode (null live adapter)
+      const paperPolicy = new PaperExecutionPolicy();
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      const executionService = new ModeAwareExecutionService({
+        attemptRepo,
+        paperPolicy,
+        liveAdapter,
+        blockedAdapter,
+        mode: ExecutionMode.Live,
+      });
+      const executionGate = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo,
+      });
+
+      // Insert an accepted proposal with a strategy decision
+      const proposal = proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
       strategyDecisionRepo.insertDecision({
         proposalAttemptId: proposal.id,
         decisionStatus: StrategyDecisionStatus.Approved,
@@ -655,31 +785,86 @@ describe('S04 Runtime — Execution gate composition', () => {
 
       await executionGate.doWork(new Date(), minimalHealth());
 
-      const blocked = blockedRepo.getRecent();
-      expect(blocked.length).toBe(1);
-      expect(blocked[0].price).toBeNull();
-      expect(blocked[0].triggerPrice).toBeNull();
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].executionMode).toBe(ExecutionMode.Live);
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Refused);
+
+      // Live broker not configured should be the reason
+      const reasons = attemptRepo.getRefusalReasons(attempts[0].id);
+      expect(reasons.length).toBeGreaterThanOrEqual(1);
+      expect(reasons[0].reasonCode).toBe('live_broker_not_configured');
+    });
+  });
+
+  // ── Exact-once consumption ─────────────────────────────────────────────
+
+  describe('Exact-once consumption', () => {
+    it('cannot re-consume the same strategy decision across multiple ticks', async () => {
+      const { supervisor, executionGate, attemptRepo, strategyDecisionRepo, proposalRepo, clock } =
+        createTestContext();
+      clock.setPhase(MarketPhase.Regular);
+
+      mockFetchJson({
+        proposals: [
+          {
+            exchange: 'NSE',
+            tradingsymbol: 'RELIANCE',
+            side: 'buy',
+            product: 'MIS',
+            quantity: 1,
+            price: null,
+            triggerPrice: null,
+            orderType: 'MARKET',
+          },
+        ],
+      });
+
+      // Tick 1: generate → approve → execute
+      await supervisor.doWork(new Date(), minimalHealth());
+      approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      expect(attemptRepo.count()).toBe(1);
+
+      // Tick 2: same state, gate runs again — no new candidates to consume
+      mockFetchJson({ proposals: [] });
+      await supervisor.doWork(new Date(), minimalHealth());
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      // Still exactly 1 — the second tick found zero unconsumed candidates
+      expect(attemptRepo.count()).toBe(1);
+
+      // Tick 3: verify idempotency holds across repeated ticks
+      await executionGate.doWork(new Date(), minimalHealth());
+      expect(attemptRepo.count()).toBe(1);
     });
 
-    it('handles accepted proposals with null instrumentToken', async () => {
-      const { proposalRepo, executionGate, blockedRepo, strategyDecisionRepo } = createTestContext();
+    it('consumes strategy-approved candidates, not raw accepted proposals', async () => {
+      const { proposalRepo, strategyDecisionRepo, executionGate, attemptRepo } = createTestContext();
 
+      // Insert an accepted proposal WITHOUT a strategy decision
       const proposal = proposalRepo.insertAttempt({
         exchange: 'NSE',
-        tradingsymbol: 'TCS',
-        instrumentToken: null,
-        side: 'sell',
-        product: 'CNC',
-        quantity: 10,
-        price: 3500.00,
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
         triggerPrice: null,
-        orderType: 'LIMIT',
+        orderType: 'MARKET',
         tag: null,
         proposalStatus: ProposalStatus.Accepted,
         createdAt: Date.now(),
       });
 
-      // Create a strategy decision for this proposal
+      // Gate should not consume it — no strategy decision exists
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      expect(attemptRepo.count()).toBe(0);
+
+      // Now add a strategy decision
       strategyDecisionRepo.insertDecision({
         proposalAttemptId: proposal.id,
         decisionStatus: StrategyDecisionStatus.Approved,
@@ -687,13 +872,87 @@ describe('S04 Runtime — Execution gate composition', () => {
         strategyVersion: '1.0.0',
         decidedAt: Date.now(),
         exchange: 'NSE',
-        tradingsymbol: 'TCS',
-        side: 'sell',
-        product: 'CNC',
-        quantity: 10,
-        price: 3500.00,
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
         triggerPrice: null,
-        orderType: 'LIMIT',
+        orderType: 'MARKET',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
+      });
+
+      // Gate should now consume it
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      expect(attemptRepo.count()).toBe(1);
+    });
+  });
+
+  // ── Error handling ─────────────────────────────────────────────────────
+
+  describe('Gate error handling', () => {
+    it('throws on DB failure but does not crash process', async () => {
+      // Create a context specifically so we can close the DB
+      const context = createTestContext();
+      const { executionGate } = context;
+
+      // Close the DB to simulate a failure
+      context.db.db.close();
+
+      // The gate should throw (which the scheduler will catch and degrade)
+      await expect(
+        executionGate.doWork(new Date(), minimalHealth()),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ── Negative tests ─────────────────────────────────────────────────────
+
+  describe('Negative tests — candidate edge cases', () => {
+    it('handles approved strategy decisions with null price and triggerPrice', async () => {
+      const { proposalRepo, strategyDecisionRepo, executionGate, attemptRepo } = createTestContext();
+
+      // Insert an accepted proposal with null prices
+      const proposal = proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
+      // Create a strategy decision with null prices
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
         quoteLastPrice: null,
         quoteBid: null,
         quoteAsk: null,
@@ -708,13 +967,14 @@ describe('S04 Runtime — Execution gate composition', () => {
 
       await executionGate.doWork(new Date(), minimalHealth());
 
-      const blocked = blockedRepo.getRecent();
-      expect(blocked.length).toBe(1);
-      expect(blocked[0].instrumentToken).toBeNull();
+      // Blocked mode should still produce a refused attempt regardless of null prices
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Refused);
     });
 
-    it('handles accepted SL proposals with both price and triggerPrice', async () => {
-      const { proposalRepo, executionGate, blockedRepo, strategyDecisionRepo } = createTestContext();
+    it('handles SL proposals with both price and triggerPrice', async () => {
+      const { proposalRepo, strategyDecisionRepo, executionGate, attemptRepo } = createTestContext();
 
       const proposal = proposalRepo.insertAttempt({
         exchange: 'NSE',
@@ -731,7 +991,6 @@ describe('S04 Runtime — Execution gate composition', () => {
         createdAt: Date.now(),
       });
 
-      // Create a strategy decision for this proposal
       strategyDecisionRepo.insertDecision({
         proposalAttemptId: proposal.id,
         decisionStatus: StrategyDecisionStatus.Approved,
@@ -760,24 +1019,21 @@ describe('S04 Runtime — Execution gate composition', () => {
 
       await executionGate.doWork(new Date(), minimalHealth());
 
-      const blocked = blockedRepo.getRecent();
-      expect(blocked.length).toBe(1);
-      expect(blocked[0].price).toBe(500.00);
-      expect(blocked[0].triggerPrice).toBe(505.00);
-      expect(blocked[0].orderType).toBe('SL');
+      const attempts = attemptRepo.getRecent();
+      expect(attempts.length).toBe(1);
+      expect(attempts[0].status).toBe(ExecutionAttemptStatus.Refused);
     });
   });
 
   // ── Diagnostic surface ─────────────────────────────────────────────────
 
   describe('Diagnostic surface', () => {
-    it('reports blocked count via getBlockedCount', async () => {
-      const { executionGate } = createTestContext();
+    it('reports execution attempt count via getExecutionAttemptCount', async () => {
+      const { executionGate, proposalRepo, strategyDecisionRepo, attemptRepo } = createTestContext();
 
-      expect(executionGate.getBlockedCount()).toBe(0);
+      expect(executionGate.getExecutionAttemptCount()).toBe(0);
 
-      // Insert a blocked row directly via the repo
-      const { proposalRepo, blockedRepo } = createTestContext();
+      // Insert an accepted proposal with a strategy decision
       const proposal = proposalRepo.insertAttempt({
         exchange: 'NSE',
         tradingsymbol: 'RELIANCE',
@@ -793,26 +1049,64 @@ describe('S04 Runtime — Execution gate composition', () => {
         createdAt: Date.now(),
       });
 
-      blockedRepo.insertBlockedOrder({
+      strategyDecisionRepo.insertDecision({
         proposalAttemptId: proposal.id,
-        blockedAt: Date.now(),
-        blockCode: BlockCode.MilestoneExecutionBlockM001,
-        blockMessage: 'test',
-        gateTag: 'test',
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
         exchange: 'NSE',
         tradingsymbol: 'RELIANCE',
-        instrumentToken: 123456,
         side: 'buy',
         product: 'MIS',
         quantity: 1,
         price: null,
         triggerPrice: null,
         orderType: 'MARKET',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
       });
 
-      // Re-count using separate context's gate (shared DB not used here)
-      // Instead verify the original gate counts correctly
-      expect(executionGate.getBlockedCount()).toBe(0);
+      await executionGate.doWork(new Date(), minimalHealth());
+
+      // After execution, count should be 1
+      expect(executionGate.getExecutionAttemptCount()).toBe(1);
+    });
+
+    it('reports the active execution mode', async () => {
+      const { executionGate } = createTestContext({ executionMode: ExecutionMode.Blocked });
+
+      expect(executionGate.mode).toBe(ExecutionMode.Blocked);
+    });
+
+    it('reports paper mode correctly', async () => {
+      const { attemptRepo, strategyDecisionRepo, proposalRepo } = createTestContext();
+
+      const paperPolicy = new PaperExecutionPolicy();
+      const liveAdapter = new LiveExecutionAdapter(null);
+      const blockedAdapter = new BlockedExecutionAdapter();
+      const executionService = new ModeAwareExecutionService({
+        attemptRepo,
+        paperPolicy,
+        liveAdapter,
+        blockedAdapter,
+        mode: ExecutionMode.Paper,
+      });
+      const executionGate = new ExecutionGateSupervisor({
+        strategyDecisionRepo,
+        executionService,
+        attemptRepo,
+      });
+
+      expect(executionGate.mode).toBe(ExecutionMode.Paper);
     });
   });
 });

@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RuntimeApp } from '../src/runtime/runtime-app.js';
-import type { RuntimeConfig } from '../src/types/runtime.js';
+import { ExecutionMode, type RuntimeConfig } from '../src/types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Minimal config for testing (no broker, no Proposal Engine)
@@ -27,6 +27,7 @@ function testConfig(overrides?: Partial<RuntimeConfig>): RuntimeConfig {
     logLevel: 'error', // Suppress boot logs
     zerodha: null,
     proposalEngine: null,
+    execution: { mode: ExecutionMode.Blocked, maxRetries: 0 },
     ...overrides,
   };
 }

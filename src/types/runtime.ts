@@ -544,6 +544,8 @@ export interface DashboardSnapshot {
   recentStrategyDecisions: DashboardStrategyDecision[];
   /** Universe coverage summary — null when no snapshot has been computed. */
   universe: DashboardUniverse | null;
+  /** Execution evidence block — null when no attempt repo is wired. */
+  execution: ExecutionHealth | null;
 }
 
 /** Market profile identity and session metadata. */

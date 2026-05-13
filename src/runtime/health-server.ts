@@ -163,6 +163,32 @@ export function createHealthServer(
           break;
         }
 
+        // ── Execution evidence route ────────────────────────────────────
+
+        case '/health/execution': {
+          if (!dashboard) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Dashboard not available' }));
+            break;
+          }
+          const eSnapshot = dashboard.getSnapshot();
+          const execution = eSnapshot.execution;
+          if (execution) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(execution, null, 2));
+          } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              mode: 'unknown',
+              totalAttempts: 0,
+              recentAttempts: [],
+              isGateRefusing: false,
+              gateRefusalReason: 'No execution evidence available — attempt repo not wired',
+            }));
+          }
+          break;
+        }
+
         default: {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found', path: url.pathname }));
