@@ -1,0 +1,589 @@
+// ── Mode-aware execution service unit tests ──
+//
+// Covers:
+//   - Blocked mode: always refuses with ModeBlocked
+//   - Paper mode: simulated fill with valid quote/instrument
+//   - Paper mode: refused when quote is missing
+//   - Paper mode: refused when instrument is missing
+//   - Live mode: fails closed without adapter
+//   - Live mode: delegates to adapter when configured
+//   - Idempotency: repeated execute returns existing row
+//   - All modes produce ExecutionAttemptRow with correct metadata
+//   - Machine-readable refusal reasons on all refusal paths
+
+import { describe, it, expect, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { DatabaseManager } from '../src/persistence/sqlite.js';
+import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt-repo.js';
+import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
+import { ProposalRepository } from '../src/persistence/proposal-repo.js';
+import {
+  ExecutionAttemptStatus,
+  ExecutionMode,
+  ExecutionOutcomeCode,
+  ExecutionRefusalCode,
+  ProposalStatus,
+  StrategyDecisionStatus,
+  type BrokerPlacementPort,
+  type OrderPlacementParams,
+  type OrderPlacementResult,
+  type NewStrategyDecision,
+  type StrategyApprovedCandidate,
+} from '../src/types/runtime.js';
+import type { QuoteSnapshot, InstrumentRecord } from '../src/integrations/broker/types.js';
+import { PaperExecutionPolicy } from '../src/execution/paper-execution-policy.js';
+import { LiveExecutionAdapter } from '../src/execution/execution-adapters.js';
+import { ModeAwareExecutionService } from '../src/execution/mode-aware-execution-service.js';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const NOW = Date.now();
+
+function sampleQuote(overrides?: Partial<QuoteSnapshot>): QuoteSnapshot {
+  return {
+    exchange: 'NSE',
+    tradingsymbol: 'RELIANCE',
+    instrumentToken: 123456,
+    lastPrice: 2850.50,
+    change: 10.20,
+    changePercent: 0.36,
+    volume: 1250000,
+    oi: null,
+    high: 2860.00,
+    low: 2840.00,
+    open: 2845.00,
+    close: 2840.30,
+    bid: 2850.00,
+    ask: 2851.00,
+    priceTimestamp: Math.floor(NOW / 1000) - 30,
+    receivedAt: NOW - 5000,
+    ...overrides,
+  };
+}
+
+function sampleInstrument(overrides?: Partial<InstrumentRecord>): InstrumentRecord {
+  return {
+    exchange: 'NSE',
+    tradingsymbol: 'RELIANCE',
+    instrumentToken: 123456,
+    name: 'RELIANCE INDUSTRIES LTD',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    instrumentType: 'EQ' as any,
+    segment: 'NSE_EQ' as any,
+    exchangeToken: 12345,
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Mock BrokerPlacementPort for live mode tests
+// ---------------------------------------------------------------------------
+
+class MockPlacementPort implements BrokerPlacementPort {
+  readonly isReady: boolean;
+  private _placementResult: OrderPlacementResult;
+  private _called = false;
+
+  constructor(isReady = true, placementResult?: Partial<OrderPlacementResult>) {
+    this.isReady = isReady;
+    this._placementResult = {
+      success: true,
+      brokerOrderId: 'mock-order-001',
+      outcomeCode: ExecutionOutcomeCode.OrderPlaced,
+      message: 'Mock order placed successfully',
+      ...placementResult,
+    };
+  }
+
+  get called(): boolean {
+    return this._called;
+  }
+
+  async placeOrder(_params: OrderPlacementParams): Promise<OrderPlacementResult> {
+    this._called = true;
+    return this._placementResult;
+  }
+
+  setResult(result: Partial<OrderPlacementResult>): void {
+    this._placementResult = { ...this._placementResult, ...result };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers — seed DB with proposal + strategy decision row
+// ---------------------------------------------------------------------------
+
+interface TestContext {
+  attemptRepo: ExecutionAttemptRepository;
+  strategyRepo: StrategyDecisionRepository;
+  proposalRepo: ProposalRepository;
+  paperPolicy: PaperExecutionPolicy;
+  db: Database.Database;
+}
+
+function createContext(): TestContext {
+  const mgr = new DatabaseManager(':memory:');
+  const db = mgr.db;
+  return {
+    attemptRepo: new ExecutionAttemptRepository(db),
+    strategyRepo: new StrategyDecisionRepository(db),
+    proposalRepo: new ProposalRepository(db),
+    paperPolicy: new PaperExecutionPolicy(),
+    db,
+  };
+}
+
+/**
+ * Seed a single proposal + strategy decision pair and return a
+ * StrategyApprovedCandidate with the real DB-assigned id.
+ */
+function seedApprovedCandidate(
+  ctx: TestContext,
+  overrides?: Partial<NewStrategyDecision>,
+): StrategyApprovedCandidate {
+  // Insert accepted proposal
+  const proposal = ctx.proposalRepo.insertAttempt({
+    exchange: 'NSE',
+    tradingsymbol: 'RELIANCE',
+    instrumentToken: 123456,
+    side: overrides?.side ?? 'buy',
+    product: 'MIS',
+    quantity: 75,
+    price: null,
+    triggerPrice: null,
+    orderType: 'MARKET',
+    tag: null,
+    proposalStatus: ProposalStatus.Accepted,
+    createdAt: NOW - 120_000,
+  });
+
+  // Insert approved strategy decision
+  const decision = ctx.strategyRepo.insertDecision({
+    proposalAttemptId: proposal.id,
+    decisionStatus: StrategyDecisionStatus.Approved,
+    strategyId: 'india-nse-eq-v1',
+    strategyVersion: '1.0.0',
+    decidedAt: NOW - 60_000,
+    exchange: 'NSE',
+    tradingsymbol: 'RELIANCE',
+    side: overrides?.side ?? 'buy',
+    product: overrides?.product ?? 'MIS',
+    quantity: overrides?.quantity ?? 75,
+    price: overrides?.price ?? null,
+    triggerPrice: overrides?.triggerPrice ?? null,
+    orderType: overrides?.orderType ?? 'MARKET',
+    quoteLastPrice: 2850.50,
+    quoteBid: 2850.00,
+    quoteAsk: 2851.00,
+    quoteVolume: 1250000,
+    quoteReceivedAt: NOW - 5000,
+    riskNotional: 213787.50,
+    riskSizingBasis: 'last_price',
+    riskMaxLossRupees: 10689.38,
+    riskStopDistance: null,
+    riskExposureTag: 'intraday',
+    ...overrides,
+  });
+
+  return {
+    id: decision.id,
+    proposalAttemptId: decision.proposalAttemptId,
+    strategyId: decision.strategyId,
+    strategyVersion: decision.strategyVersion,
+    decidedAt: decision.decidedAt,
+    exchange: decision.exchange,
+    tradingsymbol: decision.tradingsymbol,
+    side: decision.side,
+    product: decision.product,
+    quantity: decision.quantity,
+    price: decision.price,
+    triggerPrice: decision.triggerPrice,
+    orderType: decision.orderType,
+    lastPrice: decision.quoteLastPrice,
+    bid: decision.quoteBid,
+    ask: decision.quoteAsk,
+    notional: decision.riskNotional,
+    sizingBasis: decision.riskSizingBasis,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('ModeAwareExecutionService', () => {
+  describe('blocked mode', () => {
+    it('refuses a candidate with ModeBlocked reason', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Blocked,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.strategyDecisionId).toBe(candidate.id);
+      expect(row.executionMode).toBe(ExecutionMode.Blocked);
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBeNull();
+      expect(row.brokerOrderId).toBeNull();
+      expect(row.message).toContain('Blocked');
+      expect(row.completedAt).not.toBeNull();
+
+      // Verify refusal reasons were persisted
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.ModeBlocked);
+    });
+
+    it('persists exactly one attempt row per candidate', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Blocked,
+      });
+
+      await service.execute(candidate, sampleQuote(), sampleInstrument());
+      const count = ctx.attemptRepo.count();
+      expect(count).toBe(1);
+    });
+  });
+
+  describe('paper mode', () => {
+    it('simulates a fill for a valid buy candidate', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.executionMode).toBe(ExecutionMode.Paper);
+      expect(row.status).toBe(ExecutionAttemptStatus.Completed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+      expect(row.brokerOrderId).toContain('paper-');
+      expect(row.completedAt).not.toBeNull();
+
+      // No refusal reasons for a fill
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(0);
+    });
+
+    it('refuses when quote is missing', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, null, sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.StaleOrMissingQuote);
+    });
+
+    it('refuses when instrument is missing', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), null);
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.MissingInstrumentData);
+    });
+
+    it('refuses a sell without valid bid/lastPrice in paper mode', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx, { side: 'sell' });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const quote = sampleQuote({ bid: null, lastPrice: null });
+      const row = await service.execute(candidate, quote, sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.StaleOrMissingQuote);
+    });
+  });
+
+  describe('live mode', () => {
+    it('fails closed when no adapter is configured', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Live,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.executionMode).toBe(ExecutionMode.Live);
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBeNull();
+      expect(row.brokerOrderId).toBeNull();
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.LiveBrokerNotConfigured);
+    });
+
+    it('fails closed when adapter port is not ready', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const mockPort = new MockPlacementPort(false); // not ready
+      const liveAdapter = new LiveExecutionAdapter(mockPort);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter,
+        mode: ExecutionMode.Live,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(mockPort.called).toBe(false); // port was not called because not ready
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.LiveBrokerNotConfigured);
+    });
+
+    it('delegates to adapter when configured and ready', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const mockPort = new MockPlacementPort(true, {
+        success: true,
+        brokerOrderId: 'live-order-999',
+        outcomeCode: ExecutionOutcomeCode.OrderPlaced,
+        message: 'Live order placed successfully',
+      });
+      const liveAdapter = new LiveExecutionAdapter(mockPort);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter,
+        mode: ExecutionMode.Live,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(mockPort.called).toBe(true);
+      expect(row.status).toBe(ExecutionAttemptStatus.Completed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.OrderPlaced);
+      expect(row.brokerOrderId).toBe('live-order-999');
+    });
+
+    it('records failure when adapter returns unsuccessful result', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const mockPort = new MockPlacementPort(true, {
+        success: false,
+        brokerOrderId: null,
+        outcomeCode: ExecutionOutcomeCode.OrderRejected,
+        message: 'Broker rejected the order',
+      });
+      const liveAdapter = new LiveExecutionAdapter(mockPort);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter,
+        mode: ExecutionMode.Live,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(mockPort.called).toBe(true);
+      expect(row.status).toBe(ExecutionAttemptStatus.Failed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.OrderRejected);
+    });
+
+    it('does not fall back to paper when live adapter throws', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      // A port that throws on placeOrder
+      const throwingPort: BrokerPlacementPort = {
+        isReady: true,
+        async placeOrder(_params: OrderPlacementParams): Promise<OrderPlacementResult> {
+          throw new Error('Connection refused');
+        },
+      };
+      const liveAdapter = new LiveExecutionAdapter(throwingPort);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter,
+        mode: ExecutionMode.Live,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      // Must not be paper mode or paper outcome
+      expect(row.executionMode).toBe(ExecutionMode.Live);
+      expect(row.status).toBe(ExecutionAttemptStatus.Failed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.OrderRejected);
+    });
+  });
+
+  describe('idempotency', () => {
+    it('returns existing attempt row on repeated execute for same candidate (blocked)', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Blocked,
+      });
+
+      const row1 = await service.execute(candidate, sampleQuote(), sampleInstrument());
+      const row2 = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      // Both return the same row (id matches, only 1 row in DB)
+      expect(row1.id).toBe(row2.id);
+      const count = ctx.attemptRepo.count();
+      expect(count).toBe(1);
+    });
+
+    it('returns existing attempt row on repeated execute for same candidate (paper)', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row1 = await service.execute(candidate, sampleQuote(), sampleInstrument());
+      const row2 = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row1.id).toBe(row2.id);
+      expect(ctx.attemptRepo.count()).toBe(1);
+    });
+
+    it('does not multiply execution_attempt rows on repeated attempts', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Blocked,
+      });
+
+      await service.execute(candidate, sampleQuote(), sampleInstrument());
+      await service.execute(candidate, sampleQuote(), sampleInstrument());
+      await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      // Only 1 attempt row total — idempotency guard prevents duplicates
+      const count = ctx.attemptRepo.count();
+      expect(count).toBe(1);
+    });
+  });
+
+  describe('mode routing invariants', () => {
+    it('live mode never falls back to paper implicitly', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null, // no live adapter
+        mode: ExecutionMode.Live,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      // Must be live mode, not paper
+      expect(row.executionMode).toBe(ExecutionMode.Live);
+
+      // Must be refused, not simulated
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.LiveBrokerNotConfigured);
+    });
+
+    it('paper mode never performs broker network calls', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      // Should succeed without any network — just uses local quote data
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+      expect(row.status).toBe(ExecutionAttemptStatus.Completed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+    });
+
+    it('isLiveReady returns false when no adapter', () => {
+      const ctx = createContext();
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Blocked,
+      });
+      expect(service.isLiveReady).toBe(false);
+    });
+
+    it('isLiveReady returns true when adapter is ready', () => {
+      const ctx = createContext();
+      const mockPort = new MockPlacementPort(true);
+      const liveAdapter = new LiveExecutionAdapter(mockPort);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter,
+        mode: ExecutionMode.Paper,
+      });
+      expect(service.isLiveReady).toBe(true);
+    });
+  });
+});
