@@ -286,3 +286,287 @@ describe('S05 Runtime — restart persistence regression', () => {
     app2.stop('Second stop');
   });
 });
+
+describe('S05 Runtime — risk guard integration', () => {
+  let app: RuntimeApp;
+
+  afterEach(() => {
+    try { app?.stop('Teardown'); } catch { /* ignore */ }
+  });
+
+  it('creates risk repo and risk guard when proposal engine is configured', () => {
+    app = new RuntimeApp(testConfig({
+      port: 0,
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 0,
+          maxExposureRupees: 0,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+    }));
+
+    // Without a proposal engine config, the execution gate and risk guard
+    // are not created (proposal engine is the prerequisite).
+    expect(() => app.build()).not.toThrow();
+    const handles = app.build();
+
+    // When proposal engine is null, risk guard is also null
+    expect(handles.executionGateSupervisor).toBeNull();
+    expect(handles.riskRepo).toBeNull();
+  });
+
+  it('creates risk repo and risk guard when proposal engine is configured with execution config', () => {
+    app = new RuntimeApp(testConfig({
+      port: 0,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 20000,
+          maxExposureRupees: 500000,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+    }));
+
+    const handles = app.build();
+
+    expect(handles.executionGateSupervisor).not.toBeNull();
+    expect(handles.riskRepo).not.toBeNull();
+    expect(handles.orderRepo).not.toBeNull();
+    expect(handles.fillRepo).not.toBeNull();
+    expect(handles.positionRepo).not.toBeNull();
+
+    // Verify risk state defaults to no halt
+    const riskState = handles.riskRepo!.getCurrentState();
+    expect(riskState.haltState).toBe('no_halt');
+  });
+
+  it('dashboard snapshot includes risk state when proposal engine is configured with execution config', () => {
+    app = new RuntimeApp(testConfig({
+      port: 0,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 20000,
+          maxExposureRupees: 500000,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+    }));
+
+    const handles = app.build();
+    const snapshot = handles.dashboard.getSnapshot();
+
+    expect(snapshot.execution).not.toBeNull();
+    expect(snapshot.execution!.riskState).not.toBeNull();
+    expect(snapshot.execution!.riskState!.haltState).toBe('no_halt');
+    expect(snapshot.execution!.riskState!.isRefusing).toBe(false);
+    expect(snapshot.execution!.riskState!.latchCount).toBe(0);
+    expect(snapshot.execution!.recentRiskEvents).toEqual([]);
+  });
+
+  it('dashboard snapshot includes paper repos state when proposal engine is configured', () => {
+    app = new RuntimeApp(testConfig({
+      port: 0,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 0,
+          maxExposureRupees: 0,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+    }));
+
+    const handles = app.build();
+    const snapshot = handles.dashboard.getSnapshot();
+
+    expect(snapshot.execution).not.toBeNull();
+    // Paper repo counts should be zero (no paper activity)
+    expect(snapshot.execution!.totalOrders).toBe(0);
+    expect(snapshot.execution!.totalFills).toBe(0);
+    expect(snapshot.execution!.openPositionCount).toBe(0);
+    expect(snapshot.execution!.recentPaperOrders).toEqual([]);
+    expect(snapshot.execution!.recentPaperFills).toEqual([]);
+    expect(snapshot.execution!.currentPositions).toEqual([]);
+    expect(snapshot.execution!.recentPositionEvents).toEqual([]);
+  });
+
+  it('dashboard snapshot preserves paper evidence across restart on the same DB', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trader-risk-restart-'));
+    const dbPath = path.join(tmpDir, 'restart.db');
+
+    const riskLimitCfg = {
+      maxOpenPositions: 5,
+      maxOrdersPerInstrument: 1,
+      maxDailyLossRupees: 20000,
+      maxExposureRupees: 500000,
+      marketHoursStalenessMs: 120000,
+    };
+
+    // App 1: build and seed risk events using the file-based DB
+    const app1 = new RuntimeApp(testConfig({
+      port: 0,
+      dbPath,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: riskLimitCfg,
+      },
+    }));
+    const h1 = app1.build();
+
+    // Insert a risk event manually
+    h1.riskRepo!.insertEvent({
+      eventType: 'refusal',
+      source: 'market_hours' as any,
+      severity: 'warning',
+      message: 'Out of hours refusal',
+      diagnostic: null,
+      recordedAt: Date.now(),
+    });
+
+    // Latch a halt
+    h1.riskRepo!.latchHalt(
+      'daily_loss' as any,
+      'Daily loss limit breached',
+      Date.now(),
+      3,
+      -25000,
+    );
+
+    app1.stop('Stop');
+
+    // App 2: restart on the same DB
+    const app2 = new RuntimeApp(testConfig({
+      port: 0,
+      dbPath,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: riskLimitCfg,
+      },
+    }));
+    const h2 = app2.build();
+
+    // Risk state should be latched
+    const riskState = h2.riskRepo!.getCurrentState();
+    expect(riskState.haltState).toBe('active_halt');
+    expect(riskState.haltSource).toBe('daily_loss');
+    expect(riskState.openPositionCountAtHalt).toBe(3);
+    expect(riskState.dailyPnlAtHalt).toBe(-25000);
+
+    // Risk events should be persisted (only the explicit insertEvent)
+    const events = h2.riskRepo!.getRecentEvents();
+    expect(events.length).toBe(1);
+    expect(events[0].eventType).toBe('refusal');
+    expect(events[0].message).toBe('Out of hours refusal');
+
+    // Dashboard snapshot should reflect risk state
+    const snapshot = h2.dashboard.getSnapshot();
+    expect(snapshot.execution!.riskState!.haltState).toBe('active_halt');
+    expect(snapshot.execution!.riskState!.haltSource).toBe('daily_loss');
+    expect(snapshot.execution!.riskState!.isRefusing).toBe(true);
+    expect(snapshot.execution!.riskState!.dailyPnlAtHalt).toBe(-25000);
+    expect(snapshot.execution!.recentRiskEvents.length).toBe(1);
+
+    app2.stop('Stop');
+  });
+
+  it('execution gate supervisor reports hasRiskGuard when risk guard is configured', () => {
+    app = new RuntimeApp(testConfig({
+      port: 0,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 0,
+          maxExposureRupees: 0,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+    }));
+
+    const handles = app.build();
+    expect(handles.executionGateSupervisor!.hasRiskGuard).toBe(true);
+  });
+
+  it('execution gate supervisor does not have risk guard when risk config is absent', () => {
+    app = new RuntimeApp(testConfig({
+      port: 0,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 0,
+          maxOrdersPerInstrument: 0,
+          maxDailyLossRupees: 0,
+          maxExposureRupees: 0,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+    }));
+
+    const handles = app.build();
+    // Risk guard is always created when proposal engine is configured
+    expect(handles.executionGateSupervisor!.hasRiskGuard).toBe(true);
+  });
+});

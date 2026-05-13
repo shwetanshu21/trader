@@ -37,6 +37,8 @@ import { ExecutionGateSupervisor } from '../execution/execution-gate-supervisor.
 import { ModeAwareExecutionService } from '../execution/mode-aware-execution-service.js';
 import { PaperExecutionPolicy } from '../execution/paper-execution-policy.js';
 import { PaperExecutionLedger } from '../execution/paper-execution-ledger.js';
+import { ExecutionRiskGuard } from '../execution/execution-risk-guard.js';
+import { ExecutionRiskRepository } from '../persistence/execution-risk-repo.js';
 import { PaperOrderRepository } from '../persistence/paper-order-repo.js';
 import { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import { PaperPositionRepository } from '../persistence/paper-position-repo.js';
@@ -81,6 +83,14 @@ export interface RuntimeAppHandles {
   executionGateSupervisor: ExecutionGateSupervisor | null;
   strategyRiskSupervisor: StrategyRiskSupervisor | null;
   dashboard: DashboardReadModel;
+  /** Paper order repository (available when proposal engine is configured). */
+  orderRepo: PaperOrderRepository | null;
+  /** Paper fill repository (available when proposal engine is configured). */
+  fillRepo: PaperFillRepository | null;
+  /** Paper position repository (available when proposal engine is configured). */
+  positionRepo: PaperPositionRepository | null;
+  /** Execution risk repository (available when proposal engine is configured). */
+  riskRepo: ExecutionRiskRepository | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +256,12 @@ export class RuntimeApp {
     let strategyRiskSupervisor: StrategyRiskSupervisor | null = null;
     let strategyDecisionRepo: StrategyDecisionRepository | null = null;
     let executionService: ModeAwareExecutionService | null = null;
+    let riskRepo: ExecutionRiskRepository | null = null;
+    let riskGuard: ExecutionRiskGuard | null = null;
+    // Paper trading repos (available when proposal engine is configured)
+    let orderRepo: PaperOrderRepository | null = null;
+    let fillRepo: PaperFillRepository | null = null;
+    let positionRepo: PaperPositionRepository | null = null;
 
     if (this.config.proposalEngine) {
       logBoot('Proposal engine: configured');
@@ -271,9 +287,9 @@ export class RuntimeApp {
       // Build ModeAwareExecutionService with the configured mode
       // and the paper execution ledger for atomic downstream persistence
       const paperPolicy = new PaperExecutionPolicy();
-      const orderRepo = new PaperOrderRepository(dbManager.db);
-      const fillRepo = new PaperFillRepository(dbManager.db);
-      const positionRepo = new PaperPositionRepository(dbManager.db);
+      orderRepo = new PaperOrderRepository(dbManager.db);
+      fillRepo = new PaperFillRepository(dbManager.db);
+      positionRepo = new PaperPositionRepository(dbManager.db);
       const paperLedger = new PaperExecutionLedger({
         db: dbManager.db,
         attemptRepo: executionAttemptRepo,
@@ -292,11 +308,24 @@ export class RuntimeApp {
         mode: this.config.execution.mode,
       });
 
+      // ExecutionRiskGuard — market-hours, kill-switch, duplicate,
+      // exposure-cap, and daily-loss checks before execution
+      riskRepo = new ExecutionRiskRepository(dbManager.db);
+      riskGuard = new ExecutionRiskGuard({
+        riskRepo,
+        marketClock: clock,
+        riskLimits: this.config.execution.riskLimits,
+        positionRepo,
+        orderRepo,
+        brokerRepo,
+      });
+
       executionGateSupervisor = new ExecutionGateSupervisor({
         strategyDecisionRepo,
         executionService,
         attemptRepo: executionAttemptRepo,
         brokerRepo,
+        riskGuard,
       });
 
       // StrategyRiskSupervisor — evaluates accepted proposals via the
@@ -352,6 +381,10 @@ export class RuntimeApp {
       universeService,
       attemptRepo: executionAttemptRepo,
       executionMode: this.config.execution.mode,
+      paperOrderRepo: orderRepo,
+      paperFillRepo: fillRepo,
+      paperPositionRepo: positionRepo,
+      riskRepo,
     });
 
     // ── Phase 8: create health HTTP server with dashboard routes ───────────
@@ -383,6 +416,10 @@ export class RuntimeApp {
       executionGateSupervisor,
       strategyRiskSupervisor,
       dashboard,
+      orderRepo: orderRepo ?? null,
+      fillRepo: fillRepo ?? null,
+      positionRepo: positionRepo ?? null,
+      riskRepo,
     };
 
     return this._handles;

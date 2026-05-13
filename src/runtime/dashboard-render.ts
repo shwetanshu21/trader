@@ -212,6 +212,35 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
           <td>${e.realizedPnl.toFixed(2)}</td>
         </tr>`).join('');
 
+    // ── Risk state section ────────────────────────────────────────────
+    const riskStateSection = execution.riskState ? `
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Risk State</h3>
+        <table style="margin-top:0.5rem;">
+          <tr><td>Halt State</td><td class="td-value"><span class="verdict" style="background:${execution.riskState.isRefusing ? '#dc262622' : '#16a34a22'};color:${execution.riskState.isRefusing ? '#dc2626' : '#16a34a'}">${escapeHtml(execution.riskState.haltState)}</span></td></tr>
+          <tr><td>Halt Source</td><td class="td-value">${execution.riskState.haltSource ? escapeHtml(execution.riskState.haltSource) : '—'}</td></tr>
+          <tr><td>Halt Reason</td><td class="td-value">${execution.riskState.haltReason ? escapeHtml(execution.riskState.haltReason) : '—'}</td></tr>
+          <tr><td>Halted At</td><td class="td-value">${execution.riskState.haltedAt ?? '—'}</td></tr>
+          <tr><td>Is Refusing</td><td class="td-value">${execution.riskState.isRefusing ? 'Yes' : 'No'}</td></tr>
+          <tr><td>Latch Count</td><td class="td-value">${execution.riskState.latchCount}</td></tr>
+          <tr><td>Positions At Halt</td><td class="td-value">${execution.riskState.openPositionCountAtHalt ?? '—'}</td></tr>
+          <tr><td>Daily P&amp;L At Halt</td><td class="td-value">${execution.riskState.dailyPnlAtHalt != null ? execution.riskState.dailyPnlAtHalt.toFixed(2) : '—'}</td></tr>
+        </table>` : '<p class="muted" style="margin-top:0.5rem;">No risk state available</p>';
+
+    // ── Recent risk events table ──────────────────────────────────────
+    const riskEvents = execution.recentRiskEvents ?? [];
+    const riskEventsRows = riskEvents.length === 0
+      ? '<tr><td colspan="4" class="muted">No risk events</td></tr>'
+      : execution.recentRiskEvents.map(e => {
+        const severityColor = e.severity === 'critical' ? '#dc2626' : e.severity === 'warning' ? '#d97706' : '#94a3b8';
+        return `<tr>
+          <td>${escapeHtml(e.recordedAt)}</td>
+          <td>${escapeHtml(e.eventType)}</td>
+          <td><span class="verdict" style="background:${severityColor}22;color:${severityColor}">${escapeHtml(e.severity)}</span></td>
+          <td>${escapeHtml(e.message)}</td>
+        </tr>`;
+      }).join('');
+
+    // ── Build the full execution HTML block ─────────────────────────────
     executionSection = `
       <div class="section">
         <h2>Execution</h2>
@@ -223,6 +252,12 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
           <tr><td>Gate Refusing</td><td class="td-value">${execution.isGateRefusing ? 'Yes' : 'No'}</td></tr>
           <tr><td>Gate Reason</td><td class="td-value">${execution.gateRefusalReason ? escapeHtml(execution.gateRefusalReason) : '—'}</td></tr>
           <tr><td>Last Attempt</td><td class="td-value">${lastAttemptSymbol} (${escapeHtml(lastAttemptVerdict)})</td></tr>
+        </table>
+        ${riskStateSection}
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Recent Risk Events (${riskEvents.length})</h3>
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>Timestamp</td><td>Type</td><td>Severity</td><td>Message</td></tr></thead>
+          <tbody>${riskEventsRows}</tbody>
         </table>
         ${execution.recentAttempts.length > 0 ? `
         <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Recent Attempts</h3>

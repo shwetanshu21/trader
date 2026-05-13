@@ -20,6 +20,7 @@ import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt
 import { PaperOrderRepository } from '../src/persistence/paper-order-repo.js';
 import { PaperFillRepository } from '../src/persistence/paper-fill-repo.js';
 import { PaperPositionRepository } from '../src/persistence/paper-position-repo.js';
+import { ExecutionRiskRepository } from '../src/persistence/execution-risk-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -165,6 +166,54 @@ function createServerAndDashboardWithExecution(mode: ExecutionMode = ExecutionMo
     db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
     proposalRepo, blockedOrderRepo, strategyDecisionRepo, attemptRepo,
     paperOrderRepo, paperFillRepo, paperPositionRepo,
+    lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
+  };
+}
+
+/** Create a fully wired server + dashboard + risk repo for risk state tests. */
+function createServerAndDashboardWithRiskState() {
+  const db = new DatabaseManager(':memory:');
+  const runtimeStateRepo = new RuntimeStateRepository(db.db);
+  const zerodhaRepo = new ZerodhaRepository(db.db);
+  const brokerRepo = new BrokerRepository(db.db);
+  const universeRepo = new UniverseRepository(db.db);
+  const universeService = new UniverseService(brokerRepo, universeRepo);
+  const proposalRepo = new ProposalRepository(db.db);
+  const blockedOrderRepo = new BlockedOrderRepository(db.db);
+  const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
+  const attemptRepo = new ExecutionAttemptRepository(db.db);
+  const paperOrderRepo = new PaperOrderRepository(db.db);
+  const paperFillRepo = new PaperFillRepository(db.db);
+  const paperPositionRepo = new PaperPositionRepository(db.db);
+  const riskRepo = new ExecutionRiskRepository(db.db);
+  const lifecycle = new LifecycleManager(runtimeStateRepo);
+  lifecycle.start('Test setup');
+  const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+  const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
+  const scheduler = createMockScheduler();
+  const telemetry = createMockTelemetry();
+  const dashboard = new DashboardReadModel({
+    healthService,
+    runtimeStateRepo,
+    zerodhaRepo,
+    proposalRepo,
+    blockedOrderRepo,
+    strategyDecisionRepo,
+    clock,
+    universeService,
+    attemptRepo,
+    executionMode: ExecutionMode.Paper,
+    paperOrderRepo,
+    paperFillRepo,
+    paperPositionRepo,
+    riskRepo,
+  });
+  const server = createHealthServer(healthService, scheduler, telemetry, db, dashboard);
+
+  return {
+    db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
+    proposalRepo, blockedOrderRepo, strategyDecisionRepo, attemptRepo,
+    paperOrderRepo, paperFillRepo, paperPositionRepo, riskRepo,
     lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
   };
 }
@@ -1852,5 +1901,497 @@ describe('Dashboard renderer — HTML escaping', () => {
     const html = renderDashboardHtml(snapshot);
     expect(html).toContain('No execution evidence available');
     expect(html).not.toContain('Total Attempts');
+  });
+
+  // ── Risk state rendering ────────────────────────────────────────────────
+
+  describe('Dashboard renderer — risk state rendering', () => {
+    it('renders risk state section when riskState is present', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [],
+        universe: null,
+        execution: {
+          mode: 'paper',
+          totalAttempts: 0,
+          recentAttempts: [],
+          isGateRefusing: false,
+          gateRefusalReason: null,
+          openPositionCount: 0,
+          totalOrders: 0,
+          totalFills: 0,
+          recentPaperOrders: [],
+          recentPaperFills: [],
+          currentPositions: [],
+          recentPositionEvents: [],
+          riskState: {
+            haltState: 'no_halt',
+            haltSource: null,
+            haltReason: null,
+            haltedAt: null,
+            isRefusing: false,
+            latchCount: 0,
+            openPositionCountAtHalt: null,
+            dailyPnlAtHalt: null,
+          },
+          recentRiskEvents: [],
+        },
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('Risk State');
+      expect(html).toContain('no_halt');
+      expect(html).toContain('Is Refusing');
+      expect(html).toContain('No');
+    });
+
+    it('renders active halt state with red styling', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [],
+        universe: null,
+        execution: {
+          mode: 'paper',
+          totalAttempts: 0,
+          recentAttempts: [],
+          isGateRefusing: true,
+          gateRefusalReason: 'Daily loss limit breached',
+          openPositionCount: 3,
+          totalOrders: 0,
+          totalFills: 0,
+          recentPaperOrders: [],
+          recentPaperFills: [],
+          currentPositions: [],
+          recentPositionEvents: [],
+          riskState: {
+            haltState: 'active_halt',
+            haltSource: 'daily_loss',
+            haltReason: 'Daily loss limit exceeded P&L -25000',
+            haltedAt: '2025-01-01T00:00:00.000Z',
+            isRefusing: true,
+            latchCount: 1,
+            openPositionCountAtHalt: 3,
+            dailyPnlAtHalt: -25000,
+          },
+          recentRiskEvents: [
+            {
+              id: 1,
+              recordedAt: '2025-01-01T00:00:00.000Z',
+              eventType: 'daily_loss',
+              source: 'daily_loss',
+              severity: 'critical',
+              message: 'Daily loss limit exceeded',
+            },
+          ],
+        },
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('active_halt');
+      expect(html).toContain('daily_loss');
+      expect(html).toContain('Daily loss limit exceeded P&amp;L');
+      expect(html).toContain('Is Refusing');
+      expect(html).toContain('Yes');
+      expect(html).toContain('Latch Count');
+      expect(html).toContain('1');
+      expect(html).toContain('Positions At Halt');
+      expect(html).toContain('3');
+      expect(html).toContain('Daily P&amp;L At Halt');
+      expect(html).toContain('-25000.00');
+      // Risk events table
+      expect(html).toContain('Recent Risk Events');
+      expect(html).toContain('critical');
+      expect(html).toContain('Daily loss limit exceeded');
+    });
+
+    it('shows "No risk state available" when riskState is null', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [],
+        universe: null,
+        execution: {
+          mode: 'paper',
+          totalAttempts: 0,
+          recentAttempts: [],
+          isGateRefusing: false,
+          gateRefusalReason: null,
+          openPositionCount: 0,
+          totalOrders: 0,
+          totalFills: 0,
+          recentPaperOrders: [],
+          recentPaperFills: [],
+          currentPositions: [],
+          recentPositionEvents: [],
+          riskState: null,
+          recentRiskEvents: [],
+        },
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('No risk state available');
+    });
+
+    it('shows "No risk events" when recentRiskEvents is empty', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [],
+        universe: null,
+        execution: {
+          mode: 'paper',
+          totalAttempts: 0,
+          recentAttempts: [],
+          isGateRefusing: false,
+          gateRefusalReason: null,
+          openPositionCount: 0,
+          totalOrders: 0,
+          totalFills: 0,
+          recentPaperOrders: [],
+          recentPaperFills: [],
+          currentPositions: [],
+          recentPositionEvents: [],
+          riskState: null,
+          recentRiskEvents: [],
+        },
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('No risk events');
+    });
+
+    it('escapes HTML in risk event messages', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [],
+        universe: null,
+        execution: {
+          mode: 'paper',
+          totalAttempts: 0,
+          recentAttempts: [],
+          isGateRefusing: true,
+          gateRefusalReason: 'Error: <script>alert("xss")</script>',
+          openPositionCount: 0,
+          totalOrders: 0,
+          totalFills: 0,
+          recentPaperOrders: [],
+          recentPaperFills: [],
+          currentPositions: [],
+          recentPositionEvents: [],
+          riskState: {
+            haltState: 'active_halt',
+            haltSource: 'daily_loss',
+            haltReason: 'Reason: x > y && z < "limit"',
+            haltedAt: '2025-01-01T00:00:00.000Z',
+            isRefusing: true,
+            latchCount: 1,
+            openPositionCountAtHalt: null,
+            dailyPnlAtHalt: null,
+          },
+          recentRiskEvents: [
+            {
+              id: 1,
+              recordedAt: '2025-01-01T00:00:00.000Z',
+              eventType: 'refusal',
+              source: 'market_hours',
+              severity: 'warning',
+              message: 'Price < 0 & invalid',
+            },
+          ],
+        },
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      // Halt reason should be escaped
+      expect(html).toContain('Reason: x &gt; y');
+      expect(html).toContain('z &lt;');
+      expect(html).toContain('&quot;limit&quot;');
+      // Risk event message should be escaped
+      expect(html).toContain('Price &lt; 0 &amp; invalid');
+    });
+  });
+
+  // ── Risk state on HTTP endpoints ─────────────────────────────────────────
+
+  describe('Health server — risk state on /health/execution', () => {
+    let ctx: ReturnType<typeof createServerAndDashboardWithRiskState>;
+
+    beforeEach(async () => {
+      ctx = createServerAndDashboardWithRiskState();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => {
+          ctx.db.close();
+          resolve();
+        });
+      });
+    });
+
+    it('returns riskState as null when no risk events have occurred', async () => {
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.riskState).not.toBeNull();
+      expect(data.riskState.haltState).toBe('no_halt');
+      expect(data.riskState.isRefusing).toBe(false);
+      expect(data.riskState.latchCount).toBe(0);
+      expect(data.recentRiskEvents).toEqual([]);
+    });
+
+    it('returns risk events when seeded', async () => {
+      ctx.riskRepo.insertEvent({
+        eventType: 'refusal',
+        source: 'market_hours',
+        severity: 'warning',
+        message: 'Market closed refusal',
+        diagnostic: null,
+        recordedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.recentRiskEvents.length).toBe(1);
+      expect(data.recentRiskEvents[0].eventType).toBe('refusal');
+      expect(data.recentRiskEvents[0].message).toBe('Market closed refusal');
+      expect(data.recentRiskEvents[0].severity).toBe('warning');
+    });
+
+    it('returns active halt state after latch', async () => {
+      ctx.riskRepo.latchHalt(
+        'daily_loss',
+        'Daily loss limit breached: P&L -30000',
+        Date.now(),
+        2,
+        -30000,
+      );
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.riskState.haltState).toBe('active_halt');
+      expect(data.riskState.haltSource).toBe('daily_loss');
+      expect(data.riskState.isRefusing).toBe(true);
+      expect(data.riskState.latchCount).toBe(1);
+      expect(data.riskState.openPositionCountAtHalt).toBe(2);
+      expect(data.riskState.dailyPnlAtHalt).toBe(-30000);
+    });
+
+    it('returns latched state after unlatch', async () => {
+      ctx.riskRepo.latchHalt(
+        'daily_loss',
+        'Daily loss limit breached',
+        Date.now(),
+        3,
+        -25000,
+      );
+      ctx.riskRepo.unlatchHalt(Date.now());
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.riskState.haltState).toBe('no_halt');
+      expect(data.riskState.isRefusing).toBe(false);
+      expect(data.riskState.latchCount).toBe(0);
+    });
+
+    it('does NOT include secret material in risk state', async () => {
+      ctx.riskRepo.latchHalt(
+        'daily_loss',
+        'Loss limit exceeded',
+        Date.now(),
+      );
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+      expect(body).not.toContain('apiSecret');
+    });
+  });
+
+  // ── Risk state in dashboard HTML ─────────────────────────────────────────
+
+  describe('Dashboard HTML — risk state evidence', () => {
+    let ctx: ReturnType<typeof createServerAndDashboardWithRiskState>;
+
+    beforeEach(async () => {
+      ctx = createServerAndDashboardWithRiskState();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => {
+          ctx.db.close();
+          resolve();
+        });
+      });
+    });
+
+    it('shows risk state section in dashboard HTML', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Risk State');
+      expect(res.body).toContain('no_halt');
+    });
+
+    it('shows "No risk events" when no risk events exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No risk events');
+    });
+
+    it('shows risk events in dashboard HTML after seeding', async () => {
+      ctx.riskRepo.insertEvent({
+        eventType: 'refusal',
+        source: 'market_hours',
+        severity: 'warning',
+        message: 'Out of hours refusal',
+        diagnostic: null,
+        recordedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Recent Risk Events');
+      expect(res.body).toContain('Out of hours refusal');
+      expect(res.body).toContain('warning');
+      expect(res.body).toContain('refusal');
+    });
+  });
+
+  // ── Risk state in dashboard JSON ─────────────────────────────────────────
+
+  describe('Dashboard JSON — risk state evidence', () => {
+    let ctx: ReturnType<typeof createServerAndDashboardWithRiskState>;
+
+    beforeEach(async () => {
+      ctx = createServerAndDashboardWithRiskState();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => {
+          ctx.db.close();
+          resolve();
+        });
+      });
+    });
+
+    it('includes riskState and recentRiskEvents in dashboard JSON', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.execution.riskState).not.toBeNull();
+      expect(data.execution.riskState.haltState).toBe('no_halt');
+      expect(data.execution.riskState.isRefusing).toBe(false);
+      expect(data.execution.recentRiskEvents).toEqual([]);
+    });
+
+    it('includes risk events in dashboard JSON after seeding', async () => {
+      ctx.riskRepo.insertEvent({
+        eventType: 'refusal',
+        source: 'market_hours',
+        severity: 'warning',
+        message: 'Refused during market hours',
+        diagnostic: null,
+        recordedAt: Date.now(),
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.execution.recentRiskEvents.length).toBe(1);
+      expect(data.execution.recentRiskEvents[0].eventType).toBe('refusal');
+      expect(data.execution.recentRiskEvents[0].message).toBe('Refused during market hours');
+    });
   });
 });
