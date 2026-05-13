@@ -263,6 +263,8 @@ export interface RuntimeConfig {
   zerodha: BrokerConfig | null;
   /** Proposal engine config. Null when env vars are absent (graceful degraded mode). */
   proposalEngine: ProposalEngineConfig | null;
+  /** Execution mode config. Default: blocked. */
+  execution: ExecutionConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -996,6 +998,240 @@ export interface StrategyRefusal {
   decidedAt: number;
   /** Ordered refusal reasons. */
   reasons: StrategyDecisionReason[];
+}
+
+// ---------------------------------------------------------------------------
+// Execution — mode config, attempt/outcome DTOs, and broker placement seam
+// ---------------------------------------------------------------------------
+
+/**
+ * Execution mode for the runtime.
+ * - `blocked`: All execution attempts are recorded as refused with a milestone-hard-block
+ *   reason (fallback while M003 hard block is active).
+ * - `paper`: Execution attempts proceed through paper-broker simulation; no real orders placed.
+ * - `live`: Execution attempts proceed through the live broker transport.
+ */
+export enum ExecutionMode {
+  Blocked = 'blocked',
+  Paper = 'paper',
+  Live = 'live',
+}
+
+/** Status of a single execution attempt. */
+export enum ExecutionAttemptStatus {
+  /** Attempt is pending (intermediate state before dispatch). */
+  Pending = 'pending',
+  /** Attempt was dispatched to the broker placement seam. */
+  Dispatched = 'dispatched',
+  /** Attempt completed with a definitive outcome. */
+  Completed = 'completed',
+  /** Attempt failed before or during broker dispatch. */
+  Failed = 'failed',
+  /** Attempt was refused by the execution gate (mode check, invariant violation). */
+  Refused = 'refused',
+}
+
+/** Machine-readable outcome codes for completed execution attempts. */
+export enum ExecutionOutcomeCode {
+  /** Order was placed successfully (live or paper). */
+  OrderPlaced = 'order_placed',
+  /** Order was rejected by the broker. */
+  OrderRejected = 'order_rejected',
+  /** Order was accepted but partially filled. */
+  PartialFill = 'partial_fill',
+  /** Order was fully filled. */
+  FullFill = 'full_fill',
+  /** Order was cancelled before execution. */
+  Cancelled = 'cancelled',
+  /** Order expired (GTD / day order). */
+  Expired = 'expired',
+  /** Paper broker simulated a successful placement. */
+  PaperSimulated = 'paper_simulated',
+  /** Paper broker simulated a rejection. */
+  PaperRejected = 'paper_rejected',
+}
+
+/** Machine-readable refusal reason codes for execution gate refusals. */
+export enum ExecutionRefusalCode {
+  /** Execution mode is set to 'blocked' — all attempts refused. */
+  ModeBlocked = 'mode_blocked',
+  /** Execution mode is 'paper' but no paper broker is configured. */
+  PaperBrokerNotConfigured = 'paper_broker_not_configured',
+  /** Execution mode is 'live' but no live broker is configured. */
+  LiveBrokerNotConfigured = 'live_broker_not_configured',
+  /** The strategy decision has already been consumed (idempotency guard). */
+  AlreadyConsumed = 'already_consumed',
+  /** Market is closed for the instrument's segment. */
+  MarketClosed = 'market_closed',
+  /** Session is not authenticated for the target broker. */
+  SessionNotAuthenticated = 'session_not_authenticated',
+  /** Quote is stale or missing for execution. */
+  StaleOrMissingQuote = 'stale_or_missing_quote',
+  /** Instrument metadata is missing. */
+  MissingInstrumentData = 'missing_instrument_data',
+  /** Notional or risk check failed at execution time. */
+  RiskCheckFailed = 'risk_check_failed',
+}
+
+/** A single refusal reason attached to an execution attempt. */
+export interface ExecutionRefusalReason {
+  /** Machine-readable refusal code. */
+  reasonCode: ExecutionRefusalCode;
+  /** Human-readable explanation. */
+  reasonMessage: string;
+}
+
+/**
+ * Full persisted execution attempt row.
+ *
+ * One row per strategy decision (UNIQUE on strategy_decision_id).
+ * Immutable after insert — represents a single consumption attempt.
+ */
+export interface ExecutionAttemptRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → strategy_decisions(id). UNIQUE — idempotency key. */
+  strategyDecisionId: number;
+  /** Execution mode that was active when this attempt was created. */
+  executionMode: ExecutionMode;
+  /** Current status of the attempt. */
+  status: ExecutionAttemptStatus;
+  /** Machine-readable outcome code (null until completed). */
+  outcomeCode: ExecutionOutcomeCode | null;
+  /** Broker order ID if one was obtained (null for refusals/failures). */
+  brokerOrderId: string | null;
+  /** Human-readable result message. */
+  message: string;
+  /** Unix timestamp (ms) when this attempt was created. */
+  attemptedAt: number;
+  /** Unix timestamp (ms) when this attempt completed or failed, or null. */
+  completedAt: number | null;
+}
+
+/** Shape for inserting a new execution attempt (without id, timestamps). */
+export interface NewExecutionAttempt {
+  strategyDecisionId: number;
+  executionMode: ExecutionMode;
+  status: ExecutionAttemptStatus;
+  outcomeCode: ExecutionOutcomeCode | null;
+  brokerOrderId: string | null;
+  message: string;
+  attemptedAt: number;
+  completedAt: number | null;
+}
+
+/** A refusal reason linked to an execution attempt row. */
+export interface ExecutionAttemptRefusalRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → execution_attempts(id). */
+  executionAttemptId: number;
+  /** Machine-readable refusal code. */
+  reasonCode: ExecutionRefusalCode;
+  /** Human-readable explanation. */
+  reasonMessage: string;
+}
+
+// ---------------------------------------------------------------------------
+// Execution dashboard/health DTOs
+// ---------------------------------------------------------------------------
+
+/** A recent execution attempt for the operator dashboard. */
+export interface DashboardExecutionAttempt {
+  /** Execution attempt row ID. */
+  id: number;
+  /** Source strategy decision ID. */
+  strategyDecisionId: number;
+  /** Execution mode at attempt time. */
+  executionMode: string;
+  /** Current status. */
+  status: string;
+  /** Outcome code, or null. */
+  outcomeCode: string | null;
+  /** Broker order ID, or null. */
+  brokerOrderId: string | null;
+  /** Human-readable message. */
+  message: string;
+  /** ISO‑8601 timestamp when attempted. */
+  attemptedAt: string;
+  /** ISO‑8601 timestamp when completed/failed, or null. */
+  completedAt: string | null;
+  /** Trading symbol for display. */
+  tradingsymbol: string;
+  /** Exchange. */
+  exchange: string;
+  /** Refusal reasons, if any. */
+  refusalReasons: string[];
+}
+
+/** Execution health summary block — published on /health. */
+export interface ExecutionHealth {
+  /** Current execution mode. */
+  mode: string;
+  /** Total attempts recorded. */
+  totalAttempts: number;
+  /** Recent attempts for diagnostics (newest first, max 5). */
+  recentAttempts: DashboardExecutionAttempt[];
+  /** Whether the execution gate is actively refusing (mode-blocked). */
+  isGateRefusing: boolean;
+  /** Current gate refusal reason, if any. */
+  gateRefusalReason: string | null;
+}
+
+/** Execution config block within RuntimeConfig. */
+export interface ExecutionConfig {
+  /** Execution mode. Default: 'blocked'. */
+  mode: ExecutionMode;
+  /** Paper broker endpoint (optional, for paper mode). */
+  paperBrokerUrl?: string;
+  /** Max retry attempts for failed dispatches. */
+  maxRetries: number;
+}
+
+// ---------------------------------------------------------------------------
+// Broker placement seam — abstract port for order execution
+// ---------------------------------------------------------------------------
+
+/** Parameters for a broker order placement call. */
+export interface OrderPlacementParams {
+  exchange: string;
+  tradingsymbol: string;
+  side: string;
+  product: string;
+  quantity: number;
+  price: number | null;
+  triggerPrice: number | null;
+  orderType: string;
+  tag?: string;
+}
+
+/** Result of a broker order placement call. */
+export interface OrderPlacementResult {
+  /** Whether the placement was successful. */
+  success: boolean;
+  /** Broker order ID if placed successfully. */
+  brokerOrderId: string | null;
+  /** Outcome code for the execution attempt. */
+  outcomeCode: ExecutionOutcomeCode;
+  /** Human-readable message. */
+  message: string;
+  /** Broker response metadata. */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Broker placement port — the seam where execution attempts cross from
+ * the execution service into broker-specific transport.
+ *
+ * Implementations live in broker packages (paper, live). This port ensures
+ * no execution path reaches the broker without going through the mode-aware
+ * execution gate.
+ */
+export interface BrokerPlacementPort {
+  /** Place an order. Returns a result with outcome and broker order ID. */
+  placeOrder(params: OrderPlacementParams): Promise<OrderPlacementResult>;
+  /** Whether this port is configured and ready. */
+  readonly isReady: boolean;
 }
 
 export type {

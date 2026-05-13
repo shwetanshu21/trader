@@ -239,6 +239,31 @@ CREATE TABLE IF NOT EXISTS strategy_decision_reasons (
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategy_reasons_decision ON strategy_decision_reasons(strategy_decision_id);
+
+CREATE TABLE IF NOT EXISTS execution_attempts (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_decision_id  INTEGER NOT NULL UNIQUE REFERENCES strategy_decisions(id),
+  execution_mode        TEXT    NOT NULL,
+  status                TEXT    NOT NULL,
+  outcome_code          TEXT,
+  broker_order_id       TEXT,
+  message               TEXT    NOT NULL DEFAULT '',
+  attempted_at          INTEGER NOT NULL,
+  completed_at          INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_attempts_decision ON execution_attempts(strategy_decision_id);
+CREATE INDEX IF NOT EXISTS idx_execution_attempts_status ON execution_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_execution_attempts_attempted ON execution_attempts(attempted_at);
+
+CREATE TABLE IF NOT EXISTS execution_attempt_refusal_reasons (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  execution_attempt_id  INTEGER NOT NULL REFERENCES execution_attempts(id),
+  reason_code           TEXT    NOT NULL,
+  reason_message        TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_refusal_attempt ON execution_attempt_refusal_reasons(execution_attempt_id);
 `;
 
 export class DatabaseManager {

@@ -187,23 +187,19 @@ export class StrategyDecisionRepository {
   /**
    * Retrieve approved strategy decisions that have not yet been consumed by execution.
    *
-   * This is the core query seam for S03 consumption: downstream stages (execution gate,
-   * order router) should call this method instead of reading raw accepted proposals.
+   * Joins strategy_decisions with execution_attempts, returning only approved
+   * decisions that have no corresponding execution attempt row.
    *
-   * Currently returns all approved decisions. When a consumption-tracking table is added
-   * (e.g. execution_attempts), change the query to:
-   *
-   *   SELECT sd.* FROM strategy_decisions sd
-   *   LEFT JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
-   *   WHERE sd.decision_status = 'approved' AND ea.id IS NULL
-   *   ORDER BY sd.decided_at ASC
-   *   LIMIT ?
+   * This is the canonical consumption seam for S03 — once a strategy decision
+   * has an execution attempt, it will not appear here.
    */
   getApprovedUnconsumedCandidates(limit = 100): StrategyApprovedCandidate[] {
     const rows = this._db.prepare(`
-      SELECT * FROM strategy_decisions
-      WHERE decision_status = ?
-      ORDER BY decided_at ASC
+      SELECT sd.* FROM strategy_decisions sd
+      LEFT JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
+      WHERE sd.decision_status = ?
+        AND ea.id IS NULL
+      ORDER BY sd.decided_at ASC
       LIMIT ?
     `).all(StrategyDecisionStatus.Approved, limit) as StrategyDecisionDbRow[];
 

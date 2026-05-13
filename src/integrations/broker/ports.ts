@@ -62,3 +62,13 @@ export interface BrokerMcpDriver {
 }
 
 export type ZerodhaMcpDriver = BrokerMcpDriver;
+
+// ── Broker placement seam ───────────────────────────────────────────────────
+// Re-exported from the runtime types boundary so broker packages can implement
+// BrokerPlacementPort without importing from the runtime layer directly.
+
+export type {
+  BrokerPlacementPort,
+  OrderPlacementParams,
+  OrderPlacementResult,
+} from '../../types/runtime.js';

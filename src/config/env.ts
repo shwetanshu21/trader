@@ -1,4 +1,5 @@
-import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig } from '../types/runtime.js';
+import { ExecutionMode } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Parsed env accessor — reads `process.env` once at startup.
@@ -112,6 +113,9 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
   // ── PROPOSAL ENGINE ────────────────────────────────────────────────────
   const proposalEngine = parseProposalEngineConfig(env, errors);
 
+  // ── EXECUTION MODE ─────────────────────────────────────────────────────
+  const execution = parseExecutionConfig(env, errors);
+
   // ── Fail on hard errors ─────────────────────────────────────────────────
   if (errors.length > 0) {
     const summary = errors.map(e => `  — ${e.field}: ${e.message}`).join('\n');
@@ -138,6 +142,7 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     broker,
     zerodha: broker,
     proposalEngine,
+    execution,
   };
 }
 
@@ -382,6 +387,69 @@ function parseProposalEngineConfig(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Parse execution mode configuration.
+ * TRADER_EXECUTION_MODE defaults to 'blocked' and accepts 'blocked', 'paper', or 'live'.
+ */
+function parseExecutionConfig(
+  env: Record<string, string | undefined>,
+  errors: ConfigValidationError[],
+): ExecutionConfig {
+  const modeRaw = env.TRADER_EXECUTION_MODE?.trim().toLowerCase() ?? 'blocked';
+  let mode: ExecutionMode;
+
+  switch (modeRaw) {
+    case 'blocked':
+      mode = ExecutionMode.Blocked;
+      break;
+    case 'paper':
+      mode = ExecutionMode.Paper;
+      break;
+    case 'live':
+      mode = ExecutionMode.Live;
+      break;
+    default:
+      errors.push({
+        field: 'TRADER_EXECUTION_MODE',
+        message: `Must be one of 'blocked', 'paper', 'live', got "${modeRaw}". Defaulting to blocked.`,
+        provided: modeRaw,
+      });
+      mode = ExecutionMode.Blocked;
+      break;
+  }
+
+  const maxRetriesRaw = env.TRADER_EXECUTION_MAX_RETRIES ?? '0';
+  const maxRetries = Number(maxRetriesRaw);
+  if (!Number.isFinite(maxRetries) || maxRetries < 0 || maxRetries > 10) {
+    errors.push({
+      field: 'TRADER_EXECUTION_MAX_RETRIES',
+      message: `Must be between 0 and 10, got "${maxRetriesRaw}". Defaulting to 0.`,
+      provided: maxRetriesRaw,
+    });
+  }
+
+  const paperBrokerUrl = env.TRADER_EXECUTION_PAPER_BROKER_URL?.trim() || undefined;
+  if (paperBrokerUrl) {
+    try {
+      new URL(paperBrokerUrl);
+    } catch {
+      errors.push({
+        field: 'TRADER_EXECUTION_PAPER_BROKER_URL',
+        message: `Invalid URL: "${paperBrokerUrl}". Ignoring.`,
+        provided: paperBrokerUrl,
+      });
+    }
+  }
+
+  return {
+    mode,
+    paperBrokerUrl,
+    maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 && maxRetries <= 10
+      ? maxRetries
+      : 0,
+  };
+}
 
 export class ConfigValidationErrorImpl extends Error {
   public readonly errors: ConfigValidationError[];
