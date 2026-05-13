@@ -10,11 +10,18 @@
 //   - Idempotency: repeated execute returns existing row
 //   - All modes produce ExecutionAttemptRow with correct metadata
 //   - Machine-readable refusal reasons on all refusal paths
+//   - Paper mode with ledger: atomic downstream writes for fills
+//   - Paper mode with ledger: refusal paths do not create downstream rows
+//   - Paper mode without ledger: backward-compatible existing behavior
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt-repo.js';
+import { PaperOrderRepository } from '../src/persistence/paper-order-repo.js';
+import { PaperFillRepository } from '../src/persistence/paper-fill-repo.js';
+import { PaperPositionRepository } from '../src/persistence/paper-position-repo.js';
+import { PaperExecutionLedger } from '../src/execution/paper-execution-ledger.js';
 import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import {
@@ -22,6 +29,7 @@ import {
   ExecutionMode,
   ExecutionOutcomeCode,
   ExecutionRefusalCode,
+  PaperOrderStatus,
   ProposalStatus,
   StrategyDecisionStatus,
   type BrokerPlacementPort,
@@ -584,6 +592,187 @@ describe('ModeAwareExecutionService', () => {
         mode: ExecutionMode.Paper,
       });
       expect(service.isLiveReady).toBe(true);
+    });
+  });
+
+  describe('paper mode with ledger', () => {
+    /**
+     * Create a test context with a fully-wired ledger.
+     */
+    function contextWithLedger(): {
+      ctx: ReturnType<typeof createContext>;
+      service: ModeAwareExecutionService;
+      orderRepo: PaperOrderRepository;
+      fillRepo: PaperFillRepository;
+      positionRepo: PaperPositionRepository;
+    } {
+      const ctx = createContext();
+      const orderRepo = new PaperOrderRepository(ctx.db);
+      const fillRepo = new PaperFillRepository(ctx.db);
+      const positionRepo = new PaperPositionRepository(ctx.db);
+      const ledger = new PaperExecutionLedger({
+        db: ctx.db,
+        attemptRepo: ctx.attemptRepo,
+        orderRepo,
+        fillRepo,
+        positionRepo,
+      });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        paperLedger: ledger,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+      return { ctx, service, orderRepo, fillRepo, positionRepo };
+    }
+
+    it('creates downstream order, fill, and position rows for a successful fill', async () => {
+      const { ctx, service, orderRepo, fillRepo, positionRepo } = contextWithLedger();
+      const candidate = seedApprovedCandidate(ctx);
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      // Attempt should be completed
+      expect(row.status).toBe(ExecutionAttemptStatus.Completed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+
+      // Verify downstream rows exist via repos
+      const order = orderRepo.getByExecutionAttemptId(row.id);
+      expect(order).not.toBeNull();
+      expect(order!.status).toBe(PaperOrderStatus.Filled);
+      expect(order!.brokerOrderId).toBe(row.brokerOrderId);
+
+      const fill = fillRepo.getByExecutionAttemptId(row.id);
+      expect(fill).not.toBeNull();
+      expect(fill!.filledQuantity).toBe(candidate.quantity);
+      expect(fill!.filledPrice).toBeGreaterThan(0);
+
+      const events = positionRepo.getEventsByExecutionAttemptId(row.id);
+      expect(events).toHaveLength(1);
+      expect(events[0].eventType).toBe('open');
+
+      const position = positionRepo.getPosition(
+        candidate.exchange, candidate.tradingsymbol, candidate.product,
+      );
+      expect(position).not.toBeNull();
+      expect(position!.quantity).toBe(candidate.quantity);
+      expect(position!.side).toBe('long');
+    });
+
+    it('does NOT create downstream rows for a refusal (missing quote)', async () => {
+      const { ctx, service, orderRepo, fillRepo, positionRepo } = contextWithLedger();
+      const candidate = seedApprovedCandidate(ctx);
+
+      const row = await service.execute(candidate, null, sampleInstrument());
+
+      // Attempt should be refused
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+
+      // No downstream rows should exist
+      expect(orderRepo.count()).toBe(0);
+      expect(fillRepo.count()).toBe(0);
+      expect(positionRepo.countEvents()).toBe(0);
+      expect(positionRepo.countPositions()).toBe(0);
+    });
+
+    it('does NOT create downstream rows for a refusal (missing instrument)', async () => {
+      const { ctx, service, orderRepo, fillRepo, positionRepo } = contextWithLedger();
+      const candidate = seedApprovedCandidate(ctx);
+
+      const row = await service.execute(candidate, sampleQuote(), null);
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+
+      expect(orderRepo.count()).toBe(0);
+      expect(fillRepo.count()).toBe(0);
+      expect(positionRepo.countEvents()).toBe(0);
+      expect(positionRepo.countPositions()).toBe(0);
+    });
+
+    it('does NOT create downstream rows for a market-price-unknown sell', async () => {
+      const { ctx, service, orderRepo, fillRepo, positionRepo } = contextWithLedger();
+      const candidate = seedApprovedCandidate(ctx, { side: 'sell' });
+
+      const quote = sampleQuote({ bid: null, lastPrice: null });
+      const row = await service.execute(candidate, quote, sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+
+      expect(orderRepo.count()).toBe(0);
+      expect(fillRepo.count()).toBe(0);
+      expect(positionRepo.countEvents()).toBe(0);
+      expect(positionRepo.countPositions()).toBe(0);
+    });
+
+    it('idempotency guard prevents duplicate downstream rows', async () => {
+      const { ctx, service, orderRepo, fillRepo, positionRepo } = contextWithLedger();
+      const candidate = seedApprovedCandidate(ctx);
+
+      // First call succeeds
+      await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      // Second call returns existing row (idempotency in execute())
+      const row2 = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      // Exactly one set of downstream rows
+      expect(ctx.attemptRepo.count()).toBe(1);
+      expect(orderRepo.count()).toBe(1);
+      expect(fillRepo.count()).toBe(1);
+      expect(positionRepo.countEvents()).toBe(1);
+      expect(positionRepo.countPositions()).toBe(1);
+
+      // Attempt status is Completed (not Refused)
+      expect(row2.status).toBe(ExecutionAttemptStatus.Completed);
+    });
+  });
+
+  describe('paper mode without ledger (backward compat)', () => {
+    it('still succeeds without a ledger configured', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Completed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+      expect(ctx.attemptRepo.count()).toBe(1);
+    });
+
+    it('still refuses when missing quote without ledger', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, null, sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+    });
+
+    it('still refuses when missing instrument without ledger', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), null);
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
     });
   });
 });

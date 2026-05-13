@@ -30,6 +30,7 @@ import type { QuoteSnapshot } from '../integrations/broker/types.js';
 import type { InstrumentRecord } from '../integrations/broker/types.js';
 import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import { PaperExecutionPolicy } from './paper-execution-policy.js';
+import { PaperExecutionLedger } from './paper-execution-ledger.js';
 import { BlockedExecutionAdapter, LiveExecutionAdapter } from './execution-adapters.js';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ export class ModeAwareExecutionService {
 
   private readonly _attemptRepo: ExecutionAttemptRepository;
   private readonly _paperPolicy: PaperExecutionPolicy;
+  private readonly _paperLedger: PaperExecutionLedger | null;
   private readonly _liveAdapter: LiveExecutionAdapter;
   private readonly _blockedAdapter: BlockedExecutionAdapter;
   private readonly _mode: ExecutionMode;
@@ -48,12 +50,14 @@ export class ModeAwareExecutionService {
   constructor(options: {
     attemptRepo: ExecutionAttemptRepository;
     paperPolicy: PaperExecutionPolicy;
+    paperLedger?: PaperExecutionLedger | null;
     liveAdapter: LiveExecutionAdapter | null;
     blockedAdapter?: BlockedExecutionAdapter;
     mode: ExecutionMode;
   }) {
     this._attemptRepo = options.attemptRepo;
     this._paperPolicy = options.paperPolicy;
+    this._paperLedger = options.paperLedger ?? null;
     this._liveAdapter = options.liveAdapter ?? new LiveExecutionAdapter(null);
     this._blockedAdapter = options.blockedAdapter ?? new BlockedExecutionAdapter();
     this._mode = options.mode;
@@ -125,6 +129,10 @@ export class ModeAwareExecutionService {
   /**
    * Paper mode: evaluate using local quote/instrument data only.
    * Never makes broker network calls.
+   *
+   * When a paper ledger is configured, successful fills are written atomically
+   * across execution_attempts, paper_orders, paper_fills, position_events,
+   * and paper_positions in a single SQLite transaction.
    */
   private _handlePaper(
     candidate: StrategyApprovedCandidate,
@@ -134,7 +142,13 @@ export class ModeAwareExecutionService {
     const evaluation = this._paperPolicy.evaluate(candidate, quote, instrument);
 
     if (evaluation.canFill) {
-      // Paper simulated fill
+      // Route through the ledger for atomic multi-table persistence
+      if (this._paperLedger !== null) {
+        const ledgerResult = this._paperLedger.writeSuccessfulPaperFill(candidate, evaluation);
+        return ledgerResult.attempt;
+      }
+
+      // Fallback: legacy path without ledger (attempt-only, no downstream rows)
       const now = Date.now();
       const attempt: NewExecutionAttempt = {
         strategyDecisionId: candidate.id,
