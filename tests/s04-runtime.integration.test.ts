@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
+import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
 import { ProposalEngine, type EngineContext } from '../src/proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../src/proposals/india-validator.js';
@@ -20,12 +21,14 @@ import { ProposalSupervisor } from '../src/proposals/proposal-supervisor.js';
 import { ExecutionGateSupervisor } from '../src/execution/execution-gate-supervisor.js';
 import {
   ProposalStatus,
+  StrategyDecisionStatus,
   ValidationReasonCode,
   MarketPhase,
   ZerodhaSessionState,
   BlockCode,
   type ProposalEngineConfig,
   type HealthStatus,
+  type NewStrategyDecision,
 } from '../src/types/runtime.js';
 import type {
   InstrumentRecord,
@@ -191,6 +194,7 @@ function createTestContext(options?: {
   const db = new DatabaseManager(':memory:');
   const proposalRepo = new ProposalRepository(db.db);
   const blockedRepo = new BlockedOrderRepository(db.db);
+  const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
   const engine = new ProposalEngine(options?.engineConfig ?? makeEngineConfig());
   const validator = new IndiaProposalValidator();
   const session = new MockSessionService();
@@ -226,6 +230,7 @@ function createTestContext(options?: {
     db,
     proposalRepo,
     blockedRepo,
+    strategyDecisionRepo,
     engine,
     validator,
     supervisor,
@@ -262,6 +267,46 @@ function mockFetchNetworkError(message = 'ECONNREFUSED') {
   globalThis.fetch = vi.fn().mockRejectedValue(new Error(message));
 }
 
+/**
+ * Create approved strategy decisions for all accepted proposals.
+ * This simulates what the StrategyRiskSupervisor would do between proposal
+ * generation and execution gating.
+ */
+function approveAllAcceptedProposals(
+  proposalRepo: ProposalRepository,
+  strategyDecisionRepo: StrategyDecisionRepository,
+): void {
+  const accepted = proposalRepo.getRecentAttempts(100, ProposalStatus.Accepted);
+  for (const proposal of accepted) {
+    const decision: NewStrategyDecision = {
+      proposalAttemptId: proposal.id,
+      decisionStatus: StrategyDecisionStatus.Approved,
+      strategyId: 'test-strategy',
+      strategyVersion: '1.0.0',
+      decidedAt: Date.now(),
+      exchange: proposal.exchange,
+      tradingsymbol: proposal.tradingsymbol,
+      side: proposal.side,
+      product: proposal.product,
+      quantity: proposal.quantity,
+      price: proposal.price,
+      triggerPrice: proposal.triggerPrice,
+      orderType: proposal.orderType,
+      quoteLastPrice: null,
+      quoteBid: null,
+      quoteAsk: null,
+      quoteVolume: null,
+      quoteReceivedAt: null,
+      riskNotional: null,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: null,
+      riskStopDistance: null,
+      riskExposureTag: null,
+    };
+    strategyDecisionRepo.insertDecision(decision);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -283,7 +328,7 @@ describe('S04 Runtime — Execution gate composition', () => {
 
   describe('Same-tick composition — generate then block', () => {
     it('blocks accepted proposals from the same tick in the gate pass', async () => {
-      const { supervisor, executionGate, proposalRepo, blockedRepo, clock } =
+      const { supervisor, executionGate, proposalRepo, blockedRepo, strategyDecisionRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -302,8 +347,9 @@ describe('S04 Runtime — Execution gate composition', () => {
         ],
       });
 
-      // Simulate a scheduler tick: proposal supervisor first, then execution gate
+      // Simulate a scheduler tick: proposal supervisor → strategy-risk → execution gate
       await supervisor.doWork(new Date(), minimalHealth());
+      approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
       await executionGate.doWork(new Date(), minimalHealth());
 
       // Verify: one accepted proposal
@@ -326,13 +372,13 @@ describe('S04 Runtime — Execution gate composition', () => {
       expect(blocked[0].quantity).toBe(1);
       expect(blocked[0].orderType).toBe('MARKET');
 
-      // Verify: no unblocked accepted proposals remain
-      const unblocked = blockedRepo.getAcceptedUnblockedAttempts();
-      expect(unblocked.length).toBe(0);
+      // Verify: no unblocked strategy-approved candidates remain
+      const approvedUnblocked = blockedRepo.getStrategyApprovedUnblocked();
+      expect(approvedUnblocked.length).toBe(0);
     });
 
     it('blocks multiple accepted proposals from the same tick', async () => {
-      const { supervisor, executionGate, blockedRepo, clock } =
+      const { supervisor, executionGate, blockedRepo, strategyDecisionRepo, proposalRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -362,6 +408,7 @@ describe('S04 Runtime — Execution gate composition', () => {
       });
 
       await supervisor.doWork(new Date(), minimalHealth());
+      approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
       await executionGate.doWork(new Date(), minimalHealth());
 
       const blocked = blockedRepo.getRecent();
@@ -441,7 +488,7 @@ describe('S04 Runtime — Execution gate composition', () => {
 
   describe('Gate replay idempotency', () => {
     it('does not create duplicate blocked rows on repeated gate runs', async () => {
-      const { supervisor, executionGate, blockedRepo, clock } =
+      const { supervisor, executionGate, blockedRepo, strategyDecisionRepo, proposalRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -460,8 +507,9 @@ describe('S04 Runtime — Execution gate composition', () => {
         ],
       });
 
-      // First tick: generate + block
+      // First tick: generate → approve → block
       await supervisor.doWork(new Date(), minimalHealth());
+      approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
       await executionGate.doWork(new Date(), minimalHealth());
 
       // Second tick: no new proposals, but gate runs again
@@ -508,7 +556,7 @@ describe('S04 Runtime — Execution gate composition', () => {
     });
 
     it('records blockedAt timestamp within expected bounds', async () => {
-      const { supervisor, executionGate, blockedRepo, clock } =
+      const { supervisor, executionGate, blockedRepo, strategyDecisionRepo, proposalRepo, clock } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
@@ -529,6 +577,7 @@ describe('S04 Runtime — Execution gate composition', () => {
 
       const before = Date.now();
       await supervisor.doWork(new Date(), minimalHealth());
+      approveAllAcceptedProposals(proposalRepo, strategyDecisionRepo);
       await executionGate.doWork(new Date(), minimalHealth());
       const after = Date.now();
 
@@ -559,7 +608,7 @@ describe('S04 Runtime — Execution gate composition', () => {
 
   describe('Negative tests — proposal snapshot edge cases', () => {
     it('handles accepted proposals with null price and triggerPrice', async () => {
-      const { proposalRepo, executionGate, blockedRepo } = createTestContext();
+      const { proposalRepo, executionGate, blockedRepo, strategyDecisionRepo } = createTestContext();
 
       // Insert an accepted proposal with null prices directly (bypass supervisor)
       const proposal = proposalRepo.insertAttempt({
@@ -577,6 +626,33 @@ describe('S04 Runtime — Execution gate composition', () => {
         createdAt: Date.now(),
       });
 
+      // Create a strategy decision for this proposal (required by M003 gate)
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
+      });
+
       await executionGate.doWork(new Date(), minimalHealth());
 
       const blocked = blockedRepo.getRecent();
@@ -586,7 +662,7 @@ describe('S04 Runtime — Execution gate composition', () => {
     });
 
     it('handles accepted proposals with null instrumentToken', async () => {
-      const { proposalRepo, executionGate, blockedRepo } = createTestContext();
+      const { proposalRepo, executionGate, blockedRepo, strategyDecisionRepo } = createTestContext();
 
       const proposal = proposalRepo.insertAttempt({
         exchange: 'NSE',
@@ -603,6 +679,33 @@ describe('S04 Runtime — Execution gate composition', () => {
         createdAt: Date.now(),
       });
 
+      // Create a strategy decision for this proposal
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'sell',
+        product: 'CNC',
+        quantity: 10,
+        price: 3500.00,
+        triggerPrice: null,
+        orderType: 'LIMIT',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
+      });
+
       await executionGate.doWork(new Date(), minimalHealth());
 
       const blocked = blockedRepo.getRecent();
@@ -611,7 +714,7 @@ describe('S04 Runtime — Execution gate composition', () => {
     });
 
     it('handles accepted SL proposals with both price and triggerPrice', async () => {
-      const { proposalRepo, executionGate, blockedRepo } = createTestContext();
+      const { proposalRepo, executionGate, blockedRepo, strategyDecisionRepo } = createTestContext();
 
       const proposal = proposalRepo.insertAttempt({
         exchange: 'NSE',
@@ -626,6 +729,33 @@ describe('S04 Runtime — Execution gate composition', () => {
         tag: null,
         proposalStatus: ProposalStatus.Accepted,
         createdAt: Date.now(),
+      });
+
+      // Create a strategy decision for this proposal
+      strategyDecisionRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'SBIN',
+        side: 'sell',
+        product: 'MIS',
+        quantity: 1,
+        price: 500.00,
+        triggerPrice: 505.00,
+        orderType: 'SL',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());

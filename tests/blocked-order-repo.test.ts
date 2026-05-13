@@ -6,9 +6,12 @@ import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js
 import {
   BlockCode,
   ProposalStatus,
+  StrategyDecisionStatus,
   type NewBlockedOrder,
   type NewProposalAttempt,
+  type NewStrategyDecision,
 } from '../src/types/runtime.js';
+import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -17,6 +20,7 @@ import {
 interface TestContext {
   proposalRepo: ProposalRepository;
   blockedRepo: BlockedOrderRepository;
+  strategyRepo: StrategyDecisionRepository;
   db: Database.Database;
 }
 
@@ -26,6 +30,7 @@ function createContext(): TestContext {
   return {
     proposalRepo: new ProposalRepository(db),
     blockedRepo: new BlockedOrderRepository(db),
+    strategyRepo: new StrategyDecisionRepository(db),
     db,
   };
 }
@@ -496,6 +501,236 @@ describe('BlockedOrderRepository', () => {
       }));
 
       expect(blocked.quantity).toBe(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getStrategyApprovedUnblocked — M003: strategy-approved candidates
+  // -----------------------------------------------------------------------
+
+  describe('getStrategyApprovedUnblocked', () => {
+    function insertApprovedDecision(
+      ctx: TestContext,
+      overrides: { tradingsymbol?: string; quantity?: number; createdAt?: number; decidedAt?: number },
+    ): number {
+      const createdAt = overrides.createdAt ?? Date.now();
+      const proposal = ctx.proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: overrides.tradingsymbol ?? 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt,
+      });
+
+      const decision: NewStrategyDecision = {
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        decidedAt: overrides.decidedAt ?? createdAt,
+        exchange: 'NSE',
+        tradingsymbol: overrides.tradingsymbol ?? 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: overrides.quantity ?? 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2850.50,
+        quoteBid: 2850.00,
+        quoteAsk: 2851.00,
+        quoteVolume: 1250000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 213787.50,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 10689.38,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      };
+
+      ctx.strategyRepo.insertDecision(decision);
+      return proposal.id;
+    }
+
+    it('returns empty array when no approved decisions exist', () => {
+      const ctx = createContext();
+      expect(ctx.blockedRepo.getStrategyApprovedUnblocked()).toEqual([]);
+    });
+
+    it('returns strategy-approved candidates not yet blocked', () => {
+      const ctx = createContext();
+      insertApprovedDecision(ctx, { tradingsymbol: 'UNBLOCKED' });
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(1);
+      expect(candidates[0].tradingsymbol).toBe('UNBLOCKED');
+      expect(candidates[0].quantity).toBe(75); // strategy-derived
+    });
+
+    it('excludes candidates that are already blocked', () => {
+      const ctx = createContext();
+      const paId = insertApprovedDecision(ctx, { tradingsymbol: 'BLOCKED' });
+      ctx.blockedRepo.insertBlockedOrder(makeBlockedOrder(paId));
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(0);
+    });
+
+    it('excludes refused decisions', () => {
+      const ctx = createContext();
+      const proposal = ctx.proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'REFUSED',
+        instrumentToken: 789012,
+        side: 'sell',
+        product: 'NRML',
+        quantity: 25,
+        price: null,
+        triggerPrice: null,
+        orderType: 'LIMIT',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+      ctx.strategyRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Refused,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'REFUSED',
+        side: 'sell',
+        product: 'NRML',
+        quantity: 0,
+        price: null,
+        triggerPrice: null,
+        orderType: 'LIMIT',
+        quoteLastPrice: null,
+        quoteBid: null,
+        quoteAsk: null,
+        quoteVolume: null,
+        quoteReceivedAt: null,
+        riskNotional: null,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: null,
+        riskStopDistance: null,
+        riskExposureTag: null,
+      });
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(0);
+    });
+
+    it('returns candidates ordered by decided_at ASC', () => {
+      const ctx = createContext();
+      insertApprovedDecision(ctx, { tradingsymbol: 'FIRST', createdAt: 100, decidedAt: 100 });
+      insertApprovedDecision(ctx, { tradingsymbol: 'SECOND', createdAt: 200, decidedAt: 200 });
+      insertApprovedDecision(ctx, { tradingsymbol: 'THIRD', createdAt: 300, decidedAt: 300 });
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(3);
+      expect(candidates[0].tradingsymbol).toBe('FIRST');
+      expect(candidates[1].tradingsymbol).toBe('SECOND');
+      expect(candidates[2].tradingsymbol).toBe('THIRD');
+    });
+
+    it('returns strategy-derived quantity (may differ from raw proposal)', () => {
+      const ctx = createContext();
+      insertApprovedDecision(ctx, { tradingsymbol: 'LOT_ROUNDED', quantity: 75 });
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(1);
+      expect(candidates[0].quantity).toBe(75);
+    });
+
+    it('returns full candidate shape with quote and risk fields', () => {
+      const ctx = createContext();
+      const paId = insertApprovedDecision(ctx, { tradingsymbol: 'FULL_SHAPE' });
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(1);
+
+      const c = candidates[0];
+      expect(c.id).toBeGreaterThan(0);
+      expect(c.proposalAttemptId).toBe(paId);
+      expect(c.strategyId).toBe('india-nse-eq-v1');
+      expect(c.strategyVersion).toBe('1.0.0');
+      expect(c.decidedAt).toBeGreaterThan(0);
+      expect(c.exchange).toBe('NSE');
+      expect(c.tradingsymbol).toBe('FULL_SHAPE');
+      expect(c.side).toBe('buy');
+      expect(c.product).toBe('MIS');
+      expect(c.quantity).toBe(75);
+      expect(c.price).toBeNull();
+      expect(c.triggerPrice).toBeNull();
+      expect(c.orderType).toBe('MARKET');
+      expect(c.lastPrice).toBe(2850.50);
+      expect(c.bid).toBe(2850.00);
+      expect(c.ask).toBe(2851.00);
+      expect(c.notional).toBe(213787.50);
+      expect(c.sizingBasis).toBe('last_price');
+    });
+
+    it('resolves instrumentToken from proposal_attempts join', () => {
+      const ctx = createContext();
+      insertApprovedDecision(ctx, { tradingsymbol: 'TOKEN_RESOLVE' });
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(1);
+      expect(candidates[0].instrumentToken).toBe(123456);
+    });
+
+    it('respects limit parameter', () => {
+      const ctx = createContext();
+      for (let i = 0; i < 10; i++) {
+        insertApprovedDecision(ctx, {
+          tradingsymbol: `LIMIT_${i}`,
+          createdAt: i,
+          decidedAt: i,
+        });
+      }
+
+      expect(ctx.blockedRepo.getStrategyApprovedUnblocked(3).length).toBe(3);
+      expect(ctx.blockedRepo.getStrategyApprovedUnblocked(100).length).toBe(10);
+    });
+
+    it('handles mixed scenario: approved unblocked, approved blocked, refused, no decision', () => {
+      const ctx = createContext();
+
+      // Approved + unblocked
+      insertApprovedDecision(ctx, { tradingsymbol: 'READY', createdAt: 100, decidedAt: 100 });
+
+      // Approved + blocked
+      const blockedPaId = insertApprovedDecision(ctx, { tradingsymbol: 'BLOCKED', createdAt: 200, decidedAt: 200 });
+      ctx.blockedRepo.insertBlockedOrder(makeBlockedOrder(blockedPaId));
+
+      // Accepted proposal with no strategy decision yet
+      ctx.proposalRepo.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'PENDING',
+        instrumentToken: 555,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 10,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: 300,
+      });
+
+      const candidates = ctx.blockedRepo.getStrategyApprovedUnblocked();
+      expect(candidates.length).toBe(1);
+      expect(candidates[0].tradingsymbol).toBe('READY');
     });
   });
 });

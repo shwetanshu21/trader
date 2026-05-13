@@ -14,6 +14,7 @@ import { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
 import { BrokerRepository } from '../persistence/broker-repo.js';
 import { UniverseRepository } from '../persistence/universe-repo.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
+import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
 import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import { LifecycleManager } from './lifecycle.js';
 import { HealthService } from './health-service.js';
@@ -32,6 +33,12 @@ import { ProposalEngine } from '../proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../proposals/india-validator.js';
 import { ProposalSupervisor } from '../proposals/proposal-supervisor.js';
 import { ExecutionGateSupervisor } from '../execution/execution-gate-supervisor.js';
+import {
+  StrategyRiskSupervisor,
+  type StrategyRiskPort,
+  type StrategyEvaluationInput,
+  type StrategyEvaluationResult,
+} from '../strategy-risk/strategy-risk-supervisor.js';
 import { UniverseService } from '../universe/universe-service.js';
 import { UniverseSupervisor } from '../universe/universe-supervisor.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
@@ -61,6 +68,7 @@ export interface RuntimeAppHandles {
   zerodhaSupervisor: BrokerSupervisor | null;
   proposalSupervisor: ProposalSupervisor | null;
   executionGateSupervisor: ExecutionGateSupervisor | null;
+  strategyRiskSupervisor: StrategyRiskSupervisor | null;
   dashboard: DashboardReadModel;
 }
 
@@ -70,6 +78,43 @@ export interface RuntimeAppHandles {
 
 function logBoot(message: string): void {
   console.log(`[boot] ${message}`);
+}
+
+// ---------------------------------------------------------------------------
+// LazyStrategyRiskPort — deferred initialization of the risk service
+// The StrategyRiskService is created by sibling task T02 and may not exist
+// at build() time. This wrapper lazily imports and instantiates it on the
+// first evaluateProposal() call, allowing the sync build() to complete.
+// ---------------------------------------------------------------------------
+
+class LazyStrategyRiskPort implements StrategyRiskPort {
+  private _service: StrategyRiskPort | null = null;
+
+  constructor(
+    private readonly _strategyRepo: StrategyDecisionRepository,
+    private readonly _brokerRepo: BrokerRepository,
+    private readonly _universeService: UniverseService,
+  ) {}
+
+  async evaluateProposal(input: StrategyEvaluationInput): Promise<StrategyEvaluationResult> {
+    if (!this._service) {
+      try {
+        const { StrategyRiskService } = await import(
+          '../strategy-risk/strategy-risk-service.js'
+        );
+        this._service = new StrategyRiskService({
+          strategyRepo: this._strategyRepo,
+          brokerRepo: this._brokerRepo,
+          universeService: this._universeService,
+        });
+      } catch {
+        throw new Error(
+          'StrategyRiskService not available (T02 not yet complete)',
+        );
+      }
+    }
+    return this._service.evaluateProposal(input);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -184,12 +229,14 @@ export class RuntimeApp {
     let blockedOrderRepo: BlockedOrderRepository | null = null;
     let proposalSupervisor: ProposalSupervisor | null = null;
     let executionGateSupervisor: ExecutionGateSupervisor | null = null;
+    let strategyRiskSupervisor: StrategyRiskSupervisor | null = null;
 
     if (this.config.proposalEngine) {
       logBoot('Proposal engine: configured');
 
       proposalRepo = new ProposalRepository(dbManager.db);
       blockedOrderRepo = new BlockedOrderRepository(dbManager.db);
+      const strategyDecisionRepo = new StrategyDecisionRepository(dbManager.db);
       const engine = new ProposalEngine(this.config.proposalEngine);
       const validator = new IndiaProposalValidator();
 
@@ -207,18 +254,34 @@ export class RuntimeApp {
 
       executionGateSupervisor = new ExecutionGateSupervisor({ blockedRepo: blockedOrderRepo });
 
+      // StrategyRiskSupervisor — evaluates accepted proposals via the
+      // strategy-risk service (T02). Uses a lazy port wrapper so build()
+      // stays synchronous even if the service module doesn't exist yet.
+      const riskPort = new LazyStrategyRiskPort(
+        strategyDecisionRepo,
+        brokerRepo,
+        universeService,
+      );
+      strategyRiskSupervisor = new StrategyRiskSupervisor({
+        strategyRepo: strategyDecisionRepo,
+        brokerRepo,
+        riskService: riskPort,
+      });
+
       logBoot('Proposal supervisor initialised');
+      logBoot('Strategy risk supervisor initialised');
       logBoot('Execution gate supervisor initialised');
     } else {
       logBoot('Proposal engine: not configured (proposal generation disabled)');
     }
 
     // ── Phase 7: build scheduler with ordered tick work ──────────────────
-    // Order: broker -> universe -> proposal -> execution gate
+    // Order: broker -> universe -> proposal -> strategy-risk -> execution gate
     const tickWork = [
       ...(brokerSupervisor ? [brokerSupervisor] : []),
       universeSupervisor,
       ...(proposalSupervisor ? [proposalSupervisor] : []),
+      ...(strategyRiskSupervisor ? [strategyRiskSupervisor] : []),
       ...(executionGateSupervisor ? [executionGateSupervisor] : []),
     ];
 
@@ -267,6 +330,7 @@ export class RuntimeApp {
       zerodhaSupervisor: brokerSupervisor,
       proposalSupervisor,
       executionGateSupervisor,
+      strategyRiskSupervisor,
       dashboard,
     };
 

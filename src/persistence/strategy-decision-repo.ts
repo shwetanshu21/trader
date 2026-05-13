@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import {
+  ProposalStatus,
   StrategyDecisionStatus,
   StrategyDecisionReasonCode,
   type NewStrategyDecision,
@@ -286,6 +287,79 @@ export class StrategyDecisionRepository {
       'SELECT COUNT(*) AS cnt FROM strategy_decisions WHERE decision_status = ?',
     ).get(status) as { cnt: number };
     return row.cnt;
+  }
+
+  // -----------------------------------------------------------------------
+  // Cross-cutting — accepted proposals without strategy decisions
+  // -----------------------------------------------------------------------
+
+  /**
+   * Retrieve accepted proposal attempts that do NOT yet have a strategy decision.
+   *
+   * Uses a LEFT JOIN with IS NULL check to find accepted proposals without
+   * a matching strategy decision row. This is the primary query the
+   * StrategyRiskSupervisor uses each tick.
+   */
+  getAcceptedProposalsWithoutDecisions(limit = 100): Array<{
+    proposalAttemptId: number;
+    exchange: string;
+    tradingsymbol: string;
+    instrumentToken: number | null;
+    side: string;
+    product: string;
+    quantity: number;
+    price: number | null;
+    triggerPrice: number | null;
+    orderType: string;
+    createdAt: number;
+  }> {
+    const rows = this._db.prepare(`
+      SELECT
+        pa.id AS proposal_attempt_id,
+        pa.exchange,
+        pa.tradingsymbol,
+        pa.instrument_token AS instrument_token,
+        pa.side,
+        pa.product,
+        pa.quantity,
+        pa.price,
+        pa.trigger_price AS trigger_price,
+        pa.order_type AS order_type,
+        pa.created_at AS created_at
+      FROM proposal_attempts pa
+      LEFT JOIN strategy_decisions sd
+        ON sd.proposal_attempt_id = pa.id
+      WHERE pa.proposal_status = ?
+        AND sd.id IS NULL
+      ORDER BY pa.created_at ASC
+      LIMIT ?
+    `).all(ProposalStatus.Accepted, limit) as Array<{
+      proposal_attempt_id: number;
+      exchange: string;
+      tradingsymbol: string;
+      instrument_token: number | null;
+      side: string;
+      product: string;
+      quantity: number;
+      price: number | null;
+      trigger_price: number | null;
+      order_type: string;
+      created_at: number;
+    }>;
+
+    return rows.map(r => ({
+      proposalAttemptId: r.proposal_attempt_id,
+      exchange: r.exchange,
+      tradingsymbol: r.tradingsymbol,
+      instrumentToken: r.instrument_token,
+      side: r.side,
+      product: r.product,
+      quantity: r.quantity,
+      price: r.price,
+      triggerPrice: r.trigger_price,
+      orderType: r.order_type,
+      createdAt: r.created_at,
+    }));
   }
 }
 

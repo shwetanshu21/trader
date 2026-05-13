@@ -45,38 +45,40 @@ export class ExecutionGateSupervisor implements TickWork {
 
   async doWork(_now: Date, _health: HealthStatus): Promise<void> {
     try {
-      // Query accepted proposals that have NOT yet been blocked
-      const unblocked = this._blockedRepo.getAcceptedUnblockedAttempts();
+      // Query strategy-approved candidates that have NOT yet been blocked
+      // (M003: execution authority moved from raw accepted proposals to
+      //  strategy-approved candidates with deterministic derived fields)
+      const candidates = this._blockedRepo.getStrategyApprovedUnblocked();
 
-      if (unblocked.length === 0) {
+      if (candidates.length === 0) {
         // No work to do — this is not an error
         return;
       }
 
-      // Insert a blocked-order ledger row for every unblocked accepted proposal
-      for (const proposal of unblocked) {
+      // Insert a blocked-order ledger row for every unblocked candidate
+      for (const candidate of candidates) {
         this._blockedRepo.insertBlockedOrder({
-          proposalAttemptId: proposal.proposalAttemptId,
+          proposalAttemptId: candidate.proposalAttemptId,
           blockedAt: Date.now(),
           blockCode: BlockCode.MilestoneExecutionBlockM001,
           blockMessage: M001_BLOCK_MESSAGE,
           gateTag: M001_GATE_TAG,
 
-          // Proposal snapshot fields (copied at block time)
-          exchange: proposal.exchange,
-          tradingsymbol: proposal.tradingsymbol,
-          instrumentToken: proposal.instrumentToken,
-          side: proposal.side,
-          product: proposal.product,
-          quantity: proposal.quantity,
-          price: proposal.price,
-          triggerPrice: proposal.triggerPrice,
-          orderType: proposal.orderType,
+          // Proposal snapshot fields (copied at block time from strategy decisions)
+          exchange: candidate.exchange,
+          tradingsymbol: candidate.tradingsymbol,
+          instrumentToken: candidate.instrumentToken,
+          side: candidate.side,
+          product: candidate.product,
+          quantity: candidate.quantity,
+          price: candidate.price,
+          triggerPrice: candidate.triggerPrice,
+          orderType: candidate.orderType,
         });
       }
 
       console.log(
-        `[execution-gate] blocked ${unblocked.length} accepted proposal(s) ` +
+        `[execution-gate] blocked ${candidates.length} strategy-approved candidate(s) ` +
         `(M001 hard block)`,
       );
     } catch (err) {

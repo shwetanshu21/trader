@@ -209,6 +209,31 @@ export class ProposalRepository {
   }
 
   /**
+   * Retrieve accepted proposals that have NOT yet been processed by the
+   * strategy-risk layer (no corresponding strategy_decision row exists).
+   *
+   * Uses a LEFT JOIN to filter out proposals that already have a strategy
+   * decision, ensuring idempotent batch processing.
+   *
+   * Returns oldest first for deterministic FIFO processing.
+   */
+  getApprovedUnprocessedAttempts(limit: number = 100): ProposalAttemptRow[] {
+    const sql = `
+      SELECT pa.id, pa.exchange, pa.tradingsymbol, pa.instrument_token,
+             pa.side, pa.product, pa.quantity, pa.price, pa.trigger_price,
+             pa.order_type, pa.tag, pa.proposal_status, pa.created_at
+      FROM proposal_attempts pa
+      LEFT JOIN strategy_decisions sd ON sd.proposal_attempt_id = pa.id
+      WHERE pa.proposal_status = ? AND sd.id IS NULL
+      ORDER BY pa.created_at ASC
+      LIMIT ?
+    `;
+
+    const rows = this._db.prepare(sql).all(ProposalStatus.Accepted, limit) as ProposalDbRow[];
+    return rows.map(mapAttemptRow);
+  }
+
+  /**
    * Count total proposal attempts.
    */
   countAttempts(): number {

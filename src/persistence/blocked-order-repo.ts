@@ -191,6 +191,93 @@ export class BlockedOrderRepository {
   }
 
   /**
+   * Retrieve strategy-approved candidates that have NOT yet been blocked.
+   *
+   * Joins strategy_decisions with blocked_order_attempts, returning only
+   * approved decisions that have no corresponding blocked-order entry.
+   * The returned quantity is the strategy-derived value (lot-size rounded),
+   * which may differ from the raw proposal quantity.
+   *
+   * This is the M003 replacement for getAcceptedUnblockedAttempts — downstream
+   * consumers (execution gate) should call this instead.
+   */
+  getStrategyApprovedUnblocked(limit = 100): Array<{
+    id: number;
+    proposalAttemptId: number;
+    strategyId: string;
+    strategyVersion: string;
+    decidedAt: number;
+    exchange: string;
+    tradingsymbol: string;
+    instrumentToken: number | null;
+    side: string;
+    product: string;
+    quantity: number;
+    price: number | null;
+    triggerPrice: number | null;
+    orderType: string;
+    lastPrice: number | null;
+    bid: number | null;
+    ask: number | null;
+    notional: number | null;
+    sizingBasis: string;
+  }> {
+    const rows = this._db.prepare(`
+      SELECT
+        sd.id,
+        sd.proposal_attempt_id AS proposalAttemptId,
+        sd.strategy_id AS strategyId,
+        sd.strategy_version AS strategyVersion,
+        sd.decided_at AS decidedAt,
+        sd.exchange,
+        sd.tradingsymbol,
+        pa.instrument_token AS instrumentToken,
+        sd.side,
+        sd.product,
+        sd.quantity,
+        sd.price,
+        sd.trigger_price AS triggerPrice,
+        sd.order_type AS orderType,
+        sd.quote_last_price AS lastPrice,
+        sd.quote_bid AS bid,
+        sd.quote_ask AS ask,
+        sd.risk_notional AS notional,
+        sd.risk_sizing_basis AS sizingBasis
+      FROM strategy_decisions sd
+      LEFT JOIN blocked_order_attempts boa
+        ON boa.proposal_attempt_id = sd.proposal_attempt_id
+      LEFT JOIN proposal_attempts pa
+        ON pa.id = sd.proposal_attempt_id
+      WHERE sd.decision_status = 'approved'
+        AND boa.id IS NULL
+      ORDER BY sd.decided_at ASC
+      LIMIT ?
+    `).all(limit) as Array<{
+      id: number;
+      proposalAttemptId: number;
+      strategyId: string;
+      strategyVersion: string;
+      decidedAt: number;
+      exchange: string;
+      tradingsymbol: string;
+      instrumentToken: number | null;
+      side: string;
+      product: string;
+      quantity: number;
+      price: number | null;
+      triggerPrice: number | null;
+      orderType: string;
+      lastPrice: number | null;
+      bid: number | null;
+      ask: number | null;
+      notional: number | null;
+      sizingBasis: string;
+    }>;
+
+    return rows;
+  }
+
+  /**
    * Count total blocked-order rows.
    */
   count(): number {

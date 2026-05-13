@@ -225,6 +225,20 @@ export class UniverseService {
   /**
    * Convenience: summarise the latest snapshot for health/dashboard surfaces.
    */
+  /**
+   * Check whether a symbol is eligible for trading in a given exchange,
+   * according to the active bounded-universe policy allowlist.
+   *
+   * This is the primary query seam for downstream consumers (strategy-risk service,
+   * proposal engine) that need to filter proposals by universe membership.
+   *
+   * @returns true if the symbol is in the policy allowlist for the given exchange.
+   */
+  isSymbolEligible(tradingsymbol: string, exchange: string): boolean {
+    const eligibleSet = getEligibleSymbols(exchange, this._policy);
+    return eligibleSet.has(tradingsymbol);
+  }
+
   getCoverageSummary(): UniverseCoverageSummary | null {
     const snapshot = this._universeRepo.getLatestSnapshot();
     if (!snapshot) return null;
