@@ -141,6 +141,50 @@ export class PaperOrderRepository {
     ).get(status) as { cnt: number };
     return row.cnt;
   }
+
+  /**
+   * Find active (pending or open) paper orders matching a composite key.
+   *
+   * Used by the execution risk guard for duplicate detection.
+   * @param exchange - Exchange (e.g. 'NSE').
+   * @param tradingsymbol - Trading symbol (e.g. 'RELIANCE').
+   * @param product - Product (e.g. 'MIS').
+   * @param side - Trade side ('buy' or 'sell').
+   * @returns Array of matching active paper order rows (newest first).
+   */
+  findActiveOrdersByKey(
+    exchange: string,
+    tradingsymbol: string,
+    product: string,
+    side: string,
+  ): PaperOrderRow[] {
+    const rows = this._db.prepare(`
+      SELECT * FROM paper_orders
+      WHERE exchange = ? AND tradingsymbol = ? AND product = ? AND side = ?
+        AND (status = ? OR status = ?)
+      ORDER BY created_at DESC
+    `).all(exchange, tradingsymbol, product, side, PaperOrderStatus.Pending, PaperOrderStatus.Open) as PaperOrderDbRow[];
+
+    return rows.map(mapOrderRow);
+  }
+
+  /**
+   * Count active (pending or open) paper orders matching a composite key.
+   * @returns Count of matching active orders.
+   */
+  countActiveOrdersByKey(
+    exchange: string,
+    tradingsymbol: string,
+    product: string,
+    side: string,
+  ): number {
+    const row = this._db.prepare(`
+      SELECT COUNT(*) AS cnt FROM paper_orders
+      WHERE exchange = ? AND tradingsymbol = ? AND product = ? AND side = ?
+        AND (status = ? OR status = ?)
+    `).get(exchange, tradingsymbol, product, side, PaperOrderStatus.Pending, PaperOrderStatus.Open) as { cnt: number };
+    return row.cnt;
+  }
 }
 
 // ---------------------------------------------------------------------------
