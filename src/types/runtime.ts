@@ -1178,6 +1178,12 @@ export interface ExecutionHealth {
   isGateRefusing: boolean;
   /** Current gate refusal reason, if any. */
   gateRefusalReason: string | null;
+  /** Total open paper positions count. */
+  openPositionCount: number;
+  /** Total paper orders recorded. */
+  totalOrders: number;
+  /** Total paper fills recorded. */
+  totalFills: number;
 }
 
 /** Execution config block within RuntimeConfig. */
@@ -1188,6 +1194,285 @@ export interface ExecutionConfig {
   paperBrokerUrl?: string;
   /** Max retry attempts for failed dispatches. */
   maxRetries: number;
+}
+
+// ---------------------------------------------------------------------------
+// Paper trading — durable order, fill, position-event, and position DTOs
+// ---------------------------------------------------------------------------
+
+/** Status of a paper order. */
+export enum PaperOrderStatus {
+  /** Order has been recorded but not yet filled. */
+  Pending = 'pending',
+  /** Order is open (for future resting-order support). */
+  Open = 'open',
+  /** Order has been fully filled. */
+  Filled = 'filled',
+  /** Order was cancelled before fill. */
+  Cancelled = 'cancelled',
+  /** Order was rejected by paper broker policy. */
+  Rejected = 'rejected',
+}
+
+/**
+ * Full persisted paper order row.
+ *
+ * One row per successful paper execution attempt (one-to-one with
+ * execution_attempts where outcome_code is PaperSimulated).
+ */
+export interface PaperOrderRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → execution_attempts(id). UNIQUE — one order per attempt. */
+  executionAttemptId: number;
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE'). */
+  tradingsymbol: string;
+  /** Trade side: 'buy' or 'sell'. */
+  side: string;
+  /** Product: 'MIS', 'CNC', 'NRML'. */
+  product: string;
+  /** Order quantity (always positive). */
+  quantity: number;
+  /** Limit price, or null for market orders. */
+  price: number | null;
+  /** Trigger price for SL/SLM orders, or null. */
+  triggerPrice: number | null;
+  /** Order type: 'MARKET', 'LIMIT', 'SL', 'SLM'. */
+  orderType: string;
+  /** Optional tag for grouping/identification. */
+  tag: string | null;
+  /** Current order status. */
+  status: PaperOrderStatus;
+  /** Broker-generated paper order ID for traceability. */
+  brokerOrderId: string;
+  /** Unix timestamp (ms) when the order was created. */
+  createdAt: number;
+  /** Unix timestamp (ms) when the order was last updated, or null. */
+  updatedAt: number | null;
+}
+
+/** Shape for inserting a new paper order (without id). */
+export type NewPaperOrder = Omit<PaperOrderRow, 'id'>;
+
+/**
+ * Full persisted paper fill row.
+ *
+ * One fill per successful order (current paper policy is immediate full fill).
+ */
+export interface PaperFillRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → paper_orders(id). */
+  paperOrderId: number;
+  /** FK → execution_attempts(id). UNIQUE — one fill per attempt. */
+  executionAttemptId: number;
+  /** Exchange. */
+  exchange: string;
+  /** Trading symbol. */
+  tradingsymbol: string;
+  /** Trade side: 'buy' or 'sell'. */
+  side: string;
+  /** Product. */
+  product: string;
+  /** Quantity actually filled (always positive). */
+  filledQuantity: number;
+  /** Price at which the fill occurred. */
+  filledPrice: number;
+  /** Broker-generated paper order ID from the parent order. */
+  brokerOrderId: string;
+  /** Unix timestamp (ms) when the fill occurred. */
+  filledAt: number;
+}
+
+/** Shape for inserting a new paper fill (without id). */
+export type NewPaperFill = Omit<PaperFillRow, 'id'>;
+
+/** Type of a position event. */
+export enum PositionEventType {
+  /** Position was opened (first fill, net position became non-zero). */
+  Open = 'open',
+  /** Position was increased or decreased by a partial fill. */
+  Adjust = 'adjust',
+  /** Position was closed fully (net quantity became zero). */
+  Close = 'close',
+  /** Initial fill on a new position. */
+  Fill = 'fill',
+}
+
+/**
+ * Full persisted position event row.
+ *
+ * Append-only log of every position-modifying operation.
+ * Used for audit and reconstruction of current positions.
+ */
+export interface PositionEventRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → paper_orders(id). */
+  paperOrderId: number;
+  /** FK → paper_fills(id). May be null for non-fill events. */
+  paperFillId: number | null;
+  /** FK → execution_attempts(id). */
+  executionAttemptId: number;
+  /** Event type. */
+  eventType: PositionEventType;
+  /** Exchange. */
+  exchange: string;
+  /** Trading symbol. */
+  tradingsymbol: string;
+  /** Product. */
+  product: string;
+  /** Quantity delta: positive for buy (increases long / reduces short), negative for sell. */
+  quantityDelta: number;
+  /** Fill price or reference price for the event. */
+  price: number;
+  /** Quantity before this event. */
+  previousQuantity: number;
+  /** Average cost before this event. */
+  previousAvgCost: number;
+  /** Quantity after this event. */
+  newQuantity: number;
+  /** Average cost after this event. */
+  newAvgCost: number;
+  /** Realized P&L from this event (0 for fills that don't close a position). */
+  realizedPnl: number;
+  /** Unix timestamp (ms) when this event was recorded. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new position event (without id). */
+export type NewPositionEvent = Omit<PositionEventRow, 'id'>;
+
+/** Net position side. */
+export enum PositionSide {
+  /** Net quantity is zero (flat / no position). */
+  Flat = 'flat',
+  /** Net quantity is positive (long). */
+  Long = 'long',
+  /** Net quantity is negative (short). */
+  Short = 'short',
+}
+
+/**
+ * Current-state paper position projection.
+ *
+ * One row per (exchange, tradingsymbol, product) composite key.
+ * Reconstructed from position_events on restart if missing.
+ */
+export interface PaperPositionRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Exchange (e.g. 'NSE'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE'). */
+  tradingsymbol: string;
+  /** Product (e.g. 'MIS'). */
+  product: string;
+  /** Current position side. */
+  side: PositionSide;
+  /** Net quantity (positive for long, negative for short, 0 for flat). */
+  quantity: number;
+  /** Average cost price of the position. */
+  avgCostPrice: number;
+  /** Cumulative realized P&L in rupees. */
+  realizedPnl: number;
+  /** Unix timestamp (ms) when this position was last updated. */
+  updatedAt: number;
+}
+
+/** Shape for upserting a paper position (without id). */
+export type NewPaperPosition = Omit<PaperPositionRow, 'id'>;
+
+// ---------------------------------------------------------------------------
+// Paper trading — dashboard/health read-model DTOs
+// ---------------------------------------------------------------------------
+
+/** A recent paper order for the operator dashboard. */
+export interface DashboardPaperOrder {
+  id: number;
+  /** ISO‑8601 timestamp when the order was created. */
+  createdAt: string;
+  /** Exchange. */
+  exchange: string;
+  /** Trading symbol. */
+  tradingsymbol: string;
+  /** Trade side. */
+  side: string;
+  /** Product. */
+  product: string;
+  /** Order quantity. */
+  quantity: number;
+  /** Limit price, or null. */
+  price: number | null;
+  /** Order type. */
+  orderType: string;
+  /** Current order status. */
+  status: string;
+  /** Broker order ID for traceability. */
+  brokerOrderId: string;
+}
+
+/** A recent paper fill for the operator dashboard. */
+export interface DashboardPaperFill {
+  id: number;
+  /** ISO‑8601 timestamp when the fill occurred. */
+  filledAt: string;
+  /** Parent paper order ID. */
+  paperOrderId: number;
+  /** Exchange. */
+  exchange: string;
+  /** Trading symbol. */
+  tradingsymbol: string;
+  /** Trade side. */
+  side: string;
+  /** Filled quantity. */
+  filledQuantity: number;
+  /** Fill price. */
+  filledPrice: number;
+  /** Broker order ID for traceability. */
+  brokerOrderId: string;
+}
+
+/** A position for the operator dashboard. */
+export interface DashboardPaperPosition {
+  exchange: string;
+  tradingsymbol: string;
+  product: string;
+  /** Position side string. */
+  side: string;
+  /** Net quantity. */
+  quantity: number;
+  /** Average cost price. */
+  avgCostPrice: number;
+  /** Cumulative realized P&L. */
+  realizedPnl: number;
+  /** ISO‑8601 timestamp of last update. */
+  updatedAt: string;
+}
+
+/** A recent position event for the operator dashboard. */
+export interface DashboardPositionEvent {
+  id: number;
+  /** ISO‑8601 timestamp when the event was recorded. */
+  createdAt: string;
+  /** Event type. */
+  eventType: string;
+  /** Exchange. */
+  exchange: string;
+  /** Trading symbol. */
+  tradingsymbol: string;
+  /** Product. */
+  product: string;
+  /** Quantity delta. */
+  quantityDelta: number;
+  /** Price. */
+  price: number;
+  /** Quantity after the event. */
+  newQuantity: number;
+  /** Realized P&L from this event. */
+  realizedPnl: number;
 }
 
 // ---------------------------------------------------------------------------

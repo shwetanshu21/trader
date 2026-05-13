@@ -301,6 +301,9 @@ export class DashboardReadModel {
         gateRefusalReason: isGateRefusing
           ? 'Execution mode is blocked: all attempts refused'
           : null,
+        openPositionCount: 0,
+        totalOrders: 0,
+        totalFills: 0,
       };
     } catch {
       return null;

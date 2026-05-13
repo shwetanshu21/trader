@@ -264,6 +264,90 @@ CREATE TABLE IF NOT EXISTS execution_attempt_refusal_reasons (
 );
 
 CREATE INDEX IF NOT EXISTS idx_execution_refusal_attempt ON execution_attempt_refusal_reasons(execution_attempt_id);
+
+-- S04: Paper trading persistence tables
+CREATE TABLE IF NOT EXISTS paper_orders (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  execution_attempt_id  INTEGER NOT NULL UNIQUE REFERENCES execution_attempts(id),
+  exchange              TEXT    NOT NULL,
+  tradingsymbol         TEXT    NOT NULL,
+  side                  TEXT    NOT NULL,
+  product               TEXT    NOT NULL,
+  quantity              INTEGER NOT NULL,
+  price                 REAL,
+  trigger_price         REAL,
+  order_type            TEXT    NOT NULL DEFAULT 'MARKET',
+  tag                   TEXT,
+  status                TEXT    NOT NULL DEFAULT 'pending',
+  broker_order_id       TEXT    NOT NULL,
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_orders_attempt ON paper_orders(execution_attempt_id);
+CREATE INDEX IF NOT EXISTS idx_paper_orders_status ON paper_orders(status);
+CREATE INDEX IF NOT EXISTS idx_paper_orders_created ON paper_orders(created_at);
+CREATE INDEX IF NOT EXISTS idx_paper_orders_symbol ON paper_orders(exchange, tradingsymbol);
+
+CREATE TABLE IF NOT EXISTS paper_fills (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_order_id        INTEGER NOT NULL REFERENCES paper_orders(id),
+  execution_attempt_id  INTEGER NOT NULL UNIQUE REFERENCES execution_attempts(id),
+  exchange              TEXT    NOT NULL,
+  tradingsymbol         TEXT    NOT NULL,
+  side                  TEXT    NOT NULL,
+  product               TEXT    NOT NULL,
+  filled_quantity       INTEGER NOT NULL,
+  filled_price          REAL    NOT NULL,
+  broker_order_id       TEXT    NOT NULL,
+  filled_at             INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_fills_order ON paper_fills(paper_order_id);
+CREATE INDEX IF NOT EXISTS idx_paper_fills_attempt ON paper_fills(execution_attempt_id);
+CREATE INDEX IF NOT EXISTS idx_paper_fills_filled ON paper_fills(filled_at);
+CREATE INDEX IF NOT EXISTS idx_paper_fills_symbol ON paper_fills(exchange, tradingsymbol);
+
+CREATE TABLE IF NOT EXISTS position_events (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_order_id        INTEGER NOT NULL REFERENCES paper_orders(id),
+  paper_fill_id         INTEGER REFERENCES paper_fills(id),
+  execution_attempt_id  INTEGER NOT NULL REFERENCES execution_attempts(id),
+  event_type            TEXT    NOT NULL,
+  exchange              TEXT    NOT NULL,
+  tradingsymbol         TEXT    NOT NULL,
+  product               TEXT    NOT NULL,
+  quantity_delta        INTEGER NOT NULL,
+  price                 REAL    NOT NULL,
+  previous_quantity     INTEGER NOT NULL,
+  previous_avg_cost     REAL    NOT NULL,
+  new_quantity          INTEGER NOT NULL,
+  new_avg_cost          REAL    NOT NULL,
+  realized_pnl          REAL    NOT NULL DEFAULT 0,
+  created_at            INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_events_order ON position_events(paper_order_id);
+CREATE INDEX IF NOT EXISTS idx_position_events_fill ON position_events(paper_fill_id);
+CREATE INDEX IF NOT EXISTS idx_position_events_attempt ON position_events(execution_attempt_id);
+CREATE INDEX IF NOT EXISTS idx_position_events_symbol ON position_events(exchange, tradingsymbol);
+CREATE INDEX IF NOT EXISTS idx_position_events_created ON position_events(created_at);
+
+CREATE TABLE IF NOT EXISTS paper_positions (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  exchange        TEXT    NOT NULL,
+  tradingsymbol   TEXT    NOT NULL,
+  product         TEXT    NOT NULL,
+  side            TEXT    NOT NULL DEFAULT 'flat',
+  quantity        INTEGER NOT NULL DEFAULT 0,
+  avg_cost_price  REAL    NOT NULL DEFAULT 0,
+  realized_pnl    REAL    NOT NULL DEFAULT 0,
+  updated_at      INTEGER NOT NULL,
+  UNIQUE(exchange, tradingsymbol, product)
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_positions_side ON paper_positions(side);
+CREATE INDEX IF NOT EXISTS idx_paper_positions_open ON paper_positions(quantity) WHERE quantity != 0;
 `;
 
 export class DatabaseManager {
