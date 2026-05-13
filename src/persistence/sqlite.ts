@@ -195,6 +195,50 @@ CREATE TABLE IF NOT EXISTS universe_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_universe_snapshots_computed ON universe_snapshots(computed_at);
+
+CREATE TABLE IF NOT EXISTS strategy_decisions (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  proposal_attempt_id   INTEGER NOT NULL UNIQUE REFERENCES proposal_attempts(id),
+  decision_status       TEXT    NOT NULL,
+  strategy_id           TEXT    NOT NULL,
+  strategy_version      TEXT    NOT NULL,
+  decided_at            INTEGER NOT NULL,
+  exchange              TEXT    NOT NULL,
+  tradingsymbol         TEXT    NOT NULL,
+  side                  TEXT    NOT NULL,
+  product               TEXT    NOT NULL,
+  quantity              INTEGER NOT NULL,
+  price                 REAL,
+  trigger_price         REAL,
+  order_type            TEXT    NOT NULL,
+
+  -- Reference quote snapshot at decision time
+  quote_last_price      REAL,
+  quote_bid             REAL,
+  quote_ask             REAL,
+  quote_volume          INTEGER,
+  quote_received_at     INTEGER,
+
+  -- Risk metadata
+  risk_notional         REAL,
+  risk_sizing_basis     TEXT    NOT NULL DEFAULT '',
+  risk_max_loss_rupees  REAL,
+  risk_stop_distance    REAL,
+  risk_exposure_tag     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_decisions_status ON strategy_decisions(decision_status);
+CREATE INDEX IF NOT EXISTS idx_strategy_decisions_proposal ON strategy_decisions(proposal_attempt_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_decisions_decided ON strategy_decisions(decided_at);
+
+CREATE TABLE IF NOT EXISTS strategy_decision_reasons (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_decision_id  INTEGER NOT NULL REFERENCES strategy_decisions(id),
+  reason_code           TEXT    NOT NULL,
+  reason_message        TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_reasons_decision ON strategy_decision_reasons(strategy_decision_id);
 `;
 
 export class DatabaseManager {

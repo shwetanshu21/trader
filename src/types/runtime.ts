@@ -768,6 +768,184 @@ export interface UniversePolicyConfig {
   maxQuoteStalenessMs: number;
 }
 
+// ---------------------------------------------------------------------------
+// Strategy decision — deterministic authority layer between proposal and execution
+// ---------------------------------------------------------------------------
+
+/** Status of a deterministic strategy decision. */
+export enum StrategyDecisionStatus {
+  /** Strategy approved this proposal as a trade candidate with derived risk/sizing. */
+  Approved = 'approved',
+  /** Strategy refused this proposal with machine-readable reasons. */
+  Refused = 'refused',
+}
+
+/**
+ * Machine-readable strategy refusal reason codes.
+ * These are deterministic — the strategy layer produces these based on policy,
+ * market data, and risk rules, distinct from pre-strategy validation codes.
+ */
+export enum StrategyDecisionReasonCode {
+  /** The proposal's segment is not supported by the active strategy policy. */
+  UnsupportedSegment = 'unsupported_segment',
+  /** Quote data required for deterministic sizing is missing. */
+  MissingQuoteData = 'missing_quote_data',
+  /** Quote data is stale beyond the strategy's freshness threshold. */
+  StaleQuoteData = 'stale_quote_data',
+  /** Instrument metadata (lot size, tick size) is missing or incomplete. */
+  MissingInstrumentMetadata = 'missing_instrument_metadata',
+  /** Calculated notional value is below the minimum threshold. */
+  BelowMinimumNotional = 'below_minimum_notional',
+  /** Derived quantity rounds to zero after lot-size adjustment. */
+  ZeroQuantityAfterRounding = 'zero_quantity_after_rounding',
+  /** The instrument is not in the bounded universe allowlist. */
+  NotInUniverse = 'not_in_universe',
+  /** The proposal's exchange does not match the active market profile. */
+  ProfileMismatch = 'profile_mismatch',
+  /** Insufficient liquidity based on quote depth (bid/ask spread or volume). */
+  InsufficientLiquidity = 'insufficient_liquidity',
+  /** Strategy-specific constraint not covered by other codes. */
+  PolicyConstraint = 'policy_constraint',
+}
+
+/** A single strategy decision reason (code + human-readable message). */
+export interface StrategyDecisionReason {
+  /** Machine-readable reason code. */
+  reasonCode: StrategyDecisionReasonCode;
+  /** Human-readable explanation. */
+  reasonMessage: string;
+}
+
+/** Reference quote snapshot fields captured at strategy-decision time. */
+export interface StrategyQuoteSnapshot {
+  lastPrice: number | null;
+  bid: number | null;
+  ask: number | null;
+  volume: number | null;
+  /** Unix timestamp (ms) when the quote was received by the system. */
+  receivedAt: number | null;
+}
+
+/** Risk metadata computed at strategy-decision time. */
+export interface StrategyRiskMetadata {
+  /** Estimated notional value (quantity × reference price). */
+  notional: number | null;
+  /** The basis used for sizing (e.g. 'last_price', 'bid', 'ask'). */
+  sizingBasis: string;
+  /** Max loss for this position in rupees, if computable. */
+  maxLossRupees: number | null;
+  /** Stop-loss distance from entry, if applicable. */
+  stopDistance: number | null;
+  /** Exposure category tag (e.g. 'intraday', 'delivery'). */
+  exposureTag: string | null;
+}
+
+/**
+ * Full persisted strategy decision row.
+ *
+ * One row per proposal attempt (UNIQUE on proposal_attempt_id).
+ * Carries deterministic strategy-approved fields that override raw proposal values.
+ */
+export interface StrategyDecisionRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → proposal_attempts(id). UNIQUE — idempotency key. */
+  proposalAttemptId: number;
+  /** Decision status. */
+  decisionStatus: StrategyDecisionStatus;
+  /** Strategy identity (e.g. 'india-nse-eq-v1'). */
+  strategyId: string;
+  /** Strategy version (semver-style, e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** Unix timestamp (ms) when this decision was recorded. */
+  decidedAt: number;
+
+  // ── Canonical deterministic fields (override raw proposal values) ──
+  /** Determined exchange (e.g. 'NSE'). */
+  exchange: string;
+  /** Determined trading symbol. */
+  tradingsymbol: string;
+  /** Trade side: 'buy' or 'sell' (carried from proposal). */
+  side: string;
+  /** Deterministic product (e.g. 'MIS', 'CNC'). */
+  product: string;
+  /** Deterministic order quantity (lot-size rounded, always positive). */
+  quantity: number;
+  /** Deterministic limit price, or null for market orders. */
+  price: number | null;
+  /** Deterministic trigger price for SL/SLM orders, or null. */
+  triggerPrice: number | null;
+  /** Deterministic order type (e.g. 'MARKET', 'LIMIT'). */
+  orderType: string;
+
+  // ── Reference quote snapshot at decision time ──
+  quoteLastPrice: number | null;
+  quoteBid: number | null;
+  quoteAsk: number | null;
+  quoteVolume: number | null;
+  quoteReceivedAt: number | null;
+
+  // ── Risk metadata ──
+  riskNotional: number | null;
+  riskSizingBasis: string;
+  riskMaxLossRupees: number | null;
+  riskStopDistance: number | null;
+  riskExposureTag: string | null;
+}
+
+/** Shape for inserting a new strategy decision (without id). */
+export type NewStrategyDecision = Omit<StrategyDecisionRow, 'id'>;
+
+/**
+ * Read-model DTO — a strategy-approved trade candidate ready for downstream
+ * execution consumption. Contains only the fields an execution gate needs.
+ */
+export interface StrategyApprovedCandidate {
+  /** Strategy decision row ID. */
+  id: number;
+  /** Source proposal attempt ID. */
+  proposalAttemptId: number;
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Unix timestamp (ms) when the decision was made. */
+  decidedAt: number;
+
+  // ── Canonical deterministic order fields ──
+  exchange: string;
+  tradingsymbol: string;
+  side: string;
+  product: string;
+  quantity: number;
+  price: number | null;
+  triggerPrice: number | null;
+  orderType: string;
+
+  // ── Reference quote snapshot ──
+  lastPrice: number | null;
+  bid: number | null;
+  ask: number | null;
+
+  // ── Risk summary ──
+  notional: number | null;
+  sizingBasis: string;
+}
+
+/**
+ * Read-model DTO — a strategy refusal with its ordered reasons.
+ */
+export interface StrategyRefusal {
+  /** Strategy decision row ID. */
+  id: number;
+  /** Source proposal attempt ID. */
+  proposalAttemptId: number;
+  /** Unix timestamp (ms) when the decision was made. */
+  decidedAt: number;
+  /** Ordered refusal reasons. */
+  reasons: StrategyDecisionReason[];
+}
+
 export type {
   InstrumentRecord,
   InstrumentSyncState,
