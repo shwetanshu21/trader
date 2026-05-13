@@ -172,17 +172,13 @@ export function createHealthServer(
             res.end(JSON.stringify({ error: 'Dashboard not available' }));
             break;
           }
-          const sSnapshot = dashboard.getSnapshot();
-          const decisions = sSnapshot.recentStrategyDecisions;
-          const approvedCount = decisions.filter(d => d.decisionStatus === 'approved').length;
-          const refusedCount = decisions.filter(d => d.decisionStatus === 'refused').length;
-          const totalCount = approvedCount + refusedCount;
+          const evidence = dashboard.getStrategyEvidence();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
-            totalDecisions: totalCount,
-            approvedCount,
-            refusedCount,
-            recentDecisions: decisions,
+            totalDecisions: evidence.totalDecisions,
+            approvedCount: evidence.approvedCount,
+            refusedCount: evidence.refusedCount,
+            recentDecisions: evidence.recentDecisions,
           }, null, 2));
           break;
         }

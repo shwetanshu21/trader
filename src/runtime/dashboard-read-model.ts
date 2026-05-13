@@ -34,7 +34,7 @@ import type { StrategyDecisionRepository } from '../persistence/strategy-decisio
 import type { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import type { MarketClock } from './market-clock.js';
 import type { UniverseService } from '../universe/universe-service.js';
-import { ExecutionMode, type ExecutionHealth, type DashboardRiskState, type DashboardRiskEvent } from '../types/runtime.js';
+import { ExecutionMode, StrategyDecisionStatus, type ExecutionHealth, type DashboardRiskState, type DashboardRiskEvent } from '../types/runtime.js';
 import type { PaperOrderRepository } from '../persistence/paper-order-repo.js';
 import type { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import type { PaperPositionRepository } from '../persistence/paper-position-repo.js';
@@ -270,6 +270,33 @@ export class DashboardReadModel {
       });
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Return repository-backed strategy evidence aggregates alongside bounded
+   * recent decisions. This is the canonical operator-review seam for strategy
+   * evidence — totals come from persisted COUNT queries, not from the bounded
+   * recent list, so they remain accurate even when the cap is exceeded.
+   */
+  getStrategyEvidence(): {
+    totalDecisions: number;
+    approvedCount: number;
+    refusedCount: number;
+    recentDecisions: DashboardStrategyDecision[];
+  } {
+    if (!this._strategyDecisionRepo) {
+      return { totalDecisions: 0, approvedCount: 0, refusedCount: 0, recentDecisions: [] };
+    }
+
+    try {
+      const totalDecisions = this._strategyDecisionRepo.countDecisions();
+      const approvedCount = this._strategyDecisionRepo.countByStatus(StrategyDecisionStatus.Approved);
+      const refusedCount = this._strategyDecisionRepo.countByStatus(StrategyDecisionStatus.Refused);
+      const recentDecisions = this._getRecentStrategyDecisions();
+      return { totalDecisions, approvedCount, refusedCount, recentDecisions };
+    } catch {
+      return { totalDecisions: 0, approvedCount: 0, refusedCount: 0, recentDecisions: [] };
     }
   }
 

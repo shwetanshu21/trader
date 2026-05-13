@@ -1073,6 +1073,71 @@ describe('Health server — strategy evidence routes', () => {
       expect(body).not.toContain('apiKey');
       expect(body).not.toContain('apiSecret');
     });
+
+    it('reports persisted totalDecisions beyond the recent cap (25 decisions, 20 cap)', async () => {
+      // Seed 25 strategy decisions — 20 approved, 5 refused — exceeding the
+      // 20-item recent cap. The persisted total must be correct even though
+      // recentDecisions truncates.
+      for (let i = 0; i < 20; i++) {
+        const p = seedProposal(ctx.proposalRepo, { tradingsymbol: `APPROVED_${i}` });
+        seedStrategyDecision(ctx.strategyDecisionRepo, p.id, {
+          tradingsymbol: `APPROVED_${i}`,
+          decisionStatus: StrategyDecisionStatus.Approved,
+        });
+      }
+      for (let i = 0; i < 5; i++) {
+        const p = seedProposal(ctx.proposalRepo, { tradingsymbol: `REFUSED_${i}` });
+        seedStrategyDecision(ctx.strategyDecisionRepo, p.id, {
+          tradingsymbol: `REFUSED_${i}`,
+          decisionStatus: StrategyDecisionStatus.Refused,
+        });
+      }
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+
+      // Totals come from persisted COUNT queries, not from the bounded recent list
+      expect(data.totalDecisions).toBe(25);
+      expect(data.approvedCount).toBe(20);
+      expect(data.refusedCount).toBe(5);
+
+      // The recent list is capped at 20 items
+      expect(data.recentDecisions.length).toBe(20);
+
+      // The visible recent decisions should all be from the capped list
+      // (newest first — all approved ones were inserted before refused ones,
+      // so the 5 most recent are the refused ones + 15 approved)
+      const recentStatuses = data.recentDecisions.map((d: any) => d.decisionStatus);
+      const refusedInRecent = recentStatuses.filter((s: string) => s === 'refused').length;
+      const approvedInRecent = recentStatuses.filter((s: string) => s === 'approved').length;
+      expect(refusedInRecent).toBe(5);
+      expect(approvedInRecent).toBe(15);
+    });
+
+    it('cross-surface: /dashboard.json recentStrategyDecisions capped while /health/strategy totals accurate', async () => {
+      // Seed 22 decisions and verify both surfaces
+      for (let i = 0; i < 22; i++) {
+        const p = seedProposal(ctx.proposalRepo, { tradingsymbol: `SYM_${i}` });
+        seedStrategyDecision(ctx.strategyDecisionRepo, p.id, {
+          tradingsymbol: `SYM_${i}`,
+          decisionStatus: StrategyDecisionStatus.Approved,
+        });
+      }
+
+      // Dashboard JSON snapshot — bounded recent list
+      const dashRes = await fetchUrl(ctx.server, '/dashboard.json');
+      const dashData = JSON.parse(dashRes.body);
+      expect(dashData.recentStrategyDecisions.length).toBe(20);
+
+      // Health strategy route — persisted totals
+      const stratRes = await fetchUrl(ctx.server, '/health/strategy');
+      const stratData = JSON.parse(stratRes.body);
+      expect(stratData.totalDecisions).toBe(22);
+      expect(stratData.recentDecisions.length).toBe(20);
+
+      // Verify no mismatch: totals are NOT derived from recent list length
+      expect(stratData.totalDecisions).not.toBe(stratData.recentDecisions.length);
+    });
   });
 
   describe('Dashboard strategy decisions in HTML', () => {
