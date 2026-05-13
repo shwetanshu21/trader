@@ -140,6 +140,29 @@ export function createHealthServer(
           break;
         }
 
+        // ── Strategy evidence route ──────────────────────────────────────
+
+        case '/health/strategy': {
+          if (!dashboard) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Dashboard not available' }));
+            break;
+          }
+          const sSnapshot = dashboard.getSnapshot();
+          const decisions = sSnapshot.recentStrategyDecisions;
+          const approvedCount = decisions.filter(d => d.decisionStatus === 'approved').length;
+          const refusedCount = decisions.filter(d => d.decisionStatus === 'refused').length;
+          const totalCount = approvedCount + refusedCount;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            totalDecisions: totalCount,
+            approvedCount,
+            refusedCount,
+            recentDecisions: decisions,
+          }, null, 2));
+          break;
+        }
+
         default: {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found', path: url.pathname }));

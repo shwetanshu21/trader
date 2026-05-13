@@ -58,6 +58,7 @@ export interface RuntimeAppHandles {
   universeSupervisor: UniverseSupervisor;
   proposalRepo: ProposalRepository | null;
   blockedOrderRepo: BlockedOrderRepository | null;
+  strategyDecisionRepo: StrategyDecisionRepository | null;
   lifecycle: LifecycleManager;
   healthService: HealthService;
   telemetry: Telemetry;
@@ -230,13 +231,14 @@ export class RuntimeApp {
     let proposalSupervisor: ProposalSupervisor | null = null;
     let executionGateSupervisor: ExecutionGateSupervisor | null = null;
     let strategyRiskSupervisor: StrategyRiskSupervisor | null = null;
+    let strategyDecisionRepo: StrategyDecisionRepository | null = null;
 
     if (this.config.proposalEngine) {
       logBoot('Proposal engine: configured');
 
       proposalRepo = new ProposalRepository(dbManager.db);
       blockedOrderRepo = new BlockedOrderRepository(dbManager.db);
-      const strategyDecisionRepo = new StrategyDecisionRepository(dbManager.db);
+      strategyDecisionRepo = new StrategyDecisionRepository(dbManager.db);
       const engine = new ProposalEngine(this.config.proposalEngine);
       const validator = new IndiaProposalValidator();
 
@@ -302,6 +304,7 @@ export class RuntimeApp {
       zerodhaRepo: brokerRepo,
       proposalRepo,
       blockedOrderRepo,
+      strategyDecisionRepo,
       clock,
       universeService,
     });
@@ -320,6 +323,7 @@ export class RuntimeApp {
       universeSupervisor,
       proposalRepo,
       blockedOrderRepo,
+      strategyDecisionRepo,
       lifecycle,
       healthService,
       telemetry,

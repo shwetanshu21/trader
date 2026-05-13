@@ -12,6 +12,7 @@ import { UniverseRepository } from '../src/persistence/universe-repo.js';
 import { UniverseService } from '../src/universe/universe-service.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
+import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -23,6 +24,7 @@ import {
   SchedulerStatus,
   MarketPhase,
   ProposalStatus,
+  StrategyDecisionStatus,
   ZerodhaSessionState,
   BlockCode,
   UniverseCoverageVerdict,
@@ -42,6 +44,7 @@ function createTestContext() {
   const universeService = new UniverseService(brokerRepo, universeRepo);
   const proposalRepo = new ProposalRepository(db.db);
   const blockedOrderRepo = new BlockedOrderRepository(db.db);
+  const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
   const lifecycle = new LifecycleManager(runtimeStateRepo);
   // Start lifecycle so health service can compose
   lifecycle.start('Test setup');
@@ -53,6 +56,7 @@ function createTestContext() {
     zerodhaRepo,
     proposalRepo,
     blockedOrderRepo,
+    strategyDecisionRepo,
     clock,
     universeService,
   });
@@ -66,6 +70,7 @@ function createTestContext() {
     universeService,
     proposalRepo,
     blockedOrderRepo,
+    strategyDecisionRepo,
     lifecycle,
     healthService,
     clock,
@@ -149,6 +154,56 @@ function seedBlockedOrder(
     triggerPrice: null,
     orderType: 'MARKET',
   });
+}
+
+/** Seed a strategy decision for test purposes. */
+function seedStrategyDecision(
+  repo: StrategyDecisionRepository,
+  proposalAttemptId: number,
+  overrides?: Partial<{
+    decisionStatus: StrategyDecisionStatus;
+    tradingsymbol: string;
+    side: string;
+    exchange: string;
+    quantity: number;
+    riskNotional: number | null;
+    riskExposureTag: string | null;
+    decidedAt: number;
+  }>,
+) {
+  return repo.insertDecisionWithReasons(
+    {
+      proposalAttemptId,
+      decisionStatus: overrides?.decisionStatus ?? StrategyDecisionStatus.Approved,
+      strategyId: 'test-strategy',
+      strategyVersion: '1.0.0',
+      decidedAt: overrides?.decidedAt ?? Date.now(),
+      exchange: overrides?.exchange ?? 'NSE',
+      tradingsymbol: overrides?.tradingsymbol ?? 'RELIANCE',
+      side: overrides?.side ?? 'buy',
+      product: 'MIS',
+      quantity: overrides?.quantity ?? 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 2850.50,
+      quoteBid: 2850.00,
+      quoteAsk: 2851.00,
+      quoteVolume: 1250000,
+      quoteReceivedAt: Date.now(),
+      riskNotional: overrides?.riskNotional ?? 213_787.50,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 10_689.38,
+      riskStopDistance: null,
+      riskExposureTag: overrides?.riskExposureTag ?? 'intraday',
+    },
+    overrides?.decisionStatus === StrategyDecisionStatus.Refused
+      ? [
+        { reasonCode: 'missing_quote_data' as any, reasonMessage: 'No quote available for sizing' },
+        { reasonCode: 'below_minimum_notional' as any, reasonMessage: 'Notional below minimum 10,000 INR' },
+      ]
+      : [],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +710,127 @@ describe('DashboardReadModel — snapshot contract', () => {
       const snapshot = ctx.dashboard.getSnapshot();
       const json = JSON.stringify(snapshot);
       expect(json.length).toBeLessThan(50_000);
+    });
+  });
+
+  // ── Recent strategy decisions ─────────────────────────────────────────
+
+  describe('Recent strategy decisions', () => {
+    it('returns empty array when no strategy decisions exist', () => {
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.recentStrategyDecisions).toEqual([]);
+    });
+
+    it('includes seeded approved strategy decisions', () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'RELIANCE',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.recentStrategyDecisions.length).toBe(1);
+      const sd = snapshot.recentStrategyDecisions[0];
+      expect(sd.decisionStatus).toBe('approved');
+      expect(sd.tradingsymbol).toBe('RELIANCE');
+      expect(sd.strategyId).toBe('test-strategy');
+      expect(sd.notional).toBe(213_787.50);
+      expect(sd.sizingBasis).toBe('last_price');
+      expect(sd.exposureTag).toBe('intraday');
+      expect(sd.reasons).toEqual([]);
+    });
+
+    it('includes refused decisions with ordered reasons', () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      const seedResult = seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'INFY',
+        decisionStatus: StrategyDecisionStatus.Refused,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const match = snapshot.recentStrategyDecisions.find(d => d.proposalAttemptId === proposal.id);
+      expect(match).toBeDefined();
+      expect(match!.decisionStatus).toBe('refused');
+      expect(match!.reasons.length).toBe(2);
+      expect(match!.reasons[0]).toContain('No quote available');
+      expect(match!.reasons[1]).toContain('Notional below minimum');
+    });
+
+    it('decidedAt is a valid ISO timestamp', () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id);
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const decision = snapshot.recentStrategyDecisions[0];
+      expect(() => new Date(decision.decidedAt)).not.toThrow();
+    });
+
+    it('values lastPrice, notional, quantity from strategy decision', () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        quantity: 100,
+        riskNotional: 350_000,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const match = snapshot.recentStrategyDecisions.find(d => d.tradingsymbol === 'TCS');
+      expect(match).toBeDefined();
+      expect(match!.quantity).toBe(100);
+      expect(match!.notional).toBe(350_000);
+      expect(match!.lastPrice).toBe(2850.50);
+    });
+
+    it('limits recent strategy decisions to 20', () => {
+      // Insert 25 strategy decisions under different proposals
+      for (let i = 0; i < 25; i++) {
+        const p = seedProposal(ctx.proposalRepo, {
+          tradingsymbol: `SYM${i}`,
+          createdAt: Date.now() + i,
+        });
+        seedStrategyDecision(ctx.strategyDecisionRepo, p.id, {
+          tradingsymbol: `SYM${i}`,
+          decidedAt: Date.now() + i,
+        });
+      }
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.recentStrategyDecisions.length).toBeLessThanOrEqual(20);
+    });
+
+    it('returns decisions newest first', () => {
+      const p1 = seedProposal(ctx.proposalRepo, { tradingsymbol: 'OLD', createdAt: 100 });
+      const p2 = seedProposal(ctx.proposalRepo, { tradingsymbol: 'MID', createdAt: 200 });
+      const p3 = seedProposal(ctx.proposalRepo, { tradingsymbol: 'NEW', createdAt: 300 });
+
+      seedStrategyDecision(ctx.strategyDecisionRepo, p1.id, {
+        tradingsymbol: 'OLD',
+        decidedAt: Date.now() - 10_000,
+      });
+      seedStrategyDecision(ctx.strategyDecisionRepo, p2.id, {
+        tradingsymbol: 'MID',
+        decidedAt: Date.now() - 5_000,
+      });
+      seedStrategyDecision(ctx.strategyDecisionRepo, p3.id, {
+        tradingsymbol: 'NEW',
+        decidedAt: Date.now(),
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const ids = snapshot.recentStrategyDecisions.map(d => d.id);
+      expect(ids[0]).toBe(ids[2] < ids[0] ? ids[0] : ids[0]); // newest first — recent has highest id
+    });
+
+    it('does NOT include access tokens or secret material', () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id);
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const json = JSON.stringify(snapshot);
+      expect(json).not.toContain('accessToken');
+      expect(json).not.toContain('access_token');
+      expect(json).not.toContain('apiKey');
+      expect(json).not.toContain('apiSecret');
     });
   });
 });

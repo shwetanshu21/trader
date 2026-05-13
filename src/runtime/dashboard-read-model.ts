@@ -16,6 +16,7 @@ import type {
   DashboardRecentProposal,
   DashboardBlockedOrder,
   DashboardLifecycleEvent,
+  DashboardStrategyDecision,
   ProposalAttemptWithReasons,
   BlockedOrderRow,
   LifecycleEvent,
@@ -25,6 +26,7 @@ import type { RuntimeStateRepository } from '../persistence/runtime-state-repo.j
 import type { ZerodhaRepository } from '../persistence/broker-repo.js';
 import type { ProposalRepository } from '../persistence/proposal-repo.js';
 import type { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
+import type { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
 import type { MarketClock } from './market-clock.js';
 import type { UniverseService } from '../universe/universe-service.js';
 
@@ -35,6 +37,7 @@ import type { UniverseService } from '../universe/universe-service.js';
 const MAX_RECENT_PROPOSALS = 20;
 const MAX_RECENT_BLOCKED_ORDERS = 20;
 const MAX_RECENT_LIFECYCLE_EVENTS = 10;
+const MAX_RECENT_STRATEGY_DECISIONS = 20;
 
 // ---------------------------------------------------------------------------
 // DashboardReadModel
@@ -46,6 +49,7 @@ export interface DashboardReadModelOptions {
   zerodhaRepo: ZerodhaRepository;
   proposalRepo: ProposalRepository | null;
   blockedOrderRepo: BlockedOrderRepository | null;
+  strategyDecisionRepo: StrategyDecisionRepository | null;
   clock: MarketClock;
   universeService: UniverseService;
 }
@@ -56,6 +60,7 @@ export class DashboardReadModel {
   private readonly _zerodhaRepo: ZerodhaRepository;
   private readonly _proposalRepo: ProposalRepository | null;
   private readonly _blockedOrderRepo: BlockedOrderRepository | null;
+  private readonly _strategyDecisionRepo: StrategyDecisionRepository | null;
   private readonly _clock: MarketClock;
   private readonly _universeService: UniverseService;
 
@@ -65,6 +70,7 @@ export class DashboardReadModel {
     this._zerodhaRepo = options.zerodhaRepo;
     this._proposalRepo = options.proposalRepo;
     this._blockedOrderRepo = options.blockedOrderRepo;
+    this._strategyDecisionRepo = options.strategyDecisionRepo;
     this._clock = options.clock;
     this._universeService = options.universeService;
   }
@@ -84,6 +90,7 @@ export class DashboardReadModel {
       recentProposals: this._getRecentProposals(),
       recentBlockedOrders: this._getRecentBlockedOrders(),
       recentLifecycleEvents: this._getRecentLifecycleEvents(),
+      recentStrategyDecisions: this._getRecentStrategyDecisions(),
       universe: this._getDashboardUniverse(),
     };
   }
@@ -194,6 +201,40 @@ export class DashboardReadModel {
         state: e.state,
         reason: e.reason,
       }));
+    } catch {
+      return [];
+    }
+  }
+
+  private _getRecentStrategyDecisions(): DashboardStrategyDecision[] {
+    if (!this._strategyDecisionRepo) return [];
+
+    try {
+      const decisions = this._strategyDecisionRepo.getRecentDecisions(MAX_RECENT_STRATEGY_DECISIONS);
+      return decisions.map(d => {
+        const reasons = this._strategyDecisionRepo!.getReasonsForDecision(d.id);
+        return {
+          id: d.id,
+          proposalAttemptId: d.proposalAttemptId,
+          decisionStatus: d.decisionStatus,
+          strategyId: d.strategyId,
+          strategyVersion: d.strategyVersion,
+          decidedAt: new Date(d.decidedAt).toISOString(),
+          exchange: d.exchange,
+          tradingsymbol: d.tradingsymbol,
+          side: d.side,
+          product: d.product,
+          quantity: d.quantity,
+          price: d.price,
+          triggerPrice: d.triggerPrice,
+          orderType: d.orderType,
+          notional: d.riskNotional,
+          sizingBasis: d.riskSizingBasis,
+          exposureTag: d.riskExposureTag,
+          lastPrice: d.quoteLastPrice,
+          reasons: reasons.map(r => r.reasonMessage),
+        };
+      });
     } catch {
       return [];
     }

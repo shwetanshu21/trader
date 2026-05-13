@@ -15,6 +15,7 @@ import { UniverseRepository } from '../src/persistence/universe-repo.js';
 import { UniverseService } from '../src/universe/universe-service.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
+import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -25,6 +26,7 @@ import { Telemetry } from '../src/runtime/telemetry.js';
 import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
 import {
   ProposalStatus,
+  StrategyDecisionStatus,
   BlockCode,
   UniverseCoverageVerdict,
   type DashboardSnapshot,
@@ -88,6 +90,7 @@ function createServerAndDashboard() {
   const universeService = new UniverseService(brokerRepo, universeRepo);
   const proposalRepo = new ProposalRepository(db.db);
   const blockedOrderRepo = new BlockedOrderRepository(db.db);
+  const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
   const lifecycle = new LifecycleManager(runtimeStateRepo);
   lifecycle.start('Test setup');
   const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
@@ -100,6 +103,7 @@ function createServerAndDashboard() {
     zerodhaRepo,
     proposalRepo,
     blockedOrderRepo,
+    strategyDecisionRepo,
     clock,
     universeService,
   });
@@ -107,7 +111,7 @@ function createServerAndDashboard() {
 
   return {
     db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
-    proposalRepo, blockedOrderRepo,
+    proposalRepo, blockedOrderRepo, strategyDecisionRepo,
     lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
   };
 }
@@ -195,6 +199,56 @@ function seedUniverseSnapshot(
     maxStalenessMs: 120000,
     members: [],
   });
+}
+
+/** Seed a strategy decision for test purposes. */
+function seedStrategyDecision(
+  repo: StrategyDecisionRepository,
+  proposalAttemptId: number,
+  overrides?: Partial<{
+    decisionStatus: StrategyDecisionStatus;
+    tradingsymbol: string;
+    side: string;
+    exchange: string;
+    quantity: number;
+    riskNotional: number | null;
+    riskExposureTag: string | null;
+    decidedAt: number;
+  }>,
+) {
+  return repo.insertDecisionWithReasons(
+    {
+      proposalAttemptId,
+      decisionStatus: overrides?.decisionStatus ?? StrategyDecisionStatus.Approved,
+      strategyId: 'test-strategy',
+      strategyVersion: '1.0.0',
+      decidedAt: overrides?.decidedAt ?? Date.now(),
+      exchange: overrides?.exchange ?? 'NSE',
+      tradingsymbol: overrides?.tradingsymbol ?? 'RELIANCE',
+      side: overrides?.side ?? 'buy',
+      product: 'MIS',
+      quantity: overrides?.quantity ?? 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 2850.50,
+      quoteBid: 2850.00,
+      quoteAsk: 2851.00,
+      quoteVolume: 1250000,
+      quoteReceivedAt: Date.now(),
+      riskNotional: overrides?.riskNotional ?? 213_787.50,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 10_689.38,
+      riskStopDistance: null,
+      riskExposureTag: overrides?.riskExposureTag ?? 'intraday',
+    },
+    overrides?.decisionStatus === StrategyDecisionStatus.Refused
+      ? [
+        { reasonCode: 'missing_quote_data' as any, reasonMessage: 'No quote available for sizing' },
+        { reasonCode: 'below_minimum_notional' as any, reasonMessage: 'Notional below minimum 10,000 INR' },
+      ]
+      : [],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +769,188 @@ describe('Health server — universe coverage routes', () => {
   });
 });
 
+// ── Strategy evidence routes ───────────────────────────────────────────
+
+describe('Health server — strategy evidence routes', () => {
+  let ctx: ReturnType<typeof createServerAndDashboard>;
+
+  beforeEach(async () => {
+    ctx = createServerAndDashboard();
+    await new Promise<void>((resolve, reject) => {
+      ctx.server.listen(0, '127.0.0.1', () => resolve());
+      ctx.server.on('error', reject);
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => {
+      ctx.server.close(() => {
+        ctx.db.close();
+        resolve();
+      });
+    });
+  });
+
+  describe('/health/strategy', () => {
+    it('returns 200 with empty decisions when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.totalDecisions).toBe(0);
+      expect(data.approvedCount).toBe(0);
+      expect(data.refusedCount).toBe(0);
+      expect(data.recentDecisions).toEqual([]);
+    });
+
+    it('returns 200 with seeded approved decisions', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.totalDecisions).toBe(1);
+      expect(data.approvedCount).toBe(1);
+      expect(data.refusedCount).toBe(0);
+      expect(data.recentDecisions[0].tradingsymbol).toBe('TCS');
+      expect(data.recentDecisions[0].decisionStatus).toBe('approved');
+    });
+
+    it('returns 200 with mixed approved and refused decisions', async () => {
+      const p1 = seedProposal(ctx.proposalRepo, { tradingsymbol: 'APPROVED' });
+      const p2 = seedProposal(ctx.proposalRepo, { tradingsymbol: 'REFUSED' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, p1.id, {
+        tradingsymbol: 'APPROVED',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedStrategyDecision(ctx.strategyDecisionRepo, p2.id, {
+        tradingsymbol: 'REFUSED',
+        decisionStatus: StrategyDecisionStatus.Refused,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      expect(data.totalDecisions).toBe(2);
+      expect(data.approvedCount).toBe(1);
+      expect(data.refusedCount).toBe(1);
+    });
+
+    it('includes refusal reasons in response', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'INFY' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'INFY',
+        decisionStatus: StrategyDecisionStatus.Refused,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const refused = data.recentDecisions.find((d: any) => d.decisionStatus === 'refused');
+      expect(refused).toBeDefined();
+      expect(refused.reasons.length).toBeGreaterThanOrEqual(1);
+      expect(refused.reasons[0]).toContain('No quote available');
+    });
+
+    it('does NOT include access tokens or secret material', async () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id);
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+      expect(body).not.toContain('apiSecret');
+    });
+  });
+
+  describe('Dashboard strategy decisions in HTML', () => {
+    it('shows "No strategy decisions recorded" when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No strategy decisions recorded');
+    });
+
+    it('shows approved strategy decisions in HTML', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Strategy Decisions');
+      expect(res.body).toContain('TCS');
+      expect(res.body).toContain('approved');
+    });
+
+    it('shows refused strategy decisions with reasons in HTML', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'INFY' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'INFY',
+        decisionStatus: StrategyDecisionStatus.Refused,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('INFY');
+      expect(res.body).toContain('refused');
+      expect(res.body).toContain('No quote available');
+    });
+
+    it('does NOT include secret material in HTML', async () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id);
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).not.toContain('accessToken');
+      expect(res.body).not.toContain('apiKey');
+    });
+
+    it('shows notional value in HTML rows', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'HDFC' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'HDFC',
+        riskNotional: 500_000,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('500000');
+    });
+  });
+
+  describe('Dashboard strategy decisions in JSON', () => {
+    it('includes empty strategyDecisions when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.recentStrategyDecisions).toEqual([]);
+    });
+
+    it('includes seeded strategy decisions in JSON', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.recentStrategyDecisions.length).toBe(1);
+      expect(data.recentStrategyDecisions[0].tradingsymbol).toBe('TCS');
+      expect(data.recentStrategyDecisions[0].decisionStatus).toBe('approved');
+    });
+
+    it('does NOT include secret material in JSON', async () => {
+      const proposal = seedProposal(ctx.proposalRepo);
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id);
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+    });
+  });
+});
+
 import type { DashboardSnapshot } from '../src/types/runtime.js';
 
 // ── Renderer escaping unit tests ──────────────────────────────────────────
@@ -762,6 +998,7 @@ describe('Dashboard renderer — HTML escaping', () => {
       ],
       recentBlockedOrders: [],
       recentLifecycleEvents: [],
+      recentStrategyDecisions: [],
     };
 
     const html = renderDashboardHtml(snapshot);
@@ -818,6 +1055,7 @@ describe('Dashboard renderer — HTML escaping', () => {
         },
       ],
       recentLifecycleEvents: [],
+      recentStrategyDecisions: [],
     };
 
     const html = renderDashboardHtml(snapshot);
@@ -857,6 +1095,7 @@ describe('Dashboard renderer — HTML escaping', () => {
       recentProposals: [],
       recentBlockedOrders: [],
       recentLifecycleEvents: [],
+      recentStrategyDecisions: [],
       universe: {
         policyVersion: '1.0.0',
         computedAt: '2025-01-01T00:00:00.000Z',

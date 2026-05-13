@@ -62,7 +62,7 @@ function maybeValue(val: string | null): string {
 // ---------------------------------------------------------------------------
 
 export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
-  const { marketProfile, health, runtime, broker, universe, recentProposals, recentBlockedOrders, recentLifecycleEvents } = snapshot;
+  const { marketProfile, health, runtime, broker, universe, recentProposals, recentBlockedOrders, recentLifecycleEvents, recentStrategyDecisions } = snapshot;
 
   const healthColor = verdictColor(health.verdict);
 
@@ -137,6 +137,22 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         <td class="status-${e.state}">${escapeHtml(e.state)}</td>
         <td>${escapeHtml(e.reason)}</td>
       </tr>`).join('');
+
+  const strategyRows = recentStrategyDecisions.length === 0
+    ? '<tr><td colspan="6" class="muted">No strategy decisions recorded</td></tr>'
+    : recentStrategyDecisions.map(d => {
+      const reasons = d.reasons.length > 0
+        ? `<div class="reasons">${d.reasons.map(r => `<span class="reason">${escapeHtml(r)}</span>`).join('')}</div>`
+        : '';
+      return `<tr>
+        <td>${escapeHtml(d.exchange)}</td>
+        <td>${escapeHtml(d.tradingsymbol)}</td>
+        <td>${escapeHtml(d.side)}</td>
+        <td class="status-${d.decisionStatus}">${escapeHtml(d.decisionStatus)}</td>
+        <td>${d.notional != null ? d.notional.toFixed(0) : '—'}</td>
+        <td>${reasons}</td>
+      </tr>`;
+    }).join('');
 
   // ── Degraded reasons ──────────────────────────────────────────────────
   const degradedSection = health.degradedReasons.length > 0 ? `
@@ -241,6 +257,14 @@ ${universeSection}
   <table>
     <thead><tr><td>Exchange</td><td>Symbol</td><td>Side</td><td>Code</td><td>Message</td></tr></thead>
     <tbody>${blockedRows}</tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Strategy Decisions (${recentStrategyDecisions.length})</h2>
+  <table>
+    <thead><tr><td>Exchange</td><td>Symbol</td><td>Side</td><td>Status</td><td>Notional</td><td>Reasons</td></tr></thead>
+    <tbody>${strategyRows}</tbody>
   </table>
 </div>
 

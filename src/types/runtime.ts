@@ -538,6 +538,8 @@ export interface DashboardSnapshot {
   recentBlockedOrders: DashboardBlockedOrder[];
   /** Recent lifecycle transition events (newest first, max 10). */
   recentLifecycleEvents: DashboardLifecycleEvent[];
+  /** Recent strategy decisions (newest first, max 20). */
+  recentStrategyDecisions: DashboardStrategyDecision[];
   /** Universe coverage summary — null when no snapshot has been computed. */
   universe: DashboardUniverse | null;
 }
@@ -680,6 +682,56 @@ export interface DashboardLifecycleEvent {
   state: string;
   /** Human-readable reason for the transition. */
   reason: string;
+}
+
+// ---------------------------------------------------------------------------
+// Strategy decision — dashboard read-model DTOs
+// ---------------------------------------------------------------------------
+
+/**
+ * A single strategy decision for the operator dashboard.
+ * Covers both approved candidates and refused decisions with reasons.
+ * Token-safe: never includes access tokens, API keys, or secret-bearing material.
+ */
+export interface DashboardStrategyDecision {
+  /** Strategy decision row ID. */
+  id: number;
+  /** Source proposal attempt ID. */
+  proposalAttemptId: number;
+  /** Decision status: 'approved' or 'refused'. */
+  decisionStatus: string;
+  /** Strategy identity (e.g. 'india-nse-eq-v1'). */
+  strategyId: string;
+  /** Strategy version (e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** ISO‑8601 timestamp when the decision was made. */
+  decidedAt: string;
+  /** Determined exchange (e.g. 'NSE'). */
+  exchange: string;
+  /** Determined trading symbol. */
+  tradingsymbol: string;
+  /** Trade side. */
+  side: string;
+  /** Deterministic product. */
+  product: string;
+  /** Deterministic order quantity (lot-size rounded). */
+  quantity: number;
+  /** Limit price, or null for market orders. */
+  price: number | null;
+  /** Trigger price for SL/SLM orders, or null. */
+  triggerPrice: number | null;
+  /** Deterministic order type. */
+  orderType: string;
+  /** Estimated notional value, or null. */
+  notional: number | null;
+  /** The basis used for sizing (e.g. 'last_price'). */
+  sizingBasis: string;
+  /** Exposure category tag (e.g. 'intraday'), or null. */
+  exposureTag: string | null;
+  /** Reference last price at decision time, or null. */
+  lastPrice: number | null;
+  /** Ordered refusal reason messages (empty when approved). */
+  reasons: string[];
 }
 
 export type ZerodhaConfig = BrokerConfig;
