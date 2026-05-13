@@ -139,8 +139,8 @@ export interface EvaluateProposalParams {
  * 3. MissingQuoteData — if no quote snapshot is available
  * 4. StaleQuoteData — if the quote snapshot is older than MAX_QUOTE_STALENESS_MS
  * 5. MissingInstrumentMetadata — if lot size is missing
- * 6. BelowMinimumNotional — if computed notional < minNotional
- * 7. ZeroQuantityAfterRounding — if lot-size rounding produces zero
+ * 6. ZeroQuantityAfterRounding — if lot-size rounding produces zero
+ * 7. BelowMinimumNotional — if executable post-rounding notional < minNotional
  * 8. Approved — all checks pass, risk metadata computed
  */
 export function evaluateProposal(params: EvaluateProposalParams): StrategyEvaluation {
@@ -189,16 +189,7 @@ export function evaluateProposal(params: EvaluateProposalParams): StrategyEvalua
     );
   }
 
-  // 6. Compute notional and check minimum
-  const rawNotional = params.quantity * referencePrice;
-  if (rawNotional < policy.minNotional) {
-    return refused(
-      StrategyDecisionReasonCode.BelowMinimumNotional,
-      `Notional ${rawNotional.toFixed(2)} is below minimum ${policy.minNotional} for ${params.tradingsymbol}`,
-    );
-  }
-
-  // 7. Round quantity to lot size
+  // 6. Round quantity to lot size before any notional checks
   const lotSize = params.instrumentMeta.lotSize;
   const lotRoundedQuantity = Math.floor(params.quantity / lotSize) * lotSize;
   if (lotRoundedQuantity <= 0) {
@@ -208,9 +199,17 @@ export function evaluateProposal(params: EvaluateProposalParams): StrategyEvalua
     );
   }
 
-  // 8. Approved — compute risk metadata
-  const adjustedNotional = lotRoundedQuantity * referencePrice;
-  const maxLossRupees = adjustedNotional * (policy.maxLossPercent / 100);
+  // 7. Compute executable notional and check minimum after rounding
+  const executableNotional = lotRoundedQuantity * referencePrice;
+  if (executableNotional < policy.minNotional) {
+    return refused(
+      StrategyDecisionReasonCode.BelowMinimumNotional,
+      `Executable notional ${executableNotional.toFixed(2)} is below minimum ${policy.minNotional} for ${params.tradingsymbol} after lot-size rounding`,
+    );
+  }
+
+  // 8. Approved — compute risk metadata from executable quantity
+  const maxLossRupees = executableNotional * (policy.maxLossPercent / 100);
 
   return {
     approved: true,
@@ -218,7 +217,7 @@ export function evaluateProposal(params: EvaluateProposalParams): StrategyEvalua
     price: params.price,
     triggerPrice: params.triggerPrice,
     orderType: params.orderType,
-    riskNotional: adjustedNotional,
+    riskNotional: executableNotional,
     riskSizingBasis: 'last_price',
     riskMaxLossRupees: maxLossRupees,
     riskStopDistance: null,

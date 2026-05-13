@@ -521,7 +521,7 @@ const { ProposalRepository } = require('./dist/persistence/proposal-repo.js');
 const { StrategyDecisionRepository } = require('./dist/persistence/strategy-decision-repo.js');
 const { BlockedOrderRepository } = require('./dist/persistence/blocked-order-repo.js');
 const { BrokerRepository } = require('./dist/persistence/broker-repo.js');
-const { ProposalStatus, StrategyDecisionStatus, BlockCode } = require('./dist/types/runtime.js');
+const { ProposalStatus, StrategyDecisionStatus, BlockCode, ExecutionMode } = require('./dist/types/runtime.js');
 
 (async () => {
   let ok = 0, nok = 0;
@@ -540,9 +540,22 @@ const { ProposalStatus, StrategyDecisionStatus, BlockCode } = require('./dist/ty
     logLevel: 'error',
     zerodha: null,
     proposalEngine: {
+      providerMode: 'custom',
       providerUrl: 'http://dummy-witness',
       timeoutMs: 100,
       maxProposalsPerTick: 3,
+    },
+    execution: {
+      mode: ExecutionMode.Blocked,
+      maxRetries: 0,
+      operatorBindHost: '127.0.0.1',
+      riskLimits: {
+        maxOpenPositions: 10,
+        maxOrdersPerInstrument: 1,
+        maxDailyLossRupees: 0,
+        maxExposureRupees: 0,
+        marketHoursStalenessMs: 120000,
+      },
     },
   });
 

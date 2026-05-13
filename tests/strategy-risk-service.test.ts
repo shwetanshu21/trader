@@ -202,6 +202,22 @@ describe('evaluateProposal (pure function)', () => {
     expect(result.reasons[0].reasonMessage).toContain('1000');
   });
 
+  it('refuses with BelowMinimumNotional when raw notional passes but executable post-rounding notional fails', () => {
+    // Raw: 101 * 99.75 = 10074.75 (passes 10,000 floor)
+    // Rounded to lot size 100: 100 * 99.75 = 9975 (must fail)
+    const result = evaluateProposal(defaultParams({
+      quantity: 101,
+      quote: makeQuote({ lastPrice: 99.75 }),
+      instrumentMeta: { lotSize: 100, tickSize: 0.05 },
+    }));
+
+    expect(result.approved).toBe(false);
+    if (result.approved) return;
+    expect(result.reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.BelowMinimumNotional);
+    expect(result.reasons[0].reasonMessage).toContain('9975.00');
+    expect(result.reasons[0].reasonMessage).toContain('after lot-size rounding');
+  });
+
   it('refuses with ZeroQuantityAfterRounding when lot size > quantity', () => {
     const result = evaluateProposal(defaultParams({
       quantity: 5,
@@ -513,6 +529,36 @@ describe('StrategyRiskService', () => {
       expect(decision.decisionStatus).toBe(StrategyDecisionStatus.Refused);
       const reasons = strategyDecisionRepo.getReasonsForDecision(decision.id);
       expect(reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.BelowMinimumNotional);
+    });
+
+    it('refuses after lot-size rounding when raw requested notional passes but executable notional falls below minimum', () => {
+      const { service, brokerRepo, proposalRepo, strategyDecisionRepo } = createService();
+
+      brokerRepo.upsertInstruments([{
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        name: 'Reliance Industries',
+        expiry: null,
+        strike: null,
+        lotSize: 100,
+        tickSize: 0.05,
+        instrumentType: 'EQ',
+        segment: 'NSE_EQ',
+        exchangeToken: 738561,
+      }]);
+      brokerRepo.upsertQuote(makeQuote({ lastPrice: 99.75 }));
+
+      const proposalId = insertProposal(proposalRepo, { quantity: 101 });
+      const proposal = proposalRepo.getAttemptById(proposalId)!;
+
+      const decision = service.evaluateProposalRow(proposal);
+
+      expect(decision.decisionStatus).toBe(StrategyDecisionStatus.Refused);
+      const reasons = strategyDecisionRepo.getReasonsForDecision(decision.id);
+      expect(reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.BelowMinimumNotional);
+      expect(reasons[0].reasonMessage).toContain('9975.00');
+      expect(reasons[0].reasonMessage).toContain('after lot-size rounding');
     });
   });
 
