@@ -62,7 +62,7 @@ function maybeValue(val: string | null): string {
 // ---------------------------------------------------------------------------
 
 export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
-  const { marketProfile, health, runtime, broker, universe, recentProposals, recentBlockedOrders, recentLifecycleEvents, recentStrategyDecisions } = snapshot;
+  const { marketProfile, health, runtime, broker, universe, recentProposals, recentBlockedOrders, recentLifecycleEvents, recentStrategyDecisions, execution } = snapshot;
 
   const healthColor = verdictColor(health.verdict);
 
@@ -153,6 +153,51 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         <td>${reasons}</td>
       </tr>`;
     }).join('');
+
+  // ── Execution evidence section ──────────────────────────────────────────
+
+  let executionSection: string;
+  if (execution) {
+    const modeColor = execution.isGateRefusing ? '#dc2626' : execution.mode === 'paper' ? '#d97706' : '#16a34a';
+    const modeLabel = execution.isGateRefusing ? 'blocked' : execution.mode;
+    const lastAttemptVerdict = execution.recentAttempts.length > 0
+      ? execution.recentAttempts[0].status
+      : 'none';
+    const lastAttemptSymbol = execution.recentAttempts.length > 0
+      ? `${escapeHtml(execution.recentAttempts[0].exchange)}:${escapeHtml(execution.recentAttempts[0].tradingsymbol)}`
+      : '—';
+
+    executionSection = `
+      <div class="section">
+        <h2>Execution</h2>
+        <table>
+          <tr><td>Mode</td><td class="td-value"><span class="verdict" style="background:${modeColor}22;color:${modeColor}">${escapeHtml(modeLabel)}</span></td></tr>
+          <tr><td>Total Attempts</td><td class="td-value">${execution.totalAttempts}</td></tr>
+          <tr><td>Gate Refusing</td><td class="td-value">${execution.isGateRefusing ? 'Yes' : 'No'}</td></tr>
+          <tr><td>Gate Reason</td><td class="td-value">${execution.gateRefusalReason ? escapeHtml(execution.gateRefusalReason) : '—'}</td></tr>
+          <tr><td>Last Attempt</td><td class="td-value">${lastAttemptSymbol} (${escapeHtml(lastAttemptVerdict)})</td></tr>
+        </table>
+        ${execution.recentAttempts.length > 0 ? `
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>#</td><td>Symbol</td><td>Mode</td><td>Status</td><td>Outcome</td><td>Message</td></tr></thead>
+          <tbody>${execution.recentAttempts.map(a => `
+            <tr>
+              <td>${a.id}</td>
+              <td>${escapeHtml(a.exchange)}:${escapeHtml(a.tradingsymbol)}</td>
+              <td>${escapeHtml(a.executionMode)}</td>
+              <td class="status-${a.status}">${escapeHtml(a.status)}</td>
+              <td>${a.outcomeCode ? escapeHtml(a.outcomeCode) : '—'}</td>
+              <td>${escapeHtml(a.message)}${a.refusalReasons.length > 0 ? `<div class="reasons" style="margin-top:0.25rem;">${a.refusalReasons.map(r => `<span class="reason">${escapeHtml(r)}</span>`).join('')}</div>` : ''}</td>
+            </tr>`).join('')}</tbody>
+        </table>` : '<p class="muted" style="margin-top:0.5rem;">No recent execution attempts</p>'}
+      </div>`;
+  } else {
+    executionSection = `
+      <div class="section">
+        <h2>Execution</h2>
+        <p class="muted">No execution evidence available — attempt repo not wired</p>
+      </div>`;
+  }
 
   // ── Degraded reasons ──────────────────────────────────────────────────
   const degradedSection = health.degradedReasons.length > 0 ? `
@@ -267,6 +312,8 @@ ${universeSection}
     <tbody>${strategyRows}</tbody>
   </table>
 </div>
+
+${executionSection}
 
 <div class="section">
   <h2>Lifecycle Events (${recentLifecycleEvents.length})</h2>

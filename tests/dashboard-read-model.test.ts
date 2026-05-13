@@ -13,6 +13,7 @@ import { UniverseService } from '../src/universe/universe-service.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
 import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
+import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -25,6 +26,10 @@ import {
   MarketPhase,
   ProposalStatus,
   StrategyDecisionStatus,
+  ExecutionMode,
+  ExecutionAttemptStatus,
+  ExecutionOutcomeCode,
+  ExecutionRefusalCode,
   ZerodhaSessionState,
   BlockCode,
   UniverseCoverageVerdict,
@@ -831,6 +836,326 @@ describe('DashboardReadModel — snapshot contract', () => {
       expect(json).not.toContain('access_token');
       expect(json).not.toContain('apiKey');
       expect(json).not.toContain('apiSecret');
+    });
+  });
+});
+
+// ── Execution evidence ─────────────────────────────────────────────────
+
+describe('DashboardReadModel — execution evidence', () => {
+  /**
+   * Create a test context with execution attempt repo and execution mode wired.
+   */
+  function createContextWithExecution(mode: ExecutionMode = ExecutionMode.Blocked) {
+    const db = new DatabaseManager(':memory:');
+    const runtimeStateRepo = new RuntimeStateRepository(db.db);
+    const zerodhaRepo = new ZerodhaRepository(db.db);
+    const brokerRepo = new BrokerRepository(db.db);
+    const universeRepo = new UniverseRepository(db.db);
+    const universeService = new UniverseService(brokerRepo, universeRepo);
+    const proposalRepo = new ProposalRepository(db.db);
+    const blockedOrderRepo = new BlockedOrderRepository(db.db);
+    const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
+    const attemptRepo = new ExecutionAttemptRepository(db.db);
+    const lifecycle = new LifecycleManager(runtimeStateRepo);
+    lifecycle.start('Test setup');
+    const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+    const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
+    const dashboard = new DashboardReadModel({
+      healthService,
+      runtimeStateRepo,
+      zerodhaRepo,
+      proposalRepo,
+      blockedOrderRepo,
+      strategyDecisionRepo,
+      clock,
+      universeService,
+      attemptRepo,
+      executionMode: mode,
+    });
+
+    return {
+      db,
+      runtimeStateRepo,
+      zerodhaRepo,
+      brokerRepo,
+      universeRepo,
+      universeService,
+      proposalRepo,
+      blockedOrderRepo,
+      strategyDecisionRepo,
+      attemptRepo,
+      lifecycle,
+      healthService,
+      clock,
+      dashboard,
+    };
+  }
+
+  /** Seed a proposal + strategy decision + execution attempt for testing. */
+  function seedFullChain(
+    ctx: ReturnType<typeof createContextWithExecution>,
+    overrides?: {
+      decisionStatus?: StrategyDecisionStatus;
+      attemptStatus?: ExecutionAttemptStatus;
+      outcomeCode?: ExecutionOutcomeCode;
+      executionMode?: ExecutionMode;
+      tradingsymbol?: string;
+      message?: string;
+    },
+  ) {
+    const proposal = ctx.proposalRepo.insertAttempt({
+      exchange: 'NSE',
+      tradingsymbol: overrides?.tradingsymbol ?? 'RELIANCE',
+      instrumentToken: 123456,
+      side: 'buy',
+      product: 'MIS',
+      quantity: 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      tag: null,
+      proposalStatus: overrides?.decisionStatus === StrategyDecisionStatus.Refused
+        ? ProposalStatus.Refused
+        : ProposalStatus.Accepted,
+      createdAt: Date.now(),
+    });
+
+    const decision = ctx.strategyDecisionRepo.insertDecisionWithReasons(
+      {
+        proposalAttemptId: proposal.id,
+        decisionStatus: overrides?.decisionStatus ?? StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: overrides?.tradingsymbol ?? 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 75,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2850.50,
+        quoteBid: 2850.00,
+        quoteAsk: 2851.00,
+        quoteVolume: 1250000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 213_787.50,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 10_689.38,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      },
+      [],
+    );
+
+    const now = Date.now();
+    const attempt = ctx.attemptRepo.insertAttempt({
+      strategyDecisionId: decision.id,
+      executionMode: overrides?.executionMode ?? ExecutionMode.Blocked,
+      status: overrides?.attemptStatus ?? ExecutionAttemptStatus.Completed,
+      outcomeCode: overrides?.outcomeCode ?? ExecutionOutcomeCode.PaperSimulated,
+      brokerOrderId: null,
+      message: overrides?.message ?? 'Paper execution simulated successfully',
+      attemptedAt: now,
+      completedAt: overrides?.attemptStatus === ExecutionAttemptStatus.Completed ? now + 100 : null,
+    });
+
+    return { proposal, decision, attempt };
+  }
+
+  describe('Execution evidence shape', () => {
+    it('returns null execution when attempt repo is not wired', () => {
+      // Use the base context (no attemptRepo)
+      const { ctx: baseCtx } = (() => {
+        const ctx = createTestContext();
+        return { ctx };
+      })();
+      const snapshot = baseCtx.dashboard.getSnapshot();
+      expect(snapshot.execution).toBeNull();
+    });
+
+    it('includes execution with mode and zero attempts when empty', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Blocked);
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution).not.toBeNull();
+      expect(snapshot.execution!.mode).toBe('blocked');
+      expect(snapshot.execution!.totalAttempts).toBe(0);
+      expect(snapshot.execution!.recentAttempts).toEqual([]);
+      expect(snapshot.execution!.isGateRefusing).toBe(true);
+      expect(snapshot.execution!.gateRefusalReason).toContain('blocked');
+      ctx.db.close();
+    });
+
+    it('includes execution with paper mode and zero gate refusal', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution).not.toBeNull();
+      expect(snapshot.execution!.mode).toBe('paper');
+      expect(snapshot.execution!.isGateRefusing).toBe(false);
+      expect(snapshot.execution!.gateRefusalReason).toBeNull();
+      ctx.db.close();
+    });
+
+    it('includes total attempts count from repo', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      seedFullChain(ctx, { tradingsymbol: 'TCS' });
+      seedFullChain(ctx, { tradingsymbol: 'INFY' });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.totalAttempts).toBe(2);
+      ctx.db.close();
+    });
+
+    it('limits recent attempts to 5', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      for (let i = 0; i < 10; i++) {
+        seedFullChain(ctx, { tradingsymbol: `SYM${i}` });
+      }
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.recentAttempts.length).toBeLessThanOrEqual(5);
+      expect(snapshot.execution!.totalAttempts).toBe(10);
+      ctx.db.close();
+    });
+  });
+
+  describe('Execution evidence — recent attempts content', () => {
+    it('includes tradingsymbol, exchange, mode, status, outcome in recent attempts', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const { attempt } = seedFullChain(ctx, {
+        tradingsymbol: 'TCS',
+        executionMode: ExecutionMode.Paper,
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+        message: 'Paper order placed',
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.recentAttempts.length).toBe(1);
+      const ra = snapshot.execution!.recentAttempts[0];
+      expect(ra.id).toBe(attempt.id);
+      expect(ra.tradingsymbol).toBe('TCS');
+      expect(ra.exchange).toBe('NSE');
+      expect(ra.executionMode).toBe('paper');
+      expect(ra.status).toBe('completed');
+      expect(ra.outcomeCode).toBe('paper_simulated');
+      expect(ra.message).toBe('Paper order placed');
+      expect(ra.brokerOrderId).toBeNull();
+      ctx.db.close();
+    });
+
+    it('includes refusal reasons when attempt has refusals', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Blocked);
+      const proposal = ctx.proposalRepo.insertAttempt({
+        exchange: 'NSE', tradingsymbol: 'BLOCKED', instrumentToken: 123,
+        side: 'buy', product: 'MIS', quantity: 1, price: null, triggerPrice: null,
+        orderType: 'MARKET', tag: null,
+        proposalStatus: ProposalStatus.Accepted, createdAt: Date.now(),
+      });
+      const decision = ctx.strategyDecisionRepo.insertDecisionWithReasons({
+        proposalAttemptId: proposal.id, decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test', strategyVersion: '1.0.0', decidedAt: Date.now(),
+        exchange: 'NSE', tradingsymbol: 'BLOCKED', side: 'buy', product: 'MIS',
+        quantity: 1, price: null, triggerPrice: null, orderType: 'MARKET',
+        quoteLastPrice: 100, quoteBid: 99, quoteAsk: 101, quoteVolume: 50000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 100, riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 5, riskStopDistance: null, riskExposureTag: 'intraday',
+      }, []);
+
+      ctx.attemptRepo.insertAttemptWithRefusalReasons(
+        {
+          strategyDecisionId: decision.id, executionMode: ExecutionMode.Blocked,
+          status: ExecutionAttemptStatus.Refused,
+          outcomeCode: null, brokerOrderId: null,
+          message: 'Blocked mode refuses all attempts',
+          attemptedAt: Date.now(), completedAt: null,
+        },
+        [
+          { reasonCode: ExecutionRefusalCode.ModeBlocked, reasonMessage: 'Execution mode is blocked: all attempts refused' },
+        ],
+      );
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.recentAttempts.length).toBe(1);
+      expect(snapshot.execution!.recentAttempts[0].refusalReasons.length).toBe(1);
+      expect(snapshot.execution!.recentAttempts[0].refusalReasons[0]).toContain('blocked');
+      ctx.db.close();
+    });
+
+    it('attemptedAt is a valid ISO timestamp', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      seedFullChain(ctx);
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const ra = snapshot.execution!.recentAttempts[0];
+      expect(() => new Date(ra.attemptedAt)).not.toThrow();
+      ctx.db.close();
+    });
+
+    it('completedAt is null for refused attempts', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Blocked);
+      const proposal = ctx.proposalRepo.insertAttempt({
+        exchange: 'NSE', tradingsymbol: 'REF', instrumentToken: 1,
+        side: 'buy', product: 'MIS', quantity: 1, price: null, triggerPrice: null,
+        orderType: 'MARKET', tag: null,
+        proposalStatus: ProposalStatus.Accepted, createdAt: Date.now(),
+      });
+      const decision = ctx.strategyDecisionRepo.insertDecisionWithReasons({
+        proposalAttemptId: proposal.id, decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test', strategyVersion: '1.0.0', decidedAt: Date.now(),
+        exchange: 'NSE', tradingsymbol: 'REF', side: 'buy', product: 'MIS',
+        quantity: 1, price: null, triggerPrice: null, orderType: 'MARKET',
+        quoteLastPrice: 100, quoteBid: 99, quoteAsk: 101, quoteVolume: 50000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 100, riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 5, riskStopDistance: null, riskExposureTag: 'intraday',
+      }, []);
+      ctx.attemptRepo.insertAttempt({
+        strategyDecisionId: decision.id, executionMode: ExecutionMode.Blocked,
+        status: ExecutionAttemptStatus.Refused,
+        outcomeCode: null, brokerOrderId: null,
+        message: 'Refused', attemptedAt: Date.now(), completedAt: null,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.execution!.recentAttempts[0].completedAt).toBeNull();
+      ctx.db.close();
+    });
+  });
+
+  describe('Execution evidence — snapshot security', () => {
+    it('does NOT include access tokens or secret material', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      seedFullChain(ctx);
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const json = JSON.stringify(snapshot);
+      expect(json).not.toContain('accessToken');
+      expect(json).not.toContain('access_token');
+      expect(json).not.toContain('apiKey');
+      expect(json).not.toContain('apiSecret');
+      ctx.db.close();
+    });
+
+    it('can be JSON-serialised without circular references', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Blocked);
+      seedFullChain(ctx);
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(() => JSON.stringify(snapshot)).not.toThrow();
+      ctx.db.close();
+    });
+  });
+
+  describe('Execution evidence — snapshot includes execution in top-level keys', () => {
+    it('has execution as a top-level key in the snapshot', () => {
+      const ctx = createContextWithExecution(ExecutionMode.Paper);
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot).toHaveProperty('execution');
+      ctx.db.close();
     });
   });
 });

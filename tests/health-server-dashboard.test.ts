@@ -16,6 +16,7 @@ import { UniverseService } from '../src/universe/universe-service.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { BlockedOrderRepository } from '../src/persistence/blocked-order-repo.js';
 import { StrategyDecisionRepository } from '../src/persistence/strategy-decision-repo.js';
+import { ExecutionAttemptRepository } from '../src/persistence/execution-attempt-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -27,6 +28,9 @@ import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
 import {
   ProposalStatus,
   StrategyDecisionStatus,
+  ExecutionMode,
+  ExecutionAttemptStatus,
+  ExecutionOutcomeCode,
   BlockCode,
   UniverseCoverageVerdict,
   type DashboardSnapshot,
@@ -114,6 +118,115 @@ function createServerAndDashboard() {
     proposalRepo, blockedOrderRepo, strategyDecisionRepo,
     lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
   };
+}
+
+/** Create a fully wired server + dashboard + fixtures with execution attempt repo. */
+function createServerAndDashboardWithExecution(mode: ExecutionMode = ExecutionMode.Blocked) {
+  const db = new DatabaseManager(':memory:');
+  const runtimeStateRepo = new RuntimeStateRepository(db.db);
+  const zerodhaRepo = new ZerodhaRepository(db.db);
+  const brokerRepo = new BrokerRepository(db.db);
+  const universeRepo = new UniverseRepository(db.db);
+  const universeService = new UniverseService(brokerRepo, universeRepo);
+  const proposalRepo = new ProposalRepository(db.db);
+  const blockedOrderRepo = new BlockedOrderRepository(db.db);
+  const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
+  const attemptRepo = new ExecutionAttemptRepository(db.db);
+  const lifecycle = new LifecycleManager(runtimeStateRepo);
+  lifecycle.start('Test setup');
+  const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+  const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
+  const scheduler = createMockScheduler();
+  const telemetry = createMockTelemetry();
+  const dashboard = new DashboardReadModel({
+    healthService,
+    runtimeStateRepo,
+    zerodhaRepo,
+    proposalRepo,
+    blockedOrderRepo,
+    strategyDecisionRepo,
+    clock,
+    universeService,
+    attemptRepo,
+    executionMode: mode,
+  });
+  const server = createHealthServer(healthService, scheduler, telemetry, db, dashboard);
+
+  return {
+    db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
+    proposalRepo, blockedOrderRepo, strategyDecisionRepo, attemptRepo,
+    lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
+  };
+}
+
+/** Seed a full proposal+decision+attempt chain for execution tests. */
+function seedExecutionChain(
+  ctx: ReturnType<typeof createServerAndDashboardWithExecution>,
+  overrides?: {
+    tradingsymbol?: string;
+    attemptStatus?: ExecutionAttemptStatus;
+    outcomeCode?: ExecutionOutcomeCode;
+    executionMode?: ExecutionMode;
+    message?: string;
+  },
+) {
+  const proposal = ctx.proposalRepo.insertAttempt({
+    exchange: 'NSE',
+    tradingsymbol: overrides?.tradingsymbol ?? 'RELIANCE',
+    instrumentToken: 123456,
+    side: 'buy',
+    product: 'MIS',
+    quantity: 75,
+    price: null,
+    triggerPrice: null,
+    orderType: 'MARKET',
+    tag: null,
+    proposalStatus: ProposalStatus.Accepted,
+    createdAt: Date.now(),
+  });
+
+  const decision = ctx.strategyDecisionRepo.insertDecisionWithReasons(
+    {
+      proposalAttemptId: proposal.id,
+      decisionStatus: StrategyDecisionStatus.Approved,
+      strategyId: 'test-strategy',
+      strategyVersion: '1.0.0',
+      decidedAt: Date.now(),
+      exchange: 'NSE',
+      tradingsymbol: overrides?.tradingsymbol ?? 'RELIANCE',
+      side: 'buy',
+      product: 'MIS',
+      quantity: 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 2850.50,
+      quoteBid: 2850.00,
+      quoteAsk: 2851.00,
+      quoteVolume: 1250000,
+      quoteReceivedAt: Date.now(),
+      riskNotional: 213_787.50,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 10_689.38,
+      riskStopDistance: null,
+      riskExposureTag: 'intraday',
+    },
+    [],
+  );
+
+  const now = Date.now();
+  const attempt = ctx.attemptRepo.insertAttempt({
+    strategyDecisionId: decision.id,
+    executionMode: overrides?.executionMode ?? ExecutionMode.Blocked,
+    status: overrides?.attemptStatus ?? ExecutionAttemptStatus.Completed,
+    outcomeCode: overrides?.outcomeCode ?? ExecutionOutcomeCode.PaperSimulated,
+    brokerOrderId: null,
+    message: overrides?.message ?? 'Execution completed',
+    attemptedAt: now,
+    completedAt: overrides?.attemptStatus === ExecutionAttemptStatus.Completed ? now + 100 : null,
+  });
+
+  return { proposal, decision, attempt };
 }
 
 /** Seed a proposal for testing. */
@@ -951,6 +1064,223 @@ describe('Health server — strategy evidence routes', () => {
   });
 });
 
+// ── Execution evidence routes ──────────────────────────────────────────
+
+describe('Health server — execution evidence routes', () => {
+  let ctx: ReturnType<typeof createServerAndDashboardWithExecution>;
+
+  beforeEach(async () => {
+    ctx = createServerAndDashboardWithExecution(ExecutionMode.Paper);
+    await new Promise<void>((resolve, reject) => {
+      ctx.server.listen(0, '127.0.0.1', () => resolve());
+      ctx.server.on('error', reject);
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => {
+      ctx.server.close(() => {
+        ctx.db.close();
+        resolve();
+      });
+    });
+  });
+
+  describe('/health/execution', () => {
+    it('returns 200 with execution evidence when dashboard is wired', async () => {
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data).toHaveProperty('mode');
+      expect(data).toHaveProperty('totalAttempts');
+      expect(data).toHaveProperty('recentAttempts');
+      expect(data).toHaveProperty('isGateRefusing');
+      expect(data.mode).toBe('paper');
+      expect(data.isGateRefusing).toBe(false);
+    });
+
+    it('returns 404 when no execution evidence exists (repo not wired)', async () => {
+      // Use the base dashboard (no attempt repo)
+      const baseCtx = createServerAndDashboard();
+      await new Promise<void>((resolve, reject) => {
+        baseCtx.server.listen(0, '127.0.0.1', () => resolve());
+        baseCtx.server.on('error', reject);
+      });
+      const res = await fetchUrl(baseCtx.server, '/health/execution');
+      expect(res.status).toBe(404);
+      const data = JSON.parse(res.body);
+      expect(data.mode).toBe('unknown');
+      expect(data.totalAttempts).toBe(0);
+      await new Promise<void>((resolve) => {
+        baseCtx.server.close(() => { baseCtx.db.close(); resolve(); });
+      });
+    });
+
+    it('shows blocked mode with gate refusing', async () => {
+      ctx.server.close();
+      ctx.db.close();
+      ctx = createServerAndDashboardWithExecution(ExecutionMode.Blocked);
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.mode).toBe('blocked');
+      expect(data.isGateRefusing).toBe(true);
+      expect(data.gateRefusalReason).toContain('blocked');
+    });
+
+    it('includes total attempts count', async () => {
+      seedExecutionChain(ctx, { tradingsymbol: 'TCS' });
+      seedExecutionChain(ctx, { tradingsymbol: 'INFY' });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.totalAttempts).toBe(2);
+    });
+
+    it('includes recent attempts with correct shape', async () => {
+      seedExecutionChain(ctx, {
+        tradingsymbol: 'TCS',
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+        executionMode: ExecutionMode.Paper,
+        message: 'Paper order placed',
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.recentAttempts.length).toBe(1);
+      const ra = data.recentAttempts[0];
+      expect(ra.tradingsymbol).toBe('TCS');
+      expect(ra.executionMode).toBe('paper');
+      expect(ra.status).toBe('completed');
+      expect(ra.outcomeCode).toBe('paper_simulated');
+    });
+
+    it('returns 503 when dashboard is not wired', async () => {
+      // Create a server without dashboard
+      const db = new DatabaseManager(':memory:');
+      const runtimeStateRepo = new RuntimeStateRepository(db.db);
+      const lifecycle = new LifecycleManager(runtimeStateRepo);
+      lifecycle.start('Test');
+      const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+      const scheduler = createMockScheduler();
+      const telemetry = createMockTelemetry();
+      const server = createHealthServer(healthService, scheduler, telemetry, db);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+      const res = await fetchUrl(server, '/health/execution');
+      expect(res.status).toBe(503);
+      const data = JSON.parse(res.body);
+      expect(data.error).toContain('Dashboard not available');
+
+      await new Promise<void>((resolve) => server.close(() => { db.close(); resolve(); }));
+    });
+
+    it('does NOT include access tokens or secret material', async () => {
+      seedExecutionChain(ctx, { tradingsymbol: 'TCS' });
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+      expect(body).not.toContain('apiSecret');
+    });
+
+    it('limits recent attempts to 5', async () => {
+      for (let i = 0; i < 10; i++) {
+        seedExecutionChain(ctx, { tradingsymbol: `SYM${i}` });
+      }
+
+      const res = await fetchUrl(ctx.server, '/health/execution');
+      const data = JSON.parse(res.body);
+      expect(data.recentAttempts.length).toBeLessThanOrEqual(5);
+      expect(data.totalAttempts).toBe(10);
+    });
+  });
+
+  describe('Dashboard execution evidence in HTML', () => {
+    it('shows execution section with mode', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Execution');
+      expect(res.body).toContain('paper');
+    });
+
+    it('shows "No recent execution attempts" when none exist', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('No recent execution attempts');
+    });
+
+    it('shows recent execution attempts in HTML', async () => {
+      seedExecutionChain(ctx, {
+        tradingsymbol: 'TCS',
+        attemptStatus: ExecutionAttemptStatus.Completed,
+        outcomeCode: ExecutionOutcomeCode.PaperSimulated,
+        executionMode: ExecutionMode.Paper,
+        message: 'Paper order placed',
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('TCS');
+      expect(res.body).toContain('paper_simulated');
+      expect(res.body).toContain('Paper order placed');
+    });
+
+    it('shows blocked mode with gate refusing in HTML', async () => {
+      ctx.server.close();
+      ctx.db.close();
+      ctx = createServerAndDashboardWithExecution(ExecutionMode.Blocked);
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('blocked');
+      expect(res.body).toContain('Gate Refusing');
+      expect(res.body).toContain('Yes');
+    });
+
+    it('does NOT include secret material in HTML', async () => {
+      seedExecutionChain(ctx, { tradingsymbol: 'TCS' });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).not.toContain('accessToken');
+      expect(res.body).not.toContain('apiKey');
+    });
+  });
+
+  describe('Dashboard execution evidence in JSON', () => {
+    it('includes execution block when wired', async () => {
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data).toHaveProperty('execution');
+      expect(data.execution).not.toBeNull();
+    });
+
+    it('includes execution mode and counts', async () => {
+      seedExecutionChain(ctx, { tradingsymbol: 'TCS' });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.execution.mode).toBe('paper');
+      expect(data.execution.totalAttempts).toBe(1);
+    });
+
+    it('does NOT include secret material in JSON', async () => {
+      seedExecutionChain(ctx, { tradingsymbol: 'TCS' });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+    });
+  });
+});
+
 import type { DashboardSnapshot } from '../src/types/runtime.js';
 
 // ── Renderer escaping unit tests ──────────────────────────────────────────
@@ -1118,5 +1448,94 @@ describe('Dashboard renderer — HTML escaping', () => {
     expect(html).toContain('sufficient');
     expect(html).toContain('50');
     expect(html).toContain('45');
+  });
+
+  it('escapes HTML in execution mode and gate refusal reason', async () => {
+    const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+    const snapshot: DashboardSnapshot = {
+      assembledAt: '2025-01-01T00:00:00.000Z',
+      marketProfile: {
+        marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+        currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+      },
+      health: {
+        verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+        degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+      },
+      runtime: {
+        schedulerStatus: 'idle', marketPhase: 'closed',
+        lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+      },
+      broker: null,
+      recentProposals: [],
+      recentBlockedOrders: [],
+      recentLifecycleEvents: [],
+      recentStrategyDecisions: [],
+      universe: null,
+      execution: {
+        mode: 'blocked',
+        totalAttempts: 1,
+        recentAttempts: [
+          {
+            id: 1,
+            strategyDecisionId: 1,
+            executionMode: 'blocked',
+            status: 'refused',
+            outcomeCode: null,
+            brokerOrderId: null,
+            message: 'Blocked: mode is <blocked> & "refusing"',
+            attemptedAt: '2025-01-01T00:00:00.000Z',
+            completedAt: null,
+            tradingsymbol: 'RELIANCE',
+            exchange: 'NSE',
+            refusalReasons: ['Mode is & blocked', 'Reason with <tag>'],
+          },
+        ],
+        isGateRefusing: true,
+        gateRefusalReason: 'Execution mode is <blocked>: all & attempts refused',
+      },
+    };
+
+    const html = renderDashboardHtml(snapshot);
+    // Message content should be escaped
+    expect(html).toContain('Blocked: mode is &lt;blocked&gt; &amp;');
+    expect(html).toContain('&quot;refusing&quot;');
+    // Gate refusal reason should be escaped
+    expect(html).toContain('Execution mode is &lt;blocked&gt;: all &amp; attempts refused');
+    // Refusal reasons should be escaped
+    expect(html).toContain('Mode is &amp; blocked');
+    expect(html).toContain('Reason with &lt;tag&gt;');
+    // Mode label should be visible (no escaping needed for plain text)
+    expect(html).toContain('blocked');
+  });
+
+  it('renders execution section with null execution gracefully', async () => {
+    const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+    const snapshot: DashboardSnapshot = {
+      assembledAt: '2025-01-01T00:00:00.000Z',
+      marketProfile: {
+        marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+        currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+      },
+      health: {
+        verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+        degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+      },
+      runtime: {
+        schedulerStatus: 'idle', marketPhase: 'closed',
+        lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+      },
+      broker: null,
+      recentProposals: [],
+      recentBlockedOrders: [],
+      recentLifecycleEvents: [],
+      recentStrategyDecisions: [],
+      universe: null,
+      execution: null,
+    };
+
+    const html = renderDashboardHtml(snapshot);
+    expect(html).toContain('No execution evidence available');
+    expect(html).not.toContain('Total Attempts');
   });
 });
