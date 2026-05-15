@@ -1286,6 +1286,8 @@ describe('Health server — strategy evidence routes', () => {
       expect(data.recentStrategyDecisions.length).toBe(1);
       expect(data.recentStrategyDecisions[0].tradingsymbol).toBe('TCS');
       expect(data.recentStrategyDecisions[0].decisionStatus).toBe('approved');
+      // Hybrid is null when dashboard has no hybridScoreRepo wired
+      expect(data.recentStrategyDecisions[0].hybrid).toBeNull();
     });
 
     it('does NOT include secret material in JSON', async () => {

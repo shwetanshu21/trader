@@ -1915,6 +1915,126 @@ describe('RuntimeApp-root witnesses', () => {
 
       app.stop('Test teardown');
     });
+
+    it('refused strategy decisions produce zero execution attempts with correct dashboard surfaces', async () => {
+      const app = buildRuntimeApp();
+      const h = app.build();
+      seedUniverse(h);
+
+      await h.universeSupervisor.doWork(new Date(), minimalHealth());
+
+      // Run proposal supervisor so we have accepted proposals
+      mockFetchJson({
+        proposals: [
+          {
+            exchange: 'NSE',
+            tradingsymbol: 'RELIANCE',
+            side: 'buy',
+            product: 'MIS',
+            quantity: 1,
+            price: null,
+            triggerPrice: null,
+            orderType: 'MARKET',
+          },
+        ],
+      });
+
+      await h.proposalSupervisor!.doWork(new Date(), minimalHealth());
+      const allProposals = h.proposalRepo!.getRecentAttemptsWithReasons(10);
+      expect(allProposals.length).toBeGreaterThanOrEqual(1);
+
+      // Run strategy-risk normally → decisions are approved (fresh quotes)
+      await h.strategyRiskSupervisor!.doWork(new Date(), minimalHealth());
+
+      const approvedDecisions = h.strategyDecisionRepo!.countByStatus(StrategyDecisionStatus.Approved);
+      expect(approvedDecisions).toBeGreaterThanOrEqual(1);
+
+      // Now insert a REFUSED strategy decision via the repo directly,
+      // simulating what strategy-risk would produce on a refusal path.
+      // This is the authoritative witness: refused decisions do NOT get
+      // consumed by the execution gate.
+      const refusedProposal = h.proposalRepo!.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        instrumentToken: 999999,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 0,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+      h.strategyDecisionRepo!.insertDecisionWithReasons(
+        {
+          proposalAttemptId: refusedProposal.id,
+          decisionStatus: StrategyDecisionStatus.Refused,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'TCS',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 0,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: null,
+          quoteBid: null,
+          quoteAsk: null,
+          quoteVolume: null,
+          quoteReceivedAt: null,
+          riskNotional: null,
+          riskSizingBasis: '',
+          riskMaxLossRupees: null,
+          riskStopDistance: null,
+          riskExposureTag: null,
+        },
+        [{ reasonCode: 'missing_quote_data' as any, reasonMessage: 'No quote available for TCS' }],
+      );
+
+      const totalDecisions = h.strategyDecisionRepo!.countDecisions();
+      const refusedCount = h.strategyDecisionRepo!.countByStatus(StrategyDecisionStatus.Refused);
+      expect(totalDecisions).toBe(approvedDecisions + 1);
+      expect(refusedCount).toBe(1);
+
+      // Execution gate: should consume only approved decisions, not refused ones
+      await h.executionGateSupervisor!.doWork(new Date(), minimalHealth());
+
+      // The gate should have consumed all previously-approved unconsumed decisions
+      // plus any new ones. The refused decision must NOT be consumed.
+      const unconsumed = h.strategyDecisionRepo!.getApprovedUnconsumedCandidates();
+      expect(unconsumed.length).toBe(0); // All approved decisions consumed
+
+      // ── Dashboard cross-surface verification ────────────────────────────
+      const evidence = h.dashboard.getStrategyEvidence();
+      expect(evidence.totalDecisions).toBe(totalDecisions);
+      expect(evidence.approvedCount).toBe(approvedDecisions);
+      expect(evidence.refusedCount).toBe(refusedCount);
+
+      // Snapshot should show execution mode and correct counts
+      const snapshot = h.dashboard.getSnapshot();
+      expect(snapshot.execution).not.toBeNull();
+      expect(snapshot.execution!.mode).toBe('blocked');
+      expect(snapshot.execution!.totalAttempts).toBe(approvedDecisions); // Only approved produce attempts
+      expect(snapshot.execution!.isGateRefusing).toBe(true);
+
+      // The refused decision should appear in strategy decisions but have NO
+      // execution attempt linkage
+      const refusedInDash = snapshot.recentStrategyDecisions.find(d => d.decisionStatus === 'refused');
+      expect(refusedInDash).toBeDefined();
+      expect(refusedInDash!.hybrid).toBeNull(); // No hybrid evidence for manual insert
+
+      const executionDecisionIds = new Set(
+        snapshot.execution!.recentAttempts.map(a => a.strategyDecisionId),
+      );
+      expect(executionDecisionIds.has(refusedInDash!.id)).toBe(false);
+
+      app.stop('Test teardown');
+    });
   });
 
   // ── Empty provider (no proposals from fetch) ───────────────────────────
@@ -2002,6 +2122,478 @@ describe('RuntimeApp-root witnesses', () => {
       const reasons = h.executionAttemptRepo!.getRefusalReasons(attempts[0].id);
       expect(reasons.length).toBeGreaterThanOrEqual(1);
       expect(reasons[0].reasonCode).toBe('live_broker_not_configured');
+
+      // ── Dashboard cross-surface verification ──────────────────────────
+      const evidence = h.dashboard.getStrategyEvidence();
+      expect(evidence.totalDecisions).toBe(decisions.length);
+      expect(evidence.approvedCount).toBe(decisions.length);
+      expect(evidence.refusedCount).toBe(0);
+
+      const snapshot = h.dashboard.getSnapshot();
+      expect(snapshot.execution).not.toBeNull();
+      expect(snapshot.execution!.mode).toBe('live');
+      expect(snapshot.execution!.totalAttempts).toBe(attempts.length);
+      expect(snapshot.execution!.isGateRefusing).toBe(false);
+      // All recent attempts should have refusal status
+      for (const ra of snapshot.execution!.recentAttempts) {
+        expect(ra.status).toBe('refused');
+        expect(ra.executionMode).toBe('live');
+      }
+      // Refusal codes should surface in recent evidence
+      for (const ra of snapshot.execution!.recentAttempts) {
+        expect(ra.refusalReasons.length).toBeGreaterThanOrEqual(1);
+      }
+
+      app.stop('Test teardown');
+    });
+  });
+
+  // ── Missing hybrid evidence remains explicit null ───────────────────────
+
+  describe('Missing hybrid evidence remains explicit null', () => {
+    it('shows null hybrid when strategy decision has no hybrid score summary', async () => {
+      const app = buildRuntimeApp();
+      const h = app.build();
+      seedUniverse(h);
+
+      // Insert a proposal manually so we have a clean accepted row
+      const proposal = h.proposalRepo!.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 123456,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+
+      // Insert a strategy decision WITHOUT creating a hybrid score entry
+      h.strategyDecisionRepo!.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2950.00,
+        quoteBid: 2949.50,
+        quoteAsk: 2950.00,
+        quoteVolume: 1000000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 2950.00,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 147.50,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      });
+
+      // Verify hybrid score repo has no entry for this proposal
+      const hybridExists = h.hybridScoreRepo!.getByProposalAttemptId(proposal.id);
+      expect(hybridExists).toBeNull();
+
+      // Dashboard strategy evidence should show hybrid: null
+      const evidence = h.dashboard.getStrategyEvidence();
+      expect(evidence.totalDecisions).toBe(1);
+      expect(evidence.recentDecisions.length).toBe(1);
+      expect(evidence.recentDecisions[0].hybrid).toBeNull();
+      expect(evidence.recentDecisions[0].decisionStatus).toBe('approved');
+
+      // Dashboard snapshot should also show null hybrid
+      const snapshot = h.dashboard.getSnapshot();
+      expect(snapshot.recentStrategyDecisions.length).toBe(1);
+      expect(snapshot.recentStrategyDecisions[0].hybrid).toBeNull();
+
+      // Verify hybrid count is 0 in repo
+      expect(h.hybridScoreRepo!.countSummaries()).toBe(0);
+
+      app.stop('Test teardown');
+    });
+
+    it('preserves hybrid evidence when present alongside decisions without hybrid', async () => {
+      const app = buildRuntimeApp();
+      const h = app.build();
+      seedUniverse(h);
+
+      await h.universeSupervisor.doWork(new Date(), minimalHealth());
+
+      mockFetchJson({
+        proposals: [
+          {
+            exchange: 'NSE',
+            tradingsymbol: 'RELIANCE',
+            side: 'buy',
+            product: 'MIS',
+            quantity: 1,
+            price: null,
+            triggerPrice: null,
+            orderType: 'MARKET',
+          },
+        ],
+      });
+
+      // Full pipeline produces proposals with hybrid evidence
+      await h.proposalSupervisor!.doWork(new Date(), minimalHealth());
+      await h.strategyRiskSupervisor!.doWork(new Date(), minimalHealth());
+
+      // All proposals accepted should have hybrid evidence
+      const accepted = h.proposalRepo!.getRecentAttempts(10, ProposalStatus.Accepted);
+      expect(accepted.length).toBeGreaterThanOrEqual(1);
+
+      // Now insert a second decision manually WITHOUT hybrid evidence
+      const manualProposal = h.proposalRepo!.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        instrumentToken: 999999,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+      h.strategyDecisionRepo!.insertDecision({
+        proposalAttemptId: manualProposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 3900.00,
+        quoteBid: 3899.50,
+        quoteAsk: 3900.50,
+        quoteVolume: 500000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 3900.00,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 195.00,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      });
+
+      // Dashboard should show hybrid null for the manual decision
+      const evidence = h.dashboard.getStrategyEvidence();
+
+      // Find the manual decision (TCS)
+      const tcsDecision = evidence.recentDecisions.find(d => d.tradingsymbol === 'TCS');
+      expect(tcsDecision).toBeDefined();
+      expect(tcsDecision!.hybrid).toBeNull();
+
+      // Find pipeline-produced decisions — should have hybrid evidence
+      const pipelineDecisions = evidence.recentDecisions.filter(d => d.tradingsymbol !== 'TCS');
+      for (const pd of pipelineDecisions) {
+        expect(pd.hybrid).not.toBeNull();
+        expect(pd.hybrid!.deterministicScore).toBeGreaterThanOrEqual(0);
+      }
+
+      // Total count should include both
+      expect(evidence.totalDecisions).toBe(accepted.length + 1);
+
+      app.stop('Test teardown');
+    });
+  });
+
+  // ── Dashboard cross-surface truth ───────────────────────────────────────
+
+  describe('Dashboard cross-surface truth for runtime-produced evidence', () => {
+    it('strategy evidence totals match repository counts after full pipeline', async () => {
+      const app = buildRuntimeApp();
+      const h = app.build();
+      seedUniverse(h);
+
+      await h.universeSupervisor.doWork(new Date(), minimalHealth());
+
+      // Run pipeline — proposals accepted → decisions approved → execution attempts
+      mockFetchJson({
+        proposals: [
+          {
+            exchange: 'NSE',
+            tradingsymbol: 'RELIANCE',
+            side: 'buy',
+            product: 'MIS',
+            quantity: 1,
+            price: null,
+            triggerPrice: null,
+            orderType: 'MARKET',
+          },
+        ],
+      });
+
+      await h.proposalSupervisor!.doWork(new Date(), minimalHealth());
+      await h.strategyRiskSupervisor!.doWork(new Date(), minimalHealth());
+      await h.executionGateSupervisor!.doWork(new Date(), minimalHealth());
+
+      const approvedDecisions = h.strategyDecisionRepo!.countByStatus(StrategyDecisionStatus.Approved);
+      const approvedAttempts = h.executionAttemptRepo!.count();
+      expect(approvedDecisions).toBeGreaterThanOrEqual(1);
+      expect(approvedAttempts).toBeGreaterThanOrEqual(1);
+
+      // Now insert a refused decision manually (simulating a second-tick refusal)
+      // to prove cross-surface totals remain correct with mixed decision statuses
+      const refusedProposal = h.proposalRepo!.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        instrumentToken: 999999,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 0,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+      h.strategyDecisionRepo!.insertDecisionWithReasons(
+        {
+          proposalAttemptId: refusedProposal.id,
+          decisionStatus: StrategyDecisionStatus.Refused,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'TCS',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 0,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: null,
+          quoteBid: null,
+          quoteAsk: null,
+          quoteVolume: null,
+          quoteReceivedAt: null,
+          riskNotional: null,
+          riskSizingBasis: '',
+          riskMaxLossRupees: null,
+          riskStopDistance: null,
+          riskExposureTag: null,
+        },
+        [{ reasonCode: 'missing_quote_data' as any, reasonMessage: 'No quote available' }],
+      );
+
+      const totalDecisions = h.strategyDecisionRepo!.countDecisions();
+      const refusedCount = h.strategyDecisionRepo!.countByStatus(StrategyDecisionStatus.Refused);
+      expect(totalDecisions).toBe(approvedDecisions + 1);
+      expect(refusedCount).toBe(1);
+
+      // Run gate again — should NOT consume the refused decision
+      await h.executionGateSupervisor!.doWork(new Date(), minimalHealth());
+      expect(h.executionAttemptRepo!.count()).toBe(approvedAttempts); // No new attempts
+
+      // ── Verify dashboard surfaces match ─────────────────────────────────
+      const evidence = h.dashboard.getStrategyEvidence();
+      expect(evidence.totalDecisions).toBe(totalDecisions);
+      expect(evidence.approvedCount).toBe(approvedDecisions);
+      expect(evidence.refusedCount).toBe(refusedCount);
+
+      const snapshot = h.dashboard.getSnapshot();
+      expect(snapshot.recentStrategyDecisions.length).toBeGreaterThanOrEqual(1);
+      expect(snapshot.execution).not.toBeNull();
+      expect(snapshot.execution!.totalAttempts).toBe(approvedAttempts);
+
+      // Find the refused decision in dashboard — should have no execution linkage
+      const refusedInDash = snapshot.recentStrategyDecisions.find(d => d.decisionStatus === 'refused');
+      expect(refusedInDash).toBeDefined();
+      expect(refusedInDash!.hybrid).toBeNull();
+
+      const executionDecisionIds = new Set(
+        snapshot.execution!.recentAttempts.map(a => a.strategyDecisionId),
+      );
+      expect(executionDecisionIds.has(refusedInDash!.id)).toBe(false);
+
+      app.stop('Test teardown');
+    });
+
+    it('execution evidence is absent for refused decisions across all surfaces', async () => {
+      const app = buildRuntimeApp();
+      const h = app.build();
+      seedUniverse(h);
+
+      await h.universeSupervisor.doWork(new Date(), minimalHealth());
+
+      // Tick 1: approved pipeline
+      mockFetchJson({
+        proposals: [
+          {
+            exchange: 'NSE',
+            tradingsymbol: 'RELIANCE',
+            side: 'buy',
+            product: 'MIS',
+            quantity: 1,
+            price: null,
+            triggerPrice: null,
+            orderType: 'MARKET',
+          },
+        ],
+      });
+
+      await h.proposalSupervisor!.doWork(new Date(), minimalHealth());
+      await h.strategyRiskSupervisor!.doWork(new Date(), minimalHealth());
+      await h.executionGateSupervisor!.doWork(new Date(), minimalHealth());
+
+      const approvedDecisions = h.strategyDecisionRepo!.countByStatus(StrategyDecisionStatus.Approved);
+      const approvedAttempts = h.executionAttemptRepo!.count();
+      expect(approvedDecisions).toBeGreaterThanOrEqual(1);
+      expect(approvedAttempts).toBeGreaterThanOrEqual(1);
+
+      // Insert a refused decision + an extra approved decision
+      // (refused) — quantity 0 triggers zero-quantity refusal if evaluated,
+      // but we bypass evaluation and insert directly
+      const refusedProposal = h.proposalRepo!.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        instrumentToken: 999999,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 0,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+      h.strategyDecisionRepo!.insertDecisionWithReasons(
+        {
+          proposalAttemptId: refusedProposal.id,
+          decisionStatus: StrategyDecisionStatus.Refused,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'TCS',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 0,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: null,
+          quoteBid: null,
+          quoteAsk: null,
+          quoteVolume: null,
+          quoteReceivedAt: null,
+          riskNotional: null,
+          riskSizingBasis: '',
+          riskMaxLossRupees: null,
+          riskStopDistance: null,
+          riskExposureTag: null,
+        },
+        [{ reasonCode: 'missing_quote_data' as any, reasonMessage: 'No quote available' }],
+      );
+
+      // Insert an additional approved decision (no hybrid) to verify mixed state
+      const approvedProposal = h.proposalRepo!.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+        instrumentToken: 888888,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: Date.now(),
+      });
+      h.strategyDecisionRepo!.insertDecision({
+        proposalAttemptId: approvedProposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'test-strategy',
+        strategyVersion: '1.0.0',
+        decidedAt: Date.now(),
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 1,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2900.00,
+        quoteBid: 2899.50,
+        quoteAsk: 2900.50,
+        quoteVolume: 750000,
+        quoteReceivedAt: Date.now(),
+        riskNotional: 2900.00,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 145.00,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+      });
+
+      const totalDecisions = h.strategyDecisionRepo!.countDecisions();
+      const refusedCount = h.strategyDecisionRepo!.countByStatus(StrategyDecisionStatus.Refused);
+      const totalApproved = h.strategyDecisionRepo!.countByStatus(StrategyDecisionStatus.Approved);
+      expect(refusedCount).toBe(1);
+      expect(totalApproved).toBe(approvedDecisions + 1);
+      expect(totalDecisions).toBe(approvedDecisions + 2);
+
+      // Run gate — should consume the additional approved decision but NOT the refused one
+      await h.executionGateSupervisor!.doWork(new Date(), minimalHealth());
+      const totalAttempts = h.executionAttemptRepo!.count();
+      // Only the new approved decision should be consumed (refused is skipped)
+      expect(totalAttempts).toBe(approvedAttempts + 1);
+
+      // ── Dashboard cross-surface verification ─────────────────────────────
+      const snapshot = h.dashboard.getSnapshot();
+
+      // Refused decisions should have no execution linkage
+      const refusedInDash = snapshot.recentStrategyDecisions.filter(
+        d => d.decisionStatus === 'refused',
+      );
+      expect(refusedInDash.length).toBe(1);
+
+      const executionDecisionIds = new Set(
+        snapshot.execution!.recentAttempts.map(a => a.strategyDecisionId),
+      );
+      for (const rd of refusedInDash) {
+        expect(executionDecisionIds.has(rd.id)).toBe(false);
+      }
+
+      // Strategy evidence totals match
+      const evidence = h.dashboard.getStrategyEvidence();
+      expect(evidence.totalDecisions).toBe(totalDecisions);
+      expect(evidence.approvedCount).toBe(totalApproved);
+      expect(evidence.refusedCount).toBe(refusedCount);
+
+      // Verify each execution attempt links to an approved decision
+      const attempts = h.executionAttemptRepo!.getRecent();
+      for (const a of attempts) {
+        const decision = h.strategyDecisionRepo!.getDecisionById(a.strategyDecisionId);
+        expect(decision).not.toBeNull();
+        expect(decision!.decisionStatus).toBe(StrategyDecisionStatus.Approved);
+        // Approved decisions without hybrid evidence show null hybrid
+        const evidence2 = h.dashboard.getStrategyEvidence();
+        const dashDecision = evidence2.recentDecisions.find(d => d.id === decision!.id);
+        if (dashDecision && dashDecision.tradingsymbol === 'INFY') {
+          expect(dashDecision.hybrid).toBeNull();
+        }
+      }
 
       app.stop('Test teardown');
     });
