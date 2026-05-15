@@ -1,6 +1,7 @@
 // ── ProposalSupervisor — TickWork hook that orchestrates proposal generation ──
 // Runs on every scheduler tick: acquires the in-flight guard, reads market
-// context, generates proposals via the LLM provider, validates each one
+// context, builds bounded candidates via the eligible universe, runs them
+// through the pluggable strategy coordinator, validates each ranked candidate
 // deterministically, and persists every outcome (accepted, refused, timeout,
 // malformed, missing config, or overlap skip).
 //
@@ -18,6 +19,8 @@ import type {
   HealthStatus,
   ProposalEngineConfig,
   NewProposalAttempt,
+  BoundedCandidate,
+  StrategyPlugin,
 } from '../types/runtime.js';
 import {
   ProposalStatus,
@@ -27,10 +30,13 @@ import {
 } from '../types/runtime.js';
 import type { SessionRuntimePort, InstrumentCatalogPort, QuoteStreamPort } from '../integrations/broker/ports.js';
 import type { MarketClock } from '../runtime/market-clock.js';
+import type { QuoteSnapshot } from '../integrations/broker/types.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
-import { ProposalEngine, type EngineContext } from './proposal-engine.js';
-import { IndiaProposalValidator } from './india-validator.js';
-import { UniverseService } from '../universe/universe-service.js';
+import { ProposalEngine, type EngineContext, type NormalizedProposal } from './proposal-engine.js';
+import { IndiaProposalValidator, type ValidatorInput } from './india-validator.js';
+import { UniverseService, type UniverseCoverageSummary } from '../universe/universe-service.js';
+import { StrategyCoordinator } from '../strategy/framework.js';
+import { LlmRankingStrategy } from '../strategy/llm-ranking-strategy.js';
 
 // ---------------------------------------------------------------------------
 // ProposalSupervisor
@@ -49,6 +55,9 @@ export class ProposalSupervisor implements TickWork {
   private readonly _universeService: UniverseService | null;
   private readonly _maxProposals: number;
 
+  /** Strategy coordinator with the LLM ranking plugin. */
+  private readonly _coordinator: StrategyCoordinator;
+
   /** Local in-flight guard — true while a proposal generation is active. */
   private _inFlight: boolean = false;
   /** Count of overlap skips for diagnostics. */
@@ -66,6 +75,8 @@ export class ProposalSupervisor implements TickWork {
     clock: MarketClock;
     maxProposals?: number;
     universeService?: UniverseService | null;
+    /** Optional additional strategy plugins beyond the default LLM ranking plugin. */
+    additionalPlugins?: StrategyPlugin[];
   }) {
     this._engine = options.engine;
     this._validator = options.validator;
@@ -76,6 +87,16 @@ export class ProposalSupervisor implements TickWork {
     this._clock = options.clock;
     this._maxProposals = options.maxProposals ?? 5;
     this._universeService = options.universeService ?? null;
+
+    // Build the strategy coordinator with the LLM ranking plugin
+    const llmPlugin = new LlmRankingStrategy(this._engine);
+    const plugins = options.additionalPlugins
+      ? [llmPlugin, ...options.additionalPlugins]
+      : [llmPlugin];
+
+    this._coordinator = new StrategyCoordinator(plugins, {
+      maxCandidates: this._maxProposals,
+    });
   }
 
   // ── TickWork ────────────────────────────────────────────────────────────
@@ -133,11 +154,13 @@ export class ProposalSupervisor implements TickWork {
     inFlight: boolean;
     overlapSkipCount: number;
     lastTickAt: number | null;
+    coordinatorPlugins: Array<{ id: string; name: string; version: string }>;
   } {
     return {
       inFlight: this._inFlight,
       overlapSkipCount: this._overlapSkipCount,
       lastTickAt: this._lastTickAt,
+      coordinatorPlugins: this._coordinator.plugins,
     };
   }
 
@@ -179,10 +202,10 @@ export class ProposalSupervisor implements TickWork {
       }
     }
 
-    // ── Phase 4: Build instrument context from eligible universe ────────
-    const context = await this._buildEngineContext(phase);
+    // ── Phase 4: Build bounded candidates from eligible universe ────────
+    const candidates = this._buildBoundedCandidates(phase);
 
-    if (context.instruments.length === 0) {
+    if (candidates.length === 0) {
       // No instruments to propose on — persist a skip
       this._repo.insertAttemptWithReasons(
         {
@@ -207,11 +230,18 @@ export class ProposalSupervisor implements TickWork {
       return;
     }
 
-    // ── Phase 5: Generate proposals via LLM ─────────────────────────────
-    const engineResult = await this._engine.generateProposals(context);
+    // ── Phase 5: Run through the pluggable strategy pipeline ────────────
+    const coordinatorResult = await this._coordinator.evaluate(candidates);
 
-    if (engineResult.refusal) {
-      // Engine couldn't produce proposals — persist refusal
+    if (coordinatorResult.candidates.length === 0) {
+      // Coordinator returned nothing (all plugins declined) — persist refusal
+      const reasons: string[] = [];
+      if (coordinatorResult.hasPluginErrors) {
+        for (const [id, err] of Object.entries(coordinatorResult.pluginErrors)) {
+          reasons.push(`Plugin ${id} error: ${err}`);
+        }
+      }
+
       this._repo.insertAttemptWithReasons(
         {
           exchange: '',
@@ -223,18 +253,50 @@ export class ProposalSupervisor implements TickWork {
           price: null,
           triggerPrice: null,
           orderType: '',
-          tag: 'engine-refusal',
+          tag: 'coordinator-empty',
           proposalStatus: ProposalStatus.Refused,
           createdAt: now,
         },
-        [engineResult.refusal],
+        [{
+          reasonCode: ValidationReasonCode.QuoteMissing,
+          reasonMessage: reasons.length > 0
+            ? `Strategy coordinator returned no candidates: ${reasons.join('; ')}`
+            : 'Strategy coordinator returned no candidates — all plugins declined',
+        }],
       );
       return;
     }
 
-    // ── Phase 6: Resolve instrument tokens and validate each proposal ───
-    for (const normalized of engineResult.proposals) {
-      const { attempt, raw } = normalized;
+    // ── Phase 6: Map ranked candidates to proposal attempts ────────────
+    const proposals = this._mapRankedToProposals(coordinatorResult.candidates, now);
+
+    if (proposals.length === 0) {
+      this._repo.insertAttemptWithReasons(
+        {
+          exchange: '',
+          tradingsymbol: '',
+          instrumentToken: null,
+          side: '',
+          product: '',
+          quantity: 0,
+          price: null,
+          triggerPrice: null,
+          orderType: '',
+          tag: 'mapping-failed',
+          proposalStatus: ProposalStatus.Refused,
+          createdAt: now,
+        },
+        [{
+          reasonCode: ValidationReasonCode.QuoteMissing,
+          reasonMessage: 'Failed to map any ranked candidates to valid proposal attempts',
+        }],
+      );
+      return;
+    }
+
+    // ── Phase 7: Resolve instrument tokens and validate each proposal ───
+    for (const prop of proposals) {
+      const { attempt } = prop;
 
       // Resolve instrument token from local instrument master
       const instrument = this._instruments
@@ -281,21 +343,23 @@ export class ProposalSupervisor implements TickWork {
     }
 
     // Log tick summary if debugging
-    if (engineResult.proposals.length > 0) {
+    if (proposals.length > 0) {
       console.log(
-        `[proposal-supervisor] tick: ${engineResult.proposals.length} proposals`
-        + ` (${engineResult.durationMs ?? 0}ms provider time)`,
+        `[proposal-supervisor] tick: ${proposals.length} proposals`
+        + ` (${coordinatorResult.durationMs}ms coordinator time)`,
       );
     }
   }
 
   /**
-   * Build the EngineContext from eligible universe members.
-   * Gathers only eligible instruments with their latest quotes.
-   * If universe service is not available, falls back to scanning the
-   * full instrument catalog (legacy mode).
+   * Build bounded candidates from the eligible universe members.
+   *
+   * Gathers only eligible instruments with their latest quotes and
+   * maps them to BoundedCandidate[] for strategy pipeline consumption.
+   * Falls back to scanning the full instrument catalog when the
+   * universe service is not available (legacy mode).
    */
-  private async _buildEngineContext(phase: MarketPhase): Promise<EngineContext> {
+  private _buildBoundedCandidates(phase: MarketPhase): BoundedCandidate[] {
     // If universe service is available, use eligible members only
     if (this._universeService && this._instruments) {
       const eligibleMembers = this._universeService.getLatestSnapshot();
@@ -304,39 +368,35 @@ export class ProposalSupervisor implements TickWork {
           .filter(m => m.isEligible)
           .map(m => ({ exchange: m.exchange, tradingsymbol: m.tradingsymbol }));
 
-        const entries: EngineContext['instruments'] = [];
+        const candidates: BoundedCandidate[] = [];
         for (const { exchange, tradingsymbol } of eligibleSymbols) {
           const instrument = this._instruments.getInstrument(exchange, tradingsymbol);
           const quote = this._stream
             ? this._stream.getLatestQuote(exchange, tradingsymbol)
             : null;
+
           if (instrument) {
-            entries.push({ instrument, quote });
+            candidates.push(this._toBoundedCandidate(instrument, quote));
           }
         }
 
-        // Sort: instruments with quotes first, then by volume if available
-        entries.sort((a, b) => {
-          const aHasQuote = a.quote !== null ? 1 : 0;
-          const bHasQuote = b.quote !== null ? 1 : 0;
-          if (aHasQuote !== bHasQuote) return bHasQuote - aHasQuote;
-          return (b.quote?.volume ?? 0) - (a.quote?.volume ?? 0);
+        // Deterministic sort: exchange alphabetical, then symbol alphabetical
+        candidates.sort((a, b) => {
+          const exchCmp = a.exchange.localeCompare(b.exchange);
+          if (exchCmp !== 0) return exchCmp;
+          return a.tradingsymbol.localeCompare(b.tradingsymbol);
         });
 
-        return {
-          instruments: entries,
-          marketPhase: phase,
-          maxProposals: this._maxProposals,
-        };
+        return candidates;
       }
 
-      // No snapshot yet — or no eligible members — return empty
-      return { instruments: [], marketPhase: phase, maxProposals: this._maxProposals };
+      // No snapshot yet
+      return [];
     }
 
     // Legacy fallback: scan all NSE/NFO instruments
     if (!this._instruments) {
-      return { instruments: [], marketPhase: phase, maxProposals: this._maxProposals };
+      return [];
     }
 
     const nseInstruments = this._instruments.getInstrumentsBySegment('NSE');
@@ -344,29 +404,150 @@ export class ProposalSupervisor implements TickWork {
     const allInstruments = [...nseInstruments, ...nfoInstruments];
 
     if (allInstruments.length === 0) {
-      return { instruments: [], marketPhase: phase, maxProposals: this._maxProposals };
+      return [];
     }
 
-    const entries: EngineContext['instruments'] = [];
+    const candidates: BoundedCandidate[] = [];
     for (const instrument of allInstruments) {
       const quote = this._stream
         ? this._stream.getLatestQuote(instrument.exchange, instrument.tradingsymbol)
         : null;
-      entries.push({ instrument, quote });
+      candidates.push(this._toBoundedCandidate(instrument, quote));
     }
 
-    entries.sort((a, b) => {
-      const aHasQuote = a.quote !== null ? 1 : 0;
-      const bHasQuote = b.quote !== null ? 1 : 0;
-      if (aHasQuote !== bHasQuote) return bHasQuote - aHasQuote;
-      return (b.quote?.volume ?? 0) - (a.quote?.volume ?? 0);
+    candidates.sort((a, b) => {
+      const exchCmp = a.exchange.localeCompare(b.exchange);
+      if (exchCmp !== 0) return exchCmp;
+      return a.tradingsymbol.localeCompare(b.tradingsymbol);
     });
 
+    return candidates;
+  }
+
+  /**
+   * Map an InstrumentRecord + optional QuoteSnapshot to a BoundedCandidate.
+   */
+  private _toBoundedCandidate(
+    instrument: import('../integrations/broker/types.js').InstrumentRecord,
+    quote: QuoteSnapshot | null,
+  ): BoundedCandidate {
     return {
-      instruments: entries,
-      marketPhase: phase,
-      maxProposals: this._maxProposals,
+      exchange: instrument.exchange,
+      tradingsymbol: instrument.tradingsymbol,
+      instrumentToken: instrument.instrumentToken,
+      side: 'buy', // Default — the LLM plugin will determine actual side
+      lastPrice: quote?.lastPrice ?? null,
+      bid: quote?.bid ?? null,
+      ask: quote?.ask ?? null,
+      volume: quote?.volume ?? null,
+      instrumentType: instrument.instrumentType,
+      lotSize: instrument.lotSize,
+      tickSize: instrument.tickSize,
     };
+  }
+
+  /**
+   * Map ranked candidates from the coordinator to NormalizedProposal entries.
+   *
+   * Each ranked candidate is mapped to a NewProposalAttempt with the
+   * candidate's instrument details and default order parameters.
+   * If the ranked candidate has metadata with proposalParams, those
+   * are used instead of defaults.
+   */
+  private _mapRankedToProposals(
+    ranked: Array<{
+      candidate: BoundedCandidate;
+      plugin: { id: string; name: string; version: string };
+      score: number;
+      rationale: string;
+      metadata?: Record<string, unknown>;
+    }>,
+    now: number,
+  ): NormalizedProposal[] {
+    const proposals: NormalizedProposal[] = [];
+
+    for (const entry of ranked) {
+      const c = entry.candidate;
+
+      // Check for LLM-provided proposal params in metadata
+      let side = 'buy';
+      let product = 'MIS';
+      let quantity = 1;
+      let price: number | null = null;
+      let triggerPrice: number | null = null;
+      let orderType = 'MARKET';
+      let tag: string | null = null;
+
+      const proposalParams = entry.metadata?.proposalParams as Record<string, unknown> | undefined;
+      if (proposalParams) {
+        // Use LLM-provided params if available and valid
+        const pSide = String(proposalParams.side ?? '').toLowerCase();
+        if (pSide === 'buy' || pSide === 'sell') side = pSide;
+
+        const pProduct = String(proposalParams.product ?? '').toUpperCase();
+        if (['MIS', 'CNC', 'NRML'].includes(pProduct)) product = pProduct;
+
+        const pQty = Number(proposalParams.quantity);
+        if (Number.isFinite(pQty) && pQty > 0) quantity = Math.floor(pQty);
+
+        if (proposalParams.price != null && Number.isFinite(Number(proposalParams.price))) {
+          price = Number(proposalParams.price);
+        }
+        if (proposalParams.triggerPrice != null && Number.isFinite(Number(proposalParams.triggerPrice))) {
+          triggerPrice = Number(proposalParams.triggerPrice);
+        }
+        const pOrderType = String(proposalParams.orderType ?? '').toUpperCase();
+        if (['MARKET', 'LIMIT', 'SL', 'SLM'].includes(pOrderType)) orderType = pOrderType;
+      }
+
+      // Use deterministic defaults based on instrument type
+      if (!proposalParams) {
+        // For F&O, use NRML; for EQ, use MIS
+        product = c.instrumentType === 'EQ' ? 'MIS' : 'NRML';
+        // Default quantity: lot size for F&O, 1 for EQ
+        quantity = Math.max(1, c.lotSize);
+        // Default side: buy
+        side = 'buy';
+        // Default order: MARKET
+        orderType = 'MARKET';
+        price = null;
+        triggerPrice = null;
+      }
+
+      tag = `strategy-${entry.plugin.id}`;
+
+      // Build the NewProposalAttempt
+      const attempt: NewProposalAttempt = {
+        exchange: c.exchange,
+        tradingsymbol: c.tradingsymbol,
+        instrumentToken: c.instrumentToken,
+        side,
+        product,
+        quantity,
+        price,
+        triggerPrice,
+        orderType,
+        tag,
+        proposalStatus: ProposalStatus.Pending,
+        createdAt: now,
+      };
+
+      proposals.push({
+        attempt,
+        raw: {
+          exchange: c.exchange,
+          tradingsymbol: c.tradingsymbol,
+          side,
+          product,
+          quantity,
+          price,
+          triggerPrice,
+          orderType,
+        },
+      });
+    }
+
+    return proposals;
   }
 
   /**

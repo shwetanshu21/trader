@@ -546,8 +546,14 @@ describe('Universe Supervisor — integration', () => {
 
       await supervisor.doWork(new Date(), minimalHealth());
 
-      // Should have reached the engine (fetch called) even though it returned empty
-      expect(globalThis.fetch).toHaveBeenCalled();
+      // The strategy pipeline should have run (LLM plugin uses deterministic scoring)
+      // Since the plugin is synchronous, fetch is NOT called — the deterministic
+      // fallback produces candidates. Check that proposal attempts were persisted.
+      const attempts = proposalRepo.getRecentAttemptsWithReasons(10);
+      expect(attempts.length).toBeGreaterThanOrEqual(3);
+      // At least some should be accepted (deterministic scores always produce results)
+      const accepted = attempts.filter(a => a.proposalStatus === ProposalStatus.Accepted);
+      expect(accepted.length).toBeGreaterThan(0);
     });
   });
 

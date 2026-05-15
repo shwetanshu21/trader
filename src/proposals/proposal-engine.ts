@@ -3,6 +3,10 @@
 // Calls a configurable LLM provider, normalises JSON output into
 // NewProposalAttempt DTOs, and returns structured error/refusal results
 // for every failure mode (timeout, 5xx, malformed JSON, empty response).
+//
+// Narrowed to provider transport/normalization responsibilities that
+// strategy plugins consume rather than fused candidate selection and
+// provider calls.
 
 import {
   type ProviderProposalResponse,
@@ -74,7 +78,7 @@ export interface EngineContext {
 // ---------------------------------------------------------------------------
 
 export class ProposalEngine {
-  private readonly _config: ProposalEngineConfig;
+  protected readonly _config: ProposalEngineConfig;
 
   constructor(config: ProposalEngineConfig) {
     this._config = config;
@@ -190,20 +194,99 @@ export class ProposalEngine {
     };
   }
 
+  // ── Public transport methods for plugin consumption ─────────────────────
+
+  /**
+   * Send an arbitrary JSON payload to the configured provider and return a
+   * parsed ProviderProposalResponse.  This is the narrow transport seam that
+   * strategy plugins (e.g. LlmRankingStrategy) use instead of fused proposal
+   * generation.
+   *
+   * Handles:
+   *  - Timeout via AbortController
+   *  - HTTP errors (4xx, 5xx) → thrown
+   *  - Malformed JSON → thrown
+   *
+   * @param payload - The JSON-serialisable body to POST.
+   * @returns Parsed ProviderProposalResponse.
+   */
+  async sendRequest(payload: Record<string, unknown>): Promise<ProviderProposalResponse> {
+    const response = await this._postJson(payload);
+    return this._parseDirectProviderResponse(response);
+  }
+
+  /**
+   * Send an OpenAI-compatible chat completions payload to the provider.
+   * Wraps the payload in the standard OpenAI chat completions shape and
+   * extracts the assistant content as a ProviderProposalResponse.
+   *
+   * @param model - Model identifier to use in the request.
+   * @param messages - Array of chat messages (system, user).
+   * @returns Parsed ProviderProposalResponse extracted from the assistant reply.
+   */
+  async sendOpenAiRequest(
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+  ): Promise<ProviderProposalResponse> {
+    const payload = {
+      model,
+      response_format: { type: 'json_object' },
+      messages,
+    };
+    const response = await this._postJson(payload);
+    return this._parseOpenAiCompatibleResponseFromResponse(response);
+  }
+
+  /**
+   * Normalise a raw provider proposal into a NewProposalAttempt.
+   * Returns null if the proposal has missing or invalid fields.
+   * Public for strategy plugin use.
+   */
+  normalizeProposal(
+    raw: ProviderProposalResponse['proposals'][0],
+  ): NewProposalAttempt | null {
+    return this._normalizeProposal(raw);
+  }
+
+  /**
+   * Extract assistant content from an OpenAI-compatible response.
+   * Public for strategy plugin use.
+   */
+  extractAssistantContent(content: unknown): string | null {
+    return this._extractAssistantContent(content);
+  }
+
+  /** Accessor for engine config (read-only via copy). */
+  get config(): ProposalEngineConfig {
+    return { ...this._config };
+  }
+
   // ── Provider transport adapters ─────────────────────────────────────────
 
+  /**
+   * Fetch a custom (direct) response from the provider.
+   * Uses the canonical payload format built from EngineContext.
+   */
   private async _fetchCustomResponse(context: EngineContext): Promise<ProviderProposalResponse> {
     const payload = this._buildCanonicalPayload(context);
     const response = await this._postJson(payload);
     return this._parseDirectProviderResponse(response);
   }
 
+  /**
+   * Fetch an OpenAI-compatible response from the provider.
+   * Wraps the canonical payload in a chat completions request.
+   */
   private async _fetchOpenAiCompatibleResponse(context: EngineContext): Promise<ProviderProposalResponse> {
     const payload = this._buildOpenAiCompatiblePayload(context);
     const response = await this._postJson(payload);
     return this._parseOpenAiCompatibleResponse(response);
   }
 
+  /**
+   * POST a JSON payload to the configured provider URL.
+   * Handles timeout via AbortController.
+   */
   private async _postJson(payload: Record<string, unknown>): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this._config.timeoutMs);
@@ -266,12 +349,42 @@ export class ProposalEngine {
     }
   }
 
+  /**
+   * Parse an OpenAI-compatible HTTP Response directly (without wrapping in
+   * an EngineContext payload). Used by sendOpenAiRequest.
+   */
+  private async _parseOpenAiCompatibleResponseFromResponse(response: Response): Promise<ProviderProposalResponse> {
+    if (!response.ok) {
+      throw new Error(await this._formatHttpError(response));
+    }
+
+    let outer: { choices?: Array<{ message?: { content?: unknown } }> };
+    try {
+      const text = await response.text();
+      outer = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown } }> };
+    } catch (err) {
+      throw new Error(`Malformed OpenAI-compatible response: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const content = outer.choices?.[0]?.message?.content;
+    const contentText = this._extractAssistantContent(content);
+    if (!contentText) {
+      throw new Error('OpenAI-compatible response missing choices[0].message.content');
+    }
+
+    try {
+      return JSON.parse(contentText) as ProviderProposalResponse;
+    } catch (err) {
+      throw new Error(`OpenAI-compatible assistant content is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // ── Request builders ────────────────────────────────────────────────────
 
   /**
    * Canonical business payload used by the legacy custom provider contract.
    */
-  private _buildCanonicalPayload(context: EngineContext): Record<string, unknown> {
+  protected _buildCanonicalPayload(context: EngineContext): Record<string, unknown> {
     const instrumentSummaries = context.instruments.map(entry => ({
       exchange: entry.instrument.exchange,
       tradingsymbol: entry.instrument.tradingsymbol,
@@ -300,6 +413,9 @@ export class ProposalEngine {
     };
   }
 
+  /**
+   * Build an OpenAI-compatible chat completions payload wrapping the canonical payload.
+   */
   private _buildOpenAiCompatiblePayload(context: EngineContext): Record<string, unknown> {
     const canonicalPayload = this._buildCanonicalPayload(context);
 
