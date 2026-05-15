@@ -1678,3 +1678,123 @@ export type {
   WebSocketFactory,
   SubscribedInstrument,
 } from '../integrations/broker/types.js';
+
+// ---------------------------------------------------------------------------
+// Strategy Framework — pluggable screening and ranking DTOs
+// ---------------------------------------------------------------------------
+
+/**
+ * Identity metadata for a strategy plugin.
+ * Uniquely identifies a plugin instance across evaluation rounds.
+ */
+export interface StrategyPluginIdentity {
+  /** Unique plugin identifier (e.g. 'momentum-screener-v1'). */
+  id: string;
+  /** Human-readable plugin name. */
+  name: string;
+  /** Plugin version (semver-style, e.g. '1.0.0'). */
+  version: string;
+}
+
+/**
+ * A bounded candidate — an instrument+quote pair that has already been
+ * filtered through the eligible universe, ready for strategy plugin evaluation.
+ *
+ * Contains only the data a deterministic strategy plugin needs to score and
+ * rank the candidate, without exposing raw provider output or full instrument
+ * catalog metadata.
+ */
+export interface BoundedCandidate {
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE'). */
+  tradingsymbol: string;
+  /** Kite instrument token (may be null for synthetic candidates). */
+  instrumentToken: number | null;
+  /** Trade side determined by upstream context. */
+  side: 'buy' | 'sell';
+  /** Last traded price, or null if unavailable. */
+  lastPrice: number | null;
+  /** Best bid price, or null if unavailable. */
+  bid: number | null;
+  /** Best ask price, or null if unavailable. */
+  ask: number | null;
+  /** Trading volume, or null if unavailable. */
+  volume: number | null;
+  /** Instrument type (e.g. 'EQ', 'CE', 'PE'). */
+  instrumentType: string;
+  /** Lot size for the instrument. */
+  lotSize: number;
+  /** Tick size (minimum price increment). */
+  tickSize: number;
+}
+
+/**
+ * Configuration for the strategy framework coordinator.
+ */
+export interface StrategyFrameworkConfig {
+  /** Maximum number of ranked candidates to include in the result. */
+  maxCandidates: number;
+  /** When true, plugins run in parallel. When false, sequential (default: true). */
+  parallelPlugins: boolean;
+}
+
+/**
+ * A single ranked candidate produced by a strategy plugin.
+ * Score is normalized 0–1 (higher = more favorable).
+ */
+export interface RankedCandidate {
+  /** The bounded candidate this ranking applies to. */
+  candidate: BoundedCandidate;
+  /** Plugin identity that produced this ranking. */
+  plugin: StrategyPluginIdentity;
+  /** Normalized score in 0–1 range (higher = more favorable). */
+  score: number;
+  /** Human-readable justification for the score. */
+  rationale: string;
+  /** Optional additional metadata for diagnostics. */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Full result from the strategy framework coordinator.
+ *
+ * Contains the final ranked candidate list (deterministically ordered,
+ * capped at maxCandidates), plugin identities that participated, and
+ * any non-fatal plugin errors.
+ */
+export interface CoordinatorResult {
+  /** Ranked candidates, ordered by score descending, capped at maxCandidates. */
+  candidates: RankedCandidate[];
+  /** Plugins that participated in this evaluation round. */
+  plugins: StrategyPluginIdentity[];
+  /** Total number of candidates that were evaluated across all plugins. */
+  totalEvaluated: number;
+  /** Whether any plugin errors occurred (non-fatal — errors are collected, evaluation continues). */
+  hasPluginErrors: boolean;
+  /** Plugin errors keyed by plugin ID, if any. */
+  pluginErrors: Record<string, string>;
+  /** Total wall-clock duration of the evaluation round in ms. */
+  durationMs: number;
+}
+
+/**
+ * The contract each strategy plugin must fulfill.
+ *
+ * A plugin receives a full set of bounded candidates and returns scored/
+ * ranked results. Empty return means the plugin declined to rank (no matches).
+ * Plugins are deterministic given the same input — same candidates always
+ * produce the same scores and rankings.
+ */
+export interface StrategyPlugin {
+  /** Plugin identity — unique across the plugin set. */
+  readonly identity: StrategyPluginIdentity;
+  /**
+   * Evaluate a set of bounded candidates and produce ranked results.
+   *
+   * @param candidates - The full set of bounded candidates available this round.
+   * @returns An array of RankedCandidate entries. Empty array means no
+   *          candidates met this plugin's criteria.
+   */
+  evaluate(candidates: BoundedCandidate[]): RankedCandidate[];
+}
