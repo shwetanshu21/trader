@@ -406,6 +406,44 @@ CREATE TABLE IF NOT EXISTS hybrid_score_components (
 CREATE INDEX IF NOT EXISTS idx_hybrid_components_summary ON hybrid_score_components(summary_id);
 CREATE INDEX IF NOT EXISTS idx_hybrid_components_order ON hybrid_score_components(summary_id, sort_order);
 
+-- M005/S01: Replay sessions — durable replay run state
+CREATE TABLE IF NOT EXISTS replay_sessions (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  label                 TEXT    NOT NULL,
+  strategy_id           TEXT    NOT NULL,
+  strategy_version      TEXT    NOT NULL,
+  market_id             TEXT    NOT NULL,
+  cadence_minutes       INTEGER NOT NULL DEFAULT 5,
+  range_start           INTEGER NOT NULL,
+  range_end             INTEGER NOT NULL,
+  requested_fidelity    TEXT    NOT NULL,
+  effective_fidelity    TEXT,
+  status                TEXT    NOT NULL DEFAULT 'pending',
+  total_ticks           INTEGER NOT NULL DEFAULT 0,
+  completed_ticks       INTEGER NOT NULL DEFAULT 0,
+  error_message         TEXT,
+  created_at            INTEGER NOT NULL,
+  started_at            INTEGER,
+  completed_at          INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_sessions_status ON replay_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_replay_sessions_created ON replay_sessions(created_at);
+
+-- M005/S01: Replay checkpoints — resumable position within a session
+CREATE TABLE IF NOT EXISTS replay_checkpoints (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id      INTEGER NOT NULL REFERENCES replay_sessions(id),
+  tick_index      INTEGER NOT NULL,
+  tick_timestamp  INTEGER NOT NULL,
+  strategy_run_id INTEGER REFERENCES strategy_runs(id),
+  metadata_json   TEXT,
+  saved_at        INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_checkpoints_session ON replay_checkpoints(session_id);
+CREATE INDEX IF NOT EXISTS idx_replay_checkpoints_tick ON replay_checkpoints(session_id, tick_index);
+
 -- S05: Strategy run — append-only replay-ready artifact for screening rounds
 CREATE TABLE IF NOT EXISTS strategy_runs (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,

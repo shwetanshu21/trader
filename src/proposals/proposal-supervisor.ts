@@ -22,6 +22,7 @@ import type {
   BoundedCandidate,
   StrategyPlugin,
   HybridCandidateEvidence,
+  ProposalAttemptWithReasons,
 } from '../types/runtime.js';
 import {
   ProposalStatus,
@@ -34,6 +35,8 @@ import type { MarketClock } from '../runtime/market-clock.js';
 import type { QuoteSnapshot } from '../integrations/broker/types.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { HybridScoreRepository } from '../persistence/hybrid-score-repo.js';
+import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
+import type { NewStrategyRun, NewStrategyRunCandidate } from '../types/runtime.js';
 import { ProposalEngine, type EngineContext, type NormalizedProposal } from './proposal-engine.js';
 import { IndiaProposalValidator, type ValidatorInput } from './india-validator.js';
 import { UniverseService, type UniverseCoverageSummary } from '../universe/universe-service.js';
@@ -61,6 +64,8 @@ export class ProposalSupervisor implements TickWork {
   private readonly _coordinator: StrategyCoordinator;
   /** Optional hybrid score repository for atomic proposal + hybrid evidence persistence. */
   private readonly _hybridScoreRepo: HybridScoreRepository | null;
+  /** Optional strategy run repository for append-only screening-round artifacts. */
+  private readonly _strategyRunRepo: StrategyRunRepository | null;
 
   /** Local in-flight guard — true while a proposal generation is active. */
   private _inFlight: boolean = false;
@@ -88,6 +93,8 @@ export class ProposalSupervisor implements TickWork {
     additionalPlugins?: StrategyPlugin[];
     /** Optional hybrid score repository for atomic proposal + evidence persistence. */
     hybridScoreRepo?: HybridScoreRepository | null;
+    /** Optional strategy run repository for append-only screening-round artifacts. */
+    strategyRunRepo?: StrategyRunRepository | null;
   }) {
     this._engine = options.engine;
     this._validator = options.validator;
@@ -99,6 +106,7 @@ export class ProposalSupervisor implements TickWork {
     this._maxProposals = options.maxProposals ?? 5;
     this._universeService = options.universeService ?? null;
     this._hybridScoreRepo = options.hybridScoreRepo ?? null;
+    this._strategyRunRepo = options.strategyRunRepo ?? null;
 
     // Use externally-constructed coordinator when provided (production path).
     // Otherwise build one internally (backward compatibility for tests).
@@ -317,6 +325,9 @@ export class ProposalSupervisor implements TickWork {
       evidenceByKey.set(evidence.candidateKey, evidence);
     }
 
+    // Track proposal attempt IDs for strategy run candidate linkage
+    const emittedKeyToProposalId = new Map<string, number>();
+
     // ── Phase 7: Resolve instrument tokens and validate each proposal ───
     for (const prop of proposals) {
       const { attempt } = prop;
@@ -361,6 +372,8 @@ export class ProposalSupervisor implements TickWork {
       const candidateKey = `${attempt.exchange}:${attempt.tradingsymbol}`;
       const evidence = evidenceByKey.get(candidateKey);
 
+      let persistedId: number | null = null;
+
       if (this._hybridScoreRepo && evidence) {
         // Persist proposal + reasons + hybrid score evidence atomically
         const hybridComponents = evidence.pluginScores.map((ps, idx) => ({
@@ -371,7 +384,7 @@ export class ProposalSupervisor implements TickWork {
           sortOrder: idx,
         }));
 
-        this._repo.insertAttemptWithReasonsAndHybridScore(
+        const result = this._repo.insertAttemptWithReasonsAndHybridScore(
           attempt,
           verdict.status === ProposalStatus.Accepted ? [] : verdict.reasons,
           {
@@ -386,14 +399,33 @@ export class ProposalSupervisor implements TickWork {
           },
           hybridComponents,
         );
+        persistedId = result.id;
       } else {
         // Fallback to basic persistence when hybrid repo is not wired
+        let result: ProposalAttemptWithReasons;
         if (verdict.status === ProposalStatus.Accepted) {
-          this._repo.insertAttemptWithReasons(attempt, []);
+          result = this._repo.insertAttemptWithReasons(attempt, []);
         } else {
-          this._repo.insertAttemptWithReasons(attempt, verdict.reasons);
+          result = this._repo.insertAttemptWithReasons(attempt, verdict.reasons);
         }
+        persistedId = result.id;
       }
+
+      // Track emitted candidates for strategy run linkage
+      if (verdict.status === ProposalStatus.Accepted && persistedId != null) {
+        emittedKeyToProposalId.set(candidateKey, persistedId);
+      }
+    }
+
+    // ── Phase 8: Persist strategy run artifact (if strategyRunRepo is wired) ──
+    if (this._strategyRunRepo) {
+      this._persistStrategyRun(
+        coordinatorResult,
+        proposals,
+        evidenceByKey,
+        emittedKeyToProposalId,
+        now,
+      );
     }
 
     // Log tick summary if debugging
@@ -663,5 +695,107 @@ export class ProposalSupervisor implements TickWork {
     }
 
     console.warn('[proposal-supervisor] Overlap skip: previous tick still in flight');
+  }
+
+  /**
+   * Persist one append-only strategy run artifact with all evaluated candidates
+   * and downstream proposal linkage.
+   *
+   * Builds the run from coordinator result metadata and maps each hybrid candidate
+   * evidence entry to a strategy run candidate row. Emitted (accepted) candidates
+   * carry their proposal_attempt_id linkage; non-selected and refused candidates
+   * remain explicitly unlinked.
+   *
+   * Uses the repository's atomic insert — a failure here does not roll back
+   * the already-persisted proposals (run persistence is best-effort additive).
+   */
+  private _persistStrategyRun(
+    coordinatorResult: import('../types/runtime.js').HybridCoordinatorResult,
+    proposals: NormalizedProposal[],
+    evidenceByKey: Map<string, HybridCandidateEvidence>,
+    emittedKeyToProposalId: Map<string, number>,
+    now: number,
+  ): void {
+    try {
+      // Build the run from coordinator metadata
+      const run: NewStrategyRun = {
+        frameworkConfig: JSON.stringify(coordinatorResult.candidates.length > 0
+          ? { maxCandidates: coordinatorResult.candidates.length }
+          : { maxCandidates: 0 }),
+        pluginsJson: JSON.stringify(
+          coordinatorResult.plugins.map(p => ({
+            id: p.id,
+            name: p.name,
+            version: p.version,
+          })),
+        ),
+        pluginErrorsJson: coordinatorResult.hasPluginErrors
+          ? JSON.stringify(coordinatorResult.pluginErrors)
+          : null,
+        universeSnapshotId: null, // Not yet wired — set when universe snapshot linkage is available
+        totalEvaluated: coordinatorResult.totalEvaluated,
+        hasPluginErrors: coordinatorResult.hasPluginErrors,
+        durationMs: coordinatorResult.durationMs,
+        createdAt: now,
+      };
+
+      // Build candidates from coordinator evidence
+      // Rank is assigned below based on index order
+      const candidates: NewStrategyRunCandidate[] = coordinatorResult.candidates.map(evidence => {
+        const isEmitted = emittedKeyToProposalId.has(evidence.candidateKey);
+        const proposalAttemptId = emittedKeyToProposalId.get(evidence.candidateKey) ?? null;
+
+        return {
+          strategyRunId: 0, // placeholder — assigned by insert
+          candidateKey: evidence.candidateKey,
+          rank: 0, // placeholder — assigned below
+          exchange: evidence.candidate.exchange,
+          tradingsymbol: evidence.candidate.tradingsymbol,
+          instrumentToken: evidence.candidate.instrumentToken,
+          instrumentType: evidence.candidate.instrumentType,
+          lotSize: evidence.candidate.lotSize,
+          tickSize: evidence.candidate.tickSize,
+          side: evidence.candidate.side,
+          lastPrice: evidence.candidate.lastPrice,
+          bid: evidence.candidate.bid,
+          ask: evidence.candidate.ask,
+          volume: evidence.candidate.volume,
+          scoresJson: JSON.stringify(
+            evidence.pluginScores.map(ps => ({
+              plugin: ps.plugin,
+              score: ps.score,
+              rationale: ps.rationale,
+              metadata: ps.metadata ?? null,
+            })),
+          ),
+          deterministicScore: evidence.deterministicScore,
+          llmScore: evidence.llmScore,
+          llmStatus: evidence.llmStatus,
+          llmRationale: evidence.llmRationale,
+          mergedScore: evidence.mergedScore,
+          mergePolicy: evidence.mergePolicy,
+          proposalParamsJson: evidence.proposalParams
+            ? JSON.stringify(evidence.proposalParams)
+            : null,
+          pluginErrorsJson: evidence.hasPluginErrors
+            ? JSON.stringify(evidence.pluginErrors)
+            : null,
+          hasPluginErrors: evidence.hasPluginErrors,
+          emitted: isEmitted,
+          proposalAttemptId,
+        };
+      });
+
+      // Assign ranks based on coordinator ordering
+      for (let i = 0; i < candidates.length; i++) {
+        candidates[i].rank = i + 1;
+      }
+
+      this._strategyRunRepo!.insertRunWithCandidates(run, candidates);
+    } catch (err) {
+      // Strategy run persistence is best-effort — it should not crash the tick
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[proposal-supervisor] Failed to persist strategy run: ${errorMsg}`);
+    }
   }
 }

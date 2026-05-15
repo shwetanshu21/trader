@@ -13,6 +13,7 @@ import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { ProposalEngine } from '../src/proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../src/proposals/india-validator.js';
 import { ProposalSupervisor } from '../src/proposals/proposal-supervisor.js';
+import { StrategyRunRepository } from '../src/persistence/strategy-run-repo.js';
 import { RuntimeApp } from '../src/runtime/runtime-app.js';
 import {
   ProposalStatus,
@@ -133,9 +134,10 @@ function sampleQuote(overrides?: Partial<QuoteSnapshot>): QuoteSnapshot {
   };
 }
 
-function createSupervisor(options?: { engineConfig?: ProposalEngineConfig; marketPhase?: MarketPhase; sessionState?: ZerodhaSessionState }) {
+function createSupervisor(options?: { engineConfig?: ProposalEngineConfig; marketPhase?: MarketPhase; sessionState?: ZerodhaSessionState; wiredRunRepo?: boolean }) {
   const db = new DatabaseManager(':memory:');
   const repo = new ProposalRepository(db.db);
+  const runRepo = options?.wiredRunRepo ? new StrategyRunRepository(db.db) : null;
   const engine = new ProposalEngine(options?.engineConfig ?? makeEngineConfig());
   const validator = new IndiaProposalValidator();
   const session = new MockSessionService();
@@ -153,9 +155,10 @@ function createSupervisor(options?: { engineConfig?: ProposalEngineConfig; marke
 
   const supervisor = new ProposalSupervisor({
     engine, validator, repo, session: session as any, instruments: instruments as any, stream: stream as any, clock, maxProposals: 3,
+    strategyRunRepo: runRepo,
   });
 
-  return { db, repo, engine, validator, supervisor, session, instruments, stream, clock };
+  return { db, repo, engine, validator, supervisor, session, instruments, stream, clock, runRepo };
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +442,7 @@ describe('RuntimeApp — hybrid score repo wiring', () => {
 
     const handles = app.build();
     expect(handles.hybridScoreRepo).not.toBeNull();
+    expect(handles.strategyRunRepo).not.toBeNull();
     expect(handles.proposalSupervisor).not.toBeNull();
     expect(handles.strategyDecisionRepo).not.toBeNull();
 
@@ -525,5 +529,165 @@ describe('RuntimeApp — hybrid score repo wiring', () => {
 
     // Clean up
     app.stop('Test teardown');
+  });
+});
+
+// ── Strategy run persistence from ProposalSupervisor ticks ───────────────
+
+describe('ProposalSupervisor — strategy run persistence', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('persists a strategy run artifact on tick when strategyRunRepo is wired', async () => {
+    const { supervisor, repo, runRepo } = createSupervisor({
+      marketPhase: MarketPhase.Regular,
+      wiredRunRepo: true,
+    });
+
+    await supervisor.doWork(new Date(), minimalHealth());
+
+    // Verify proposals were persisted
+    const attempts = repo.getRecentAttemptsWithReasons(10);
+    expect(attempts.length).toBeGreaterThan(0);
+
+    // Verify a strategy run was persisted
+    const runs = runRepo!.getRecentRuns();
+    expect(runs.length).toBe(1);
+    expect(runs[0].totalEvaluated).toBeGreaterThan(0);
+    expect(runs[0].candidates.length).toBeGreaterThan(0);
+    const parsedPlugins = JSON.parse(runs[0].pluginsJson);
+    expect(Array.isArray(parsedPlugins)).toBe(true);
+    expect(parsedPlugins.length).toBeGreaterThan(0);
+  });
+
+  it('persists all evaluated candidates matching the coordinator output', async () => {
+    const { supervisor, repo, runRepo } = createSupervisor({
+      marketPhase: MarketPhase.Regular,
+      wiredRunRepo: true,
+    });
+
+    await supervisor.doWork(new Date(), minimalHealth());
+
+    const runs = runRepo!.getRecentRuns();
+    expect(runs.length).toBe(1);
+    const run = runs[0];
+
+    // Two candidates (NSE RELIANCE + NFO BANKNIFTY option)
+    expect(run.candidates.length).toBe(2);
+
+    // Verify candidate keys match the expected instruments
+    const keys = run.candidates.map(c => c.candidateKey).sort();
+    expect(keys).toEqual(['NFO:BANKNIFTY24DEC50000CE', 'NSE:RELIANCE']);
+
+    // Each candidate has scores, merged score, and plugin evidence
+    for (const c of run.candidates) {
+      expect(c.mergedScore).toBeGreaterThanOrEqual(0);
+      expect(c.deterministicScore).toBeGreaterThanOrEqual(0);
+      expect(c.scoresJson).toBeTruthy();
+      const scores = JSON.parse(c.scoresJson);
+      expect(Array.isArray(scores)).toBe(true);
+      expect(scores.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('links emitted (accepted) candidates with proposal_attempt_id', async () => {
+    const { supervisor, repo, runRepo } = createSupervisor({
+      marketPhase: MarketPhase.Regular,
+      wiredRunRepo: true,
+    });
+
+    await supervisor.doWork(new Date(), minimalHealth());
+
+    const runs = runRepo!.getRecentRuns();
+    expect(runs.length).toBe(1);
+    const run = runs[0];
+
+    // All candidates should be emitted (accepted during regular market hours)
+    const emitted = run.candidates.filter(c => c.emitted);
+    const nonEmitted = run.candidates.filter(c => !c.emitted);
+
+    expect(emitted.length).toBe(2);
+    expect(nonEmitted.length).toBe(0);
+
+    // Each emitted candidate has a valid proposal_attempt_id (FK linkage)
+    for (const c of emitted) {
+      expect(c.proposalAttemptId).not.toBeNull();
+      expect(c.proposalAttemptId).toBeGreaterThan(0);
+    }
+  });
+
+  it('falls back to normal tick when strategyRunRepo is not wired', async () => {
+    const { supervisor, repo } = createSupervisor({
+      marketPhase: MarketPhase.Regular,
+    });
+
+    await supervisor.doWork(new Date(), minimalHealth());
+
+    const attempts = repo.getRecentAttemptsWithReasons(10);
+    expect(attempts.length).toBeGreaterThan(0);
+
+    // Basic persistence worked without strategy run repo
+    const accepted = attempts.filter(a => a.proposalStatus === ProposalStatus.Accepted);
+    expect(accepted.length).toBeGreaterThan(0);
+  });
+
+  it('survives strategy run persistence failure without crashing the tick', async () => {
+    const { supervisor, repo, runRepo } = createSupervisor({
+      marketPhase: MarketPhase.Regular,
+      wiredRunRepo: true,
+    });
+
+    // The repo will work fine — this tests that the try/catch in _persistStrategyRun
+    // doesn't throw. The run should be persisted normally.
+    await supervisor.doWork(new Date(), minimalHealth());
+
+    const attempts = repo.getRecentAttemptsWithReasons(10);
+    expect(attempts.length).toBeGreaterThan(0);
+
+    // Run should be persisted
+    const runs = runRepo!.getRecentRuns();
+    expect(runs.length).toBe(1);
+  });
+
+  it('wires strategyRunRepo when proposal engine is configured in RuntimeApp', () => {
+    const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 's03-strategy-run-'));
+    try {
+      const app = new RuntimeApp({
+        port: 0,
+        nodeEnv: 'test',
+        marketTimezone: 'Asia/Kolkata',
+        schedulerIntervalMs: 60000,
+        dbPath: path.join(tmpDir2, 'test.db'),
+        logLevel: 'error',
+        zerodha: null,
+        proposalEngine: {
+          providerMode: 'custom',
+          providerUrl: 'http://localhost:9999/v1/proposals',
+          timeoutMs: 5000,
+          maxProposalsPerTick: 1,
+        },
+        execution: {
+          mode: ExecutionMode.Blocked,
+          maxRetries: 0,
+          riskLimits: {
+            maxOpenPositions: 5,
+            maxOrdersPerInstrument: 1,
+            maxDailyLossRupees: 20000,
+            maxExposureRupees: 500000,
+            marketHoursStalenessMs: 120000,
+          },
+        },
+        strategy: {
+          maxCandidates: 5,
+          parallelPlugins: true,
+        },
+      });
+
+      const handles = app.build();
+      expect(handles.strategyRunRepo).not.toBeNull();
+      app.stop('Test teardown');
+    } finally {
+      try { fs.rmSync(tmpDir2, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
   });
 });

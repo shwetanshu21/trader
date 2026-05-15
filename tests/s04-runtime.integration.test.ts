@@ -1797,6 +1797,56 @@ describe('RuntimeApp-root witnesses', () => {
       expect(h.strategyDecisionRepo!.countDecisions()).toBe(accepted.length);
       expect(h.executionAttemptRepo!.count()).toBe(accepted.length);
 
+      // 6. Strategy run artifact: one run persisted with all candidates
+      expect(h.strategyRunRepo!.countRuns()).toBe(1);
+      const runs = h.strategyRunRepo!.getRecentRuns();
+      expect(runs.length).toBe(1);
+      const run = runs[0];
+
+      // Run metadata matches coordinator output
+      expect(run.totalEvaluated).toBe(50); // Full NSE universe
+      expect(run.hasPluginErrors).toBe(false);
+      expect(run.durationMs).toBeGreaterThanOrEqual(0);
+      expect(run.universeSnapshotId).toBeNull(); // Not yet wired
+
+      // Plugin identities are preserved
+      const parsedPlugins = JSON.parse(run.pluginsJson) as Array<{ id: string }>;
+      expect(parsedPlugins.length).toBeGreaterThanOrEqual(1);
+      expect(parsedPlugins[0].id).toBe('llm-ranking-v1');
+
+      // Candidates are capped at maxCandidates (5) matching coordinator config
+      expect(run.candidates.length).toBeLessThanOrEqual(5);
+      expect(run.candidates.length).toBeGreaterThanOrEqual(1);
+
+      // 7. Emitted candidates link back to proposal_attempts
+      const emittedCandidates = run.candidates.filter(c => c.emitted);
+      expect(emittedCandidates.length).toBeGreaterThanOrEqual(1);
+
+      for (const ec of emittedCandidates) {
+        // Each emitted candidate points at a real proposal_attempt
+        expect(ec.proposalAttemptId).not.toBeNull();
+        const proposal = h.proposalRepo!.getAttemptById(ec.proposalAttemptId!);
+        expect(proposal).not.toBeNull();
+        expect(proposal!.exchange).toBe(ec.exchange);
+        expect(proposal!.tradingsymbol).toBe(ec.tradingsymbol);
+
+        // Proposal is linked to a hybrid score summary
+        const hybrid = h.hybridScoreRepo!.getByProposalAttemptId(ec.proposalAttemptId!);
+        expect(hybrid).not.toBeNull();
+
+        // Proposal is linked to a strategy decision
+        const decision = h.strategyDecisionRepo!.getDecisionByProposalAttemptId(ec.proposalAttemptId!);
+        expect(decision).not.toBeNull();
+      }
+
+      // 8. Non-emitted candidates have null proposal_attempt_id
+      const nonEmitted = run.candidates.filter(c => !c.emitted);
+      if (nonEmitted.length > 0) {
+        for (const nc of nonEmitted) {
+          expect(nc.proposalAttemptId).toBeNull();
+        }
+      }
+
       app.stop('Test teardown');
     });
   });

@@ -15,6 +15,7 @@ import { BrokerRepository } from '../persistence/broker-repo.js';
 import { UniverseRepository } from '../persistence/universe-repo.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
+import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import { LifecycleManager } from './lifecycle.js';
@@ -73,6 +74,7 @@ export interface RuntimeAppHandles {
   blockedOrderRepo: BlockedOrderRepository | null;
   strategyDecisionRepo: StrategyDecisionRepository | null;
   hybridScoreRepo: HybridScoreRepository | null;
+  strategyRunRepo: StrategyRunRepository | null;
   executionAttemptRepo: ExecutionAttemptRepository | null;
   executionService: ModeAwareExecutionService | null;
   lifecycle: LifecycleManager;
@@ -260,6 +262,7 @@ export class RuntimeApp {
     let strategyRiskSupervisor: StrategyRiskSupervisor | null = null;
     let strategyDecisionRepo: StrategyDecisionRepository | null = null;
     let hybridScoreRepo: HybridScoreRepository | null = null;
+    let strategyRunRepo: StrategyRunRepository | null = null;
     let executionService: ModeAwareExecutionService | null = null;
     let riskRepo: ExecutionRiskRepository | null = null;
     let riskGuard: ExecutionRiskGuard | null = null;
@@ -275,6 +278,7 @@ export class RuntimeApp {
       blockedOrderRepo = new BlockedOrderRepository(dbManager.db);
       strategyDecisionRepo = new StrategyDecisionRepository(dbManager.db);
       hybridScoreRepo = new HybridScoreRepository(dbManager.db);
+      strategyRunRepo = new StrategyRunRepository(dbManager.db);
       const engine = new ProposalEngine(this.config.proposalEngine);
       const validator = new IndiaProposalValidator();
 
@@ -298,6 +302,7 @@ export class RuntimeApp {
         universeService,
         coordinator: strategyCoordinator,
         hybridScoreRepo,
+        strategyRunRepo,
       });
 
       // Build ModeAwareExecutionService with the configured mode
@@ -420,6 +425,7 @@ export class RuntimeApp {
       blockedOrderRepo,
       strategyDecisionRepo,
       hybridScoreRepo,
+      strategyRunRepo,
       executionAttemptRepo,
       executionService,
       lifecycle,
