@@ -1800,3 +1800,95 @@ export interface StrategyPlugin {
    */
   evaluate(candidates: BoundedCandidate[]): RankedCandidate[];
 }
+
+// ---------------------------------------------------------------------------
+// Hybrid scoring — audit trail DTOs for S02
+// ---------------------------------------------------------------------------
+
+/** LLM provider status for a hybrid scoring evaluation. */
+export enum LLMStatus {
+  /** LLM was consulted and returned a valid score. */
+  Consulted = 'consulted',
+  /** LLM was consulted but returned degraded quality (timeout, partial response). */
+  Degraded = 'degraded',
+  /** LLM was consulted but returned an error. */
+  Error = 'error',
+  /** LLM was skipped (deterministic-only scoring, policy decision, or rate-limit avoidance). */
+  Skipped = 'skipped',
+}
+
+/** Merge policy used to combine deterministic and LLM scores. */
+export enum MergePolicy {
+  /** LLM score replaces deterministic score entirely. */
+  LLMOverride = 'llm_override',
+  /** Only deterministic scoring was used (LLM was skipped). */
+  DeterministicOnly = 'deterministic_only',
+  /** Arithmetic mean of deterministic and LLM scores. */
+  Average = 'average',
+  /** Maximum of deterministic and LLM scores. */
+  Max = 'max',
+  /** Weighted average (component weights govern the blend). */
+  Weighted = 'weighted',
+}
+
+/**
+ * Summary row for hybrid scoring evidence — one per proposal attempt.
+ *
+ * Carries deterministic component scores, LLM status/rationale, and a final
+ * merged score so downstream runtime paths and operator read models can audit
+ * truthfully without inferring hybrid evidence from downstream tables.
+ */
+export interface HybridScoreSummaryRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → proposal_attempts(id). UNIQUE — one summary per proposal attempt. */
+  proposalAttemptId: number;
+  /** Final aggregated deterministic score (0–1), computed from child components. */
+  deterministicScore: number;
+  /** LLM-provided score (0–1), or null when LLM was not consulted or failed. */
+  llmScore: number | null;
+  /** LLM provider consultation status. */
+  llmStatus: LLMStatus;
+  /** Human-readable LLM rationale, or null. */
+  llmRationale: string | null;
+  /** Final merged score (0–1) after applying the merge policy. */
+  mergedScore: number;
+  /** The merge policy that was applied to produce mergedScore. */
+  mergePolicy: MergePolicy;
+  /** Unix timestamp (ms) when this summary was created. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new hybrid score summary (without id). */
+export type NewHybridScoreSummary = Omit<HybridScoreSummaryRow, 'id'>;
+
+/**
+ * A single ordered component score within a hybrid evaluation.
+ *
+ * Components represent individual deterministic scoring signals
+ * (e.g. momentum, volume, volatility) that feed into the aggregated
+ * deterministic score. Order is preserved by sort_order.
+ */
+export interface HybridScoreComponentRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → hybrid_score_summary(id). */
+  summaryId: number;
+  /** Component name (e.g. 'momentum', 'volume', 'volatility'). */
+  componentName: string;
+  /** Component score (0–1). */
+  score: number;
+  /** Component weight in the deterministic aggregation (0–1). */
+  weight: number;
+  /** Ordering position within the component set. */
+  sortOrder: number;
+}
+
+/** Shape for inserting a new hybrid score component (without id). */
+export type NewHybridScoreComponent = Omit<HybridScoreComponentRow, 'id'>;
+
+/** A hybrid score summary with its ordered component rows loaded. */
+export interface HybridScoreSummaryWithComponents extends HybridScoreSummaryRow {
+  /** Ordered component scores (sorted by sort_order). */
+  components: HybridScoreComponentRow[];
+}

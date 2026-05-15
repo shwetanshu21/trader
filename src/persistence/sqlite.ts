@@ -377,6 +377,34 @@ CREATE TABLE IF NOT EXISTS risk_events (
 CREATE INDEX IF NOT EXISTS idx_risk_events_recorded ON risk_events(recorded_at);
 CREATE INDEX IF NOT EXISTS idx_risk_events_type ON risk_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_risk_events_severity ON risk_events(severity);
+
+-- S02: Hybrid scoring audit trail tables
+CREATE TABLE IF NOT EXISTS hybrid_score_summary (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  proposal_attempt_id   INTEGER NOT NULL UNIQUE REFERENCES proposal_attempts(id),
+  deterministic_score   REAL    NOT NULL,
+  llm_score             REAL,
+  llm_status            TEXT    NOT NULL,
+  llm_rationale         TEXT,
+  merged_score          REAL    NOT NULL,
+  merge_policy          TEXT    NOT NULL,
+  created_at            INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hybrid_score_proposal ON hybrid_score_summary(proposal_attempt_id);
+CREATE INDEX IF NOT EXISTS idx_hybrid_score_created ON hybrid_score_summary(created_at);
+
+CREATE TABLE IF NOT EXISTS hybrid_score_components (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  summary_id      INTEGER NOT NULL REFERENCES hybrid_score_summary(id),
+  component_name  TEXT    NOT NULL,
+  score           REAL    NOT NULL,
+  weight          REAL    NOT NULL,
+  sort_order      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hybrid_components_summary ON hybrid_score_components(summary_id);
+CREATE INDEX IF NOT EXISTS idx_hybrid_components_order ON hybrid_score_components(summary_id, sort_order);
 `;
 
 export class DatabaseManager {
@@ -387,6 +415,9 @@ export class DatabaseManager {
 
     // Enable WAL for concurrent-read performance
     this._db.pragma('journal_mode = WAL');
+
+    // Enforce foreign key constraints
+    this._db.pragma('foreign_keys = ON');
 
     // Run migrations
     this._db.exec(SCHEMA_SQL);
