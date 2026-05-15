@@ -496,6 +496,81 @@ CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_rank ON strategy_run_cand
 CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_key ON strategy_run_candidates(strategy_run_id, candidate_key);
 CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_proposal ON strategy_run_candidates(proposal_attempt_id);
 CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_emitted ON strategy_run_candidates(strategy_run_id, emitted);
+
+-- M005/S02: Walk-forward runs — top-level evaluation run
+CREATE TABLE IF NOT EXISTS walk_forward_runs (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  label                 TEXT    NOT NULL,
+  strategy_id           TEXT    NOT NULL,
+  strategy_version      TEXT    NOT NULL,
+  market_id             TEXT    NOT NULL,
+  replay_session_id     INTEGER REFERENCES replay_sessions(id),
+  window_count          INTEGER NOT NULL DEFAULT 0,
+  total_trials          INTEGER NOT NULL DEFAULT 0,
+  status                TEXT    NOT NULL DEFAULT 'pending',
+  created_at            INTEGER NOT NULL,
+  started_at            INTEGER,
+  completed_at          INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_runs_status ON walk_forward_runs(status);
+CREATE INDEX IF NOT EXISTS idx_wf_runs_created ON walk_forward_runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_wf_runs_session ON walk_forward_runs(replay_session_id);
+
+-- M005/S02: Walk-forward windows — rolling-window segments within a run
+CREATE TABLE IF NOT EXISTS walk_forward_windows (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id                  INTEGER NOT NULL REFERENCES walk_forward_runs(id),
+  window_index            INTEGER NOT NULL,
+  range_start             INTEGER NOT NULL,
+  range_end               INTEGER NOT NULL,
+  window_label            TEXT    NOT NULL DEFAULT '',
+  trial_count_optimized   INTEGER NOT NULL DEFAULT 0,
+  trial_count_tested      INTEGER NOT NULL DEFAULT 0,
+  status                  TEXT    NOT NULL DEFAULT 'pending',
+  created_at              INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_windows_run ON walk_forward_windows(run_id);
+CREATE INDEX IF NOT EXISTS idx_wf_windows_index ON walk_forward_windows(run_id, window_index);
+
+-- M005/S02: Walk-forward trials — optimization trials within a run
+CREATE TABLE IF NOT EXISTS walk_forward_trials (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id                INTEGER NOT NULL REFERENCES walk_forward_runs(id),
+  trial_index           INTEGER NOT NULL,
+  label                 TEXT    NOT NULL,
+  params_json           TEXT    NOT NULL,
+  merged_score          REAL    NOT NULL,
+  deterministic_score   REAL    NOT NULL,
+  llm_score             REAL,
+  llm_status            TEXT,
+  rank                  INTEGER NOT NULL,
+  created_at            INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_trials_run ON walk_forward_trials(run_id);
+CREATE INDEX IF NOT EXISTS idx_wf_trials_rank ON walk_forward_trials(run_id, rank);
+
+-- M005/S02: Walk-forward trial-window evidence — per-window outcomes for each trial
+CREATE TABLE IF NOT EXISTS walk_forward_trial_windows (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  trial_id              INTEGER NOT NULL REFERENCES walk_forward_trials(id),
+  window_id             INTEGER NOT NULL REFERENCES walk_forward_windows(id),
+  window_type           TEXT    NOT NULL,
+  total_return          REAL    NOT NULL,
+  sharpe_ratio          REAL,
+  max_drawdown          REAL,
+  win_rate              REAL,
+  trade_count           INTEGER NOT NULL DEFAULT 0,
+  profit_factor         REAL,
+  metrics_json          TEXT,
+  created_at            INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_tw_trial ON walk_forward_trial_windows(trial_id);
+CREATE INDEX IF NOT EXISTS idx_wf_tw_window ON walk_forward_trial_windows(window_id);
+CREATE INDEX IF NOT EXISTS idx_wf_tw_trial_window ON walk_forward_trial_windows(trial_id, window_id);
 `;
 
 export class DatabaseManager {
