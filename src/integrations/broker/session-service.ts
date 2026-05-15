@@ -44,8 +44,18 @@ export class SessionService {
    * Updates lastAuthCheckAt timestamp for observability.
    */
   getSessionHealth(): BrokerSessionHealth {
-    const row = this._repo.getSession();
-    this._lastAuthCheckAt = Date.now();
+    let row = this._repo.getSession();
+    const now = Date.now();
+
+    if (
+      row.state === BrokerSessionState.Authenticated
+      && row.expiresAt > 0
+      && row.expiresAt <= now
+    ) {
+      row = this.markExpired(`Broker session expired at ${new Date(row.expiresAt).toISOString()}`);
+    }
+
+    this._lastAuthCheckAt = now;
 
     return {
       state: row.state,

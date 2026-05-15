@@ -71,6 +71,11 @@ if printf '%s' "$TOKEN_JSON" | grep -q '"messageType": "access_token"'; then
 else
   fail "Notifier token payload missing access_token witness"
 fi
+if printf '%s' "$TOKEN_JSON" | grep -q '"isExpired": false'; then
+  pass "Notifier token file is unexpired"
+else
+  fail "Notifier token file is expired"
+fi
 
 # ── 5. Notifier health ───────────────────────────────────────────────────
 echo ""
@@ -97,9 +102,14 @@ else
   fail "Bridge health endpoint failed"
 fi
 if printf '%s' "$BRIDGE_HEALTH" | grep -q '"exists": true'; then
+  pass "Bridge sees notifier token file"
+else
+  fail "Bridge does not see notifier token file"
+fi
+if printf '%s' "$BRIDGE_HEALTH" | grep -q '"isExpired": false'; then
   pass "Bridge sees live notifier token"
 else
-  fail "Bridge does not see live notifier token"
+  fail "Bridge token is expired"
 fi
 
 # ── 7. Runtime broker health ─────────────────────────────────────────────

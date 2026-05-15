@@ -85,6 +85,17 @@ export class HealthService {
       degradedReasons.push(`Last scheduler error: ${scheduler.lastError}`);
     }
 
+    const broker = this._brokerSupervisor?.getBrokerHealth();
+    if (broker) {
+      if (broker.session.state !== 'authenticated') {
+        degradedReasons.push(`Broker session is ${broker.session.state}`);
+      }
+
+      if (broker.instruments.isStale) {
+        degradedReasons.push('Broker instruments are stale');
+      }
+    }
+
     // Determine verdict
     let verdict: HealthVerdict;
     if (lifecycleState === LifecycleState.Stopped) {
@@ -94,9 +105,6 @@ export class HealthService {
     } else {
       verdict = HealthVerdict.Healthy;
     }
-
-// Include broker health block if available
-    const broker = this._brokerSupervisor?.getBrokerHealth();
 
     return {
       verdict,

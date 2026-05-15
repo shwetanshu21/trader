@@ -192,8 +192,9 @@ wait_for_token_file() {
   local deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
   info "waiting for notifier token delivery (timeout ${WAIT_TIMEOUT_SECONDS}s)"
   while [ $SECONDS -lt $deadline ]; do
-    if node --import tsx scripts/check-upstox-token.ts 2>/dev/null | grep -q '"exists": true'; then
-      pass "notifier token file is present"
+    if node --import tsx scripts/check-upstox-token.ts 2>/dev/null | grep -q '"exists": true' \
+      && node --import tsx scripts/check-upstox-token.ts 2>/dev/null | grep -q '"isExpired": false'; then
+      pass "notifier token file is present and unexpired"
       return 0
     fi
     sleep 2
@@ -238,6 +239,9 @@ fi
 if $START_RUNTIME; then
   if ! node --import tsx scripts/check-upstox-token.ts 2>/dev/null | grep -q '"exists": true'; then
     fail "runtime start requested, but notifier token file is missing at $TOKEN_ABS_PATH"
+  fi
+  if ! node --import tsx scripts/check-upstox-token.ts 2>/dev/null | grep -q '"isExpired": false'; then
+    fail "runtime start requested, but notifier token file is expired at $TOKEN_ABS_PATH"
   fi
   start_bg runtime "node --env-file=.env --import tsx src/main.ts"
   wait_for_http "http://127.0.0.1:${RUNTIME_PORT}/health" "runtime"

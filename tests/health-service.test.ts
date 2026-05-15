@@ -8,6 +8,8 @@ import {
   SchedulerStatus,
   MarketPhase,
   HealthVerdict,
+  BrokerSessionState,
+  type BrokerHealth,
 } from '../src/types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -20,6 +22,34 @@ function createFixtures() {
   const lifecycle = new LifecycleManager(repo);
   const health = new HealthService(lifecycle, repo, Date.now());
   return { mgr, repo, lifecycle, health };
+}
+
+function makeBrokerHealth(overrides?: Partial<BrokerHealth>): BrokerHealth {
+  return {
+    session: {
+      state: BrokerSessionState.Authenticated,
+      obtainedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+      reason: 'Session healthy',
+      lastError: null,
+      lastAuthCheckAt: Date.now(),
+    },
+    instruments: {
+      lastSuccessAt: Date.now() - 1_000,
+      instrumentCount: 50,
+      stalenessMs: 1_000,
+      isStale: false,
+    },
+    stream: {
+      state: 'connected',
+      reconnectCount: 0,
+      isStale: false,
+      stalenessMs: 1_000,
+      lastQuoteAt: Date.now() - 1_000,
+    },
+    recentEvents: [],
+    ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +136,48 @@ describe('HealthService', () => {
       const status = health.getHealth();
       expect(status.verdict).toBe(HealthVerdict.Unhealthy);
       expect(status.lifecycleState).toBe(LifecycleState.Stopped);
+    });
+
+    it('returns degraded when broker session is not authenticated', () => {
+      const { health, lifecycle } = createFixtures();
+      lifecycle.start();
+      health.setBrokerSupervisor({
+        isConfigured: true,
+        getBrokerHealth: () => makeBrokerHealth({
+          session: {
+            state: BrokerSessionState.Expired,
+            obtainedAt: Date.now() - 86_400_000,
+            expiresAt: Date.now() - 60_000,
+            reason: 'Broker session expired',
+            lastError: 'expired',
+            lastAuthCheckAt: Date.now(),
+          },
+        }),
+      });
+
+      const status = health.getHealth();
+      expect(status.verdict).toBe(HealthVerdict.Degraded);
+      expect(status.degradedReasons).toContain('Broker session is expired');
+    });
+
+    it('returns degraded when broker instruments are stale', () => {
+      const { health, lifecycle } = createFixtures();
+      lifecycle.start();
+      health.setBrokerSupervisor({
+        isConfigured: true,
+        getBrokerHealth: () => makeBrokerHealth({
+          instruments: {
+            lastSuccessAt: Date.now() - 3_600_000,
+            instrumentCount: 50,
+            stalenessMs: 3_600_000,
+            isStale: true,
+          },
+        }),
+      });
+
+      const status = health.getHealth();
+      expect(status.verdict).toBe(HealthVerdict.Degraded);
+      expect(status.degradedReasons).toContain('Broker instruments are stale');
     });
 
     it('accumulates multiple degradation reasons', () => {
