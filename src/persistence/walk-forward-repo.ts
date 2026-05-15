@@ -15,8 +15,13 @@ import {
   type WalkForwardRunWithWindows,
   type WalkForwardTrialWithWindows,
   type WalkForwardRankedCandidate,
+  type WalkForwardWinnerRow,
+  type NewWalkForwardWinner,
+  type WalkForwardWinnerWithContext,
   WalkForwardStatus,
   WalkForwardWindowStatus,
+  WalkForwardSelectionResult,
+  WalkForwardSelectionStrategy,
 } from '../replay/walk-forward-types.js';
 
 // ---------------------------------------------------------------------------
@@ -82,6 +87,33 @@ interface WalkForwardTrialWindowDbRow {
 
 interface CountRow {
   cnt: number;
+}
+
+interface WalkForwardWinnerDbRow {
+  id: number;
+  run_id: number;
+  result: string;
+  selected_trial_id: number | null;
+  selection_strategy: string;
+  selection_config_json: string;
+  rationale: string;
+  artifact_paths_json: string | null;
+  selected_at: number;
+  created_at: number;
+}
+
+interface WalkForwardWinnerWithRunDbRow extends WalkForwardWinnerDbRow {
+  run_label: string;
+  run_strategy_id: string;
+  run_strategy_version: string;
+  run_market_id: string;
+  run_replay_session_id: number | null;
+  run_window_count: number;
+  run_total_trials: number;
+  run_status: string;
+  run_created_at: number;
+  run_started_at: number | null;
+  run_completed_at: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +657,109 @@ export class WalkForwardRepository {
   }
 
   // -----------------------------------------------------------------------
+  // Winner-selection CRUD
+  // -----------------------------------------------------------------------
+
+  /**
+   * Persist a winner-selection decision for a walk-forward run.
+   *
+   * Only one winner row per run is permitted (UNIQUE constraint on run_id).
+   * When no trial met the selection criteria, set selectedTrialId to null
+   * and result to 'no_winner'.
+   *
+   * Returns the full row with auto-generated id and createdAt.
+   *
+   * @throws When a winner row for this run already exists.
+   */
+  insertWinner(winner: NewWalkForwardWinner): WalkForwardWinnerRow {
+    const result = this._db.prepare(`
+      INSERT INTO walk_forward_winners
+        (run_id, result, selected_trial_id, selection_strategy,
+         selection_config_json, rationale, artifact_paths_json,
+         selected_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      winner.runId,
+      winner.result,
+      winner.selectedTrialId,
+      winner.selectionStrategy,
+      winner.selectionConfigJson,
+      winner.rationale,
+      winner.artifactPathsJson,
+      winner.selectedAt,
+      winner.selectedAt, // created_at = selectedAt for selection rows
+    );
+
+    const id = Number(result.lastInsertRowid);
+    return this._getWinner(id)!;
+  }
+
+  /**
+   * Get a winner-selection row by its id. Returns null when it does not exist.
+   */
+  getWinner(id: number): WalkForwardWinnerRow | null {
+    return this._getWinner(id);
+  }
+
+  /**
+   * Get the winner-selection for a specific run, or null when no winner
+   * decision has been persisted for that run.
+   */
+  getWinnerForRun(runId: number): WalkForwardWinnerRow | null {
+    const row = this._db.prepare(`
+      SELECT id, run_id, result, selected_trial_id, selection_strategy,
+             selection_config_json, rationale, artifact_paths_json,
+             selected_at, created_at
+      FROM walk_forward_winners
+      WHERE run_id = ?
+    `).get(runId) as WalkForwardWinnerDbRow | undefined;
+
+    return row ? this._mapWinnerRow(row) : null;
+  }
+
+  /**
+   * Retrieve a winner with its full run context and (optionally) the selected
+   * trial with per-window evidence, plus the ranked candidate list at
+   * selection time.
+   *
+   * This is the primary read model for M006 promotion governance. When the
+   * winner result is 'no_winner', selectedTrial is null.
+   *
+   * Returns null when no winner decision exists for the given run.
+   */
+  getWinnerWithContext(runId: number): WalkForwardWinnerWithContext | null {
+    const winner = this.getWinnerForRun(runId);
+    if (!winner) return null;
+
+    const run = this.getRun(runId);
+    if (!run) throw new Error(`Run ${runId} exists in winners but not in walk_forward_runs`);
+
+    let selectedTrial: WalkForwardTrialWithWindows | null = null;
+    if (winner.selectedTrialId !== null) {
+      selectedTrial = this.getTrialWithWindows(winner.selectedTrialId);
+    }
+
+    const rankedCandidates = this.getRankedCandidates(runId);
+
+    return {
+      ...winner,
+      run,
+      selectedTrial,
+      rankedCandidates,
+    };
+  }
+
+  /**
+   * Count total winner-selection rows across all runs.
+   */
+  countWinners(): number {
+    const row = this._db.prepare(
+      'SELECT COUNT(*) AS cnt FROM walk_forward_winners',
+    ).get() as CountRow;
+    return row.cnt;
+  }
+
+  // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
 
@@ -724,6 +859,33 @@ export class WalkForwardRepository {
       tradeCount: row.trade_count,
       profitFactor: row.profit_factor,
       metricsJson: row.metrics_json,
+      createdAt: row.created_at,
+    };
+  }
+
+  private _getWinner(id: number): WalkForwardWinnerRow | null {
+    const row = this._db.prepare(`
+      SELECT id, run_id, result, selected_trial_id, selection_strategy,
+             selection_config_json, rationale, artifact_paths_json,
+             selected_at, created_at
+      FROM walk_forward_winners
+      WHERE id = ?
+    `).get(id) as WalkForwardWinnerDbRow | undefined;
+
+    return row ? this._mapWinnerRow(row) : null;
+  }
+
+  private _mapWinnerRow(row: WalkForwardWinnerDbRow): WalkForwardWinnerRow {
+    return {
+      id: row.id,
+      runId: row.run_id,
+      result: row.result as WalkForwardSelectionResult,
+      selectedTrialId: row.selected_trial_id,
+      selectionStrategy: row.selection_strategy as WalkForwardSelectionStrategy,
+      selectionConfigJson: row.selection_config_json,
+      rationale: row.rationale,
+      artifactPathsJson: row.artifact_paths_json,
+      selectedAt: row.selected_at,
       createdAt: row.created_at,
     };
   }

@@ -571,6 +571,24 @@ CREATE TABLE IF NOT EXISTS walk_forward_trial_windows (
 CREATE INDEX IF NOT EXISTS idx_wf_tw_trial ON walk_forward_trial_windows(trial_id);
 CREATE INDEX IF NOT EXISTS idx_wf_tw_window ON walk_forward_trial_windows(window_id);
 CREATE INDEX IF NOT EXISTS idx_wf_tw_trial_window ON walk_forward_trial_windows(trial_id, window_id);
+
+-- M005/S03: Walk-forward winners — persisted winner-selection decisions
+CREATE TABLE IF NOT EXISTS walk_forward_winners (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id                  INTEGER NOT NULL UNIQUE REFERENCES walk_forward_runs(id),
+  result                  TEXT    NOT NULL,
+  selected_trial_id       INTEGER REFERENCES walk_forward_trials(id),
+  selection_strategy      TEXT    NOT NULL,
+  selection_config_json   TEXT    NOT NULL DEFAULT '{}',
+  rationale               TEXT    NOT NULL DEFAULT '',
+  artifact_paths_json     TEXT,
+  selected_at             INTEGER NOT NULL,
+  created_at              INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_winners_run ON walk_forward_winners(run_id);
+CREATE INDEX IF NOT EXISTS idx_wf_winners_result ON walk_forward_winners(result);
+CREATE INDEX IF NOT EXISTS idx_wf_winners_trial ON walk_forward_winners(selected_trial_id);
 `;
 
 export class DatabaseManager {

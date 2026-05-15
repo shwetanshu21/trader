@@ -288,3 +288,110 @@ export interface WalkForwardRankedCandidate {
   /** Number of windows in which this trial was evaluated (evidence rows). */
   windowCount: number;
 }
+
+// ---------------------------------------------------------------------------
+// Winner-selection types — strategy, config, result, and artifact DTOs
+// ---------------------------------------------------------------------------
+
+/**
+ * Selection strategy for choosing a winner from ranked walk-forward trials.
+ *
+ * - `top_ranked`: Simple top-ranked trial by merged score (rank = 1).
+ * - `threshold`: Trial must pass a minimum score threshold to qualify.
+ * - `composite`: Multiple criteria (score, Sharpe, drawdown) combined.
+ */
+export enum WalkForwardSelectionStrategy {
+  TopRanked = 'top_ranked',
+  Threshold = 'threshold',
+  Composite = 'composite',
+}
+
+/**
+ * Configuration for winner selection.
+ *
+ * Carries the strategy identifier and any strategy-specific parameters
+ * needed to reproduce the selection decision.
+ */
+export interface WalkForwardSelectionConfig {
+  strategy: WalkForwardSelectionStrategy;
+  /** Minimum merged score to qualify (for Threshold and Composite strategies). */
+  minMergedScore?: number;
+  /** Minimum number of windows with evidence (for all strategies). */
+  minWindowCount?: number;
+  /** Minimum Sharpe ratio (for Composite strategy). */
+  minSharpeRatio?: number;
+  /** Maximum allowed drawdown percentage (for Composite strategy). */
+  maxDrawdown?: number;
+  /** Arbitrary extended config as JSON. */
+  configJson?: string;
+}
+
+/**
+ * Result of a winner-selection decision for a walk-forward run.
+ *
+ * - `selected`: A qualifying trial was chosen.
+ * - `no_winner`: No trial met the selection criteria (operator should HOLD).
+ * - `pending`: Selection has not been performed yet.
+ */
+export enum WalkForwardSelectionResult {
+  Selected = 'selected',
+  NoWinner = 'no_winner',
+  Pending = 'pending',
+}
+
+/**
+ * Persisted winner-selection row for a walk-forward run.
+ *
+ * One row per run (enforced by UNIQUE on run_id). When no trial qualified,
+ * selectedTrialId is null and the result is 'no_winner'.
+ */
+export interface WalkForwardWinnerRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → walk_forward_runs(id), unique. */
+  runId: number;
+  /** Selection result indicator. */
+  result: WalkForwardSelectionResult;
+  /** FK → walk_forward_trials(id), or null for no-winner outcomes. */
+  selectedTrialId: number | null;
+  /** Selection strategy used. */
+  selectionStrategy: WalkForwardSelectionStrategy;
+  /** Selection configuration snapshot as JSON. */
+  selectionConfigJson: string;
+  /** Human-readable rationale explaining why this winner (or no winner) was selected. */
+  rationale: string;
+  /** JSON array of artifact paths (e.g. trade log, metrics, window evidence). */
+  artifactPathsJson: string | null;
+  /** Unix timestamp (ms) when the selection was made. */
+  selectedAt: number;
+  /** Unix timestamp (ms) when this row was created. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new winner-selection row (without auto-generated fields). */
+export interface NewWalkForwardWinner {
+  runId: number;
+  result: WalkForwardSelectionResult;
+  selectedTrialId: number | null;
+  selectionStrategy: WalkForwardSelectionStrategy;
+  selectionConfigJson: string;
+  rationale: string;
+  artifactPathsJson: string | null;
+  selectedAt: number;
+}
+
+/**
+ * Expanded read model — winner with its linked run and selected trial context.
+ *
+ * Provides the full picture needed by downstream M006 promotion governance:
+ * the winner decision itself, the parent run configuration, the selected trial's
+ * scoring and params, and the ranked candidate list at selection time.
+ */
+export interface WalkForwardWinnerWithContext extends WalkForwardWinnerRow {
+  /** The parent walk-forward run. */
+  run: WalkForwardRunRow;
+  /** The selected trial with per-window evidence, or null for no-winner outcomes. */
+  selectedTrial: WalkForwardTrialWithWindows | null;
+  /** Ranked candidates at selection time (for forensic inspection). */
+  rankedCandidates: WalkForwardRankedCandidate[];
+}

@@ -17,6 +17,8 @@ import {
   WalkForwardStatus,
   WalkForwardWindowStatus,
   WalkForwardWindowType,
+  WalkForwardSelectionResult,
+  WalkForwardSelectionStrategy,
   type NewWalkForwardRun,
   type NewWalkForwardWindow,
   type NewWalkForwardTrial,
@@ -900,6 +902,330 @@ describe('WalkForwardRepository', () => {
     it('handles updateTrial for non-existent trial', () => {
       const { repo } = createRepo();
       expect(repo.updateTrial(999, { rank: 1 })).toBeNull();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Winner-selection CRUD
+  // -----------------------------------------------------------------------
+
+  describe('insertWinner / getWinner', () => {
+    it('inserts a winner row for a selected trial', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun());
+      const trial = repo.insertTrial(sampleTrial(run.id, 0, 0.95, 1));
+
+      const winner = repo.insertWinner({
+        runId: run.id,
+        result: WalkForwardSelectionResult.Selected,
+        selectedTrialId: trial.id,
+        selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+        selectionConfigJson: JSON.stringify({ strategy: 'top_ranked', minWindowCount: 1 }),
+        rationale: 'Top-ranked trial with merged score 0.95 across 3 windows and Sharpe > 2.0.',
+        artifactPathsJson: JSON.stringify([
+          'artifacts/trade-log-run-1.csv',
+          'artifacts/metrics-run-1.json',
+        ]),
+        selectedAt: NOW + 5000,
+      });
+
+      expect(winner.id).toBeGreaterThan(0);
+      expect(winner.runId).toBe(run.id);
+      expect(winner.result).toBe(WalkForwardSelectionResult.Selected);
+      expect(winner.selectedTrialId).toBe(trial.id);
+      expect(winner.selectionStrategy).toBe(WalkForwardSelectionStrategy.TopRanked);
+      expect(winner.rationale).toContain('Top-ranked trial');
+      expect(winner.artifactPathsJson).toContain('trade-log-run-1.csv');
+      expect(winner.selectedAt).toBe(NOW + 5000);
+      expect(winner.createdAt).toBe(winner.selectedAt);
+      expect(repo.countWinners()).toBe(1);
+    });
+
+    it('inserts a HOLD (no_winner) outcome with null trial', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun());
+
+      const winner = repo.insertWinner({
+        runId: run.id,
+        result: WalkForwardSelectionResult.NoWinner,
+        selectedTrialId: null,
+        selectionStrategy: WalkForwardSelectionStrategy.Threshold,
+        selectionConfigJson: JSON.stringify({
+          strategy: 'threshold',
+          minMergedScore: 0.8,
+          minWindowCount: 2,
+        }),
+        rationale: 'No trial exceeded merged score threshold of 0.8.',
+        artifactPathsJson: null,
+        selectedAt: NOW + 5000,
+      });
+
+      expect(winner.id).toBeGreaterThan(0);
+      expect(winner.result).toBe(WalkForwardSelectionResult.NoWinner);
+      expect(winner.selectedTrialId).toBeNull();
+      expect(winner.selectionStrategy).toBe(WalkForwardSelectionStrategy.Threshold);
+      expect(winner.artifactPathsJson).toBeNull();
+    });
+
+    it('reads back an inserted winner by id', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun());
+      const trial = repo.insertTrial(sampleTrial(run.id, 0, 0.95, 1));
+
+      const inserted = repo.insertWinner({
+        runId: run.id,
+        result: WalkForwardSelectionResult.Selected,
+        selectedTrialId: trial.id,
+        selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+        selectionConfigJson: '{}',
+        rationale: 'Best trial by merged score.',
+        artifactPathsJson: null,
+        selectedAt: NOW + 5000,
+      });
+
+      const loaded = repo.getWinner(inserted.id);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.id).toBe(inserted.id);
+      expect(loaded!.runId).toBe(run.id);
+      expect(loaded!.selectedTrialId).toBe(trial.id);
+    });
+
+    it('returns null for unknown winner id', () => {
+      const { repo } = createRepo();
+      expect(repo.getWinner(999)).toBeNull();
+    });
+
+    it('enforces UNIQUE constraint on run_id', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun());
+
+      repo.insertWinner({
+        runId: run.id,
+        result: WalkForwardSelectionResult.Selected,
+        selectedTrialId: null,
+        selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+        selectionConfigJson: '{}',
+        rationale: 'First selection.',
+        artifactPathsJson: null,
+        selectedAt: NOW,
+      });
+
+      expect(() => {
+        repo.insertWinner({
+          runId: run.id,
+          result: WalkForwardSelectionResult.Selected,
+          selectedTrialId: null,
+          selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+          selectionConfigJson: '{}',
+          rationale: 'Dupe.',
+          artifactPathsJson: null,
+          selectedAt: NOW,
+        });
+      }).toThrow();
+    });
+
+    it('enforces FK constraint on run_id', () => {
+      const { repo } = createRepo();
+      expect(() => {
+        repo.insertWinner({
+          runId: 999,
+          result: WalkForwardSelectionResult.Selected,
+          selectedTrialId: null,
+          selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+          selectionConfigJson: '{}',
+          rationale: 'Should fail.',
+          artifactPathsJson: null,
+          selectedAt: NOW,
+        });
+      }).toThrow();
+    });
+
+    it('enforces FK constraint on selected_trial_id', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun());
+
+      expect(() => {
+        repo.insertWinner({
+          runId: run.id,
+          result: WalkForwardSelectionResult.Selected,
+          selectedTrialId: 999,
+          selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+          selectionConfigJson: '{}',
+          rationale: 'Should fail.',
+          artifactPathsJson: null,
+          selectedAt: NOW,
+        });
+      }).toThrow();
+    });
+  });
+
+  describe('getWinnerForRun', () => {
+    it('returns null when no winner exists for the run', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun());
+      expect(repo.getWinnerForRun(run.id)).toBeNull();
+    });
+
+    it('returns the winner for a specific run', () => {
+      const { repo } = createRepo();
+      const r1 = repo.insertRun(sampleRun({ label: 'Run A' }));
+      const r2 = repo.insertRun(sampleRun({ label: 'Run B' }));
+
+      repo.insertWinner({
+        runId: r2.id,
+        result: WalkForwardSelectionResult.Selected,
+        selectedTrialId: null,
+        selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+        selectionConfigJson: '{}',
+        rationale: 'Winner for run B.',
+        artifactPathsJson: null,
+        selectedAt: NOW,
+      });
+
+      expect(repo.getWinnerForRun(r1.id)).toBeNull();
+      const w2 = repo.getWinnerForRun(r2.id);
+      expect(w2).not.toBeNull();
+      expect(w2!.runId).toBe(r2.id);
+      expect(w2!.rationale).toBe('Winner for run B.');
+    });
+  });
+
+  describe('getWinnerWithContext', () => {
+    it('returns null when no winner exists for the run', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun());
+      expect(repo.getWinnerWithContext(run.id)).toBeNull();
+    });
+
+    it('returns winner with run context and ranked candidates for a selected trial', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun({
+        label: 'Winner context test',
+        strategyId: 'test-strategy-v2',
+      }));
+      const w0 = repo.insertWindow(sampleWindow(run.id, 0));
+      const w1 = repo.insertWindow(sampleWindow(run.id, 1));
+
+      const t1 = repo.insertTrial(sampleTrial(run.id, 0, 0.92, 1, {
+        paramsJson: JSON.stringify({ momentum: 0.9, volatility: 0.1 }),
+      }));
+      const t2 = repo.insertTrial(sampleTrial(run.id, 1, 0.65, 2, {
+        paramsJson: JSON.stringify({ momentum: 0.5, volatility: 0.5 }),
+      }));
+
+      // t1 has evidence for both windows
+      repo.linkTrialToWindow(sampleTrialWindow(t1.id, w0.id, WalkForwardWindowType.InSample));
+      repo.linkTrialToWindow(sampleTrialWindow(t1.id, w1.id, WalkForwardWindowType.OutOfSample, {
+        totalReturn: 14.5,
+      }));
+      // t2 has evidence for one window
+      repo.linkTrialToWindow(sampleTrialWindow(t2.id, w0.id, WalkForwardWindowType.InSample, {
+        totalReturn: 8.2,
+      }));
+
+      repo.insertWinner({
+        runId: run.id,
+        result: WalkForwardSelectionResult.Selected,
+        selectedTrialId: t1.id,
+        selectionStrategy: WalkForwardSelectionStrategy.Composite,
+        selectionConfigJson: JSON.stringify({
+          strategy: 'composite',
+          minMergedScore: 0.7,
+          minSharpeRatio: 1.5,
+          maxDrawdown: -15,
+        }),
+        rationale: 'Config A dominates on merged score (0.92) with 2 windows of evidence.',
+        artifactPathsJson: JSON.stringify([
+          'artifacts/trade-log.json',
+          'artifacts/metrics.json',
+        ]),
+        selectedAt: NOW + 5000,
+      });
+
+      const ctx = repo.getWinnerWithContext(run.id);
+      expect(ctx).not.toBeNull();
+      expect(ctx!.runId).toBe(run.id);
+      expect(ctx!.result).toBe(WalkForwardSelectionResult.Selected);
+      expect(ctx!.selectionStrategy).toBe(WalkForwardSelectionStrategy.Composite);
+      expect(ctx!.rationale).toContain('Config A');
+
+      // Run context
+      expect(ctx!.run.label).toBe('Winner context test');
+      expect(ctx!.run.strategyId).toBe('test-strategy-v2');
+
+      // Selected trial with evidence
+      expect(ctx!.selectedTrial).not.toBeNull();
+      expect(ctx!.selectedTrial!.id).toBe(t1.id);
+      expect(ctx!.selectedTrial!.mergedScore).toBe(0.92);
+      expect(ctx!.selectedTrial!.windowEvidence.length).toBe(2);
+
+      // Ranked candidates
+      expect(ctx!.rankedCandidates.length).toBe(2);
+      expect(ctx!.rankedCandidates[0].trialId).toBe(t1.id);
+      expect(ctx!.rankedCandidates[0].windowCount).toBe(2);
+      expect(ctx!.rankedCandidates[1].trialId).toBe(t2.id);
+      expect(ctx!.rankedCandidates[1].windowCount).toBe(1);
+    });
+
+    it('returns winner with null selectedTrial for no_winner outcome', () => {
+      const { repo } = createRepo();
+      const run = repo.insertRun(sampleRun({ label: 'HOLD run' }));
+
+      repo.insertWinner({
+        runId: run.id,
+        result: WalkForwardSelectionResult.NoWinner,
+        selectedTrialId: null,
+        selectionStrategy: WalkForwardSelectionStrategy.Threshold,
+        selectionConfigJson: JSON.stringify({ strategy: 'threshold', minMergedScore: 0.85 }),
+        rationale: 'No trial passed the 0.85 merged score threshold.',
+        artifactPathsJson: null,
+        selectedAt: NOW + 5000,
+      });
+
+      const ctx = repo.getWinnerWithContext(run.id);
+      expect(ctx).not.toBeNull();
+      expect(ctx!.result).toBe(WalkForwardSelectionResult.NoWinner);
+      expect(ctx!.selectedTrialId).toBeNull();
+      expect(ctx!.selectedTrial).toBeNull();
+      expect(ctx!.run.label).toBe('HOLD run');
+      expect(ctx!.rankedCandidates).toEqual([]);
+    });
+  });
+
+  describe('countWinners', () => {
+    it('starts at zero', () => {
+      const { repo } = createRepo();
+      expect(repo.countWinners()).toBe(0);
+    });
+
+    it('counts across runs', () => {
+      const { repo } = createRepo();
+      const r1 = repo.insertRun(sampleRun({ label: 'Run A' }));
+      const r2 = repo.insertRun(sampleRun({ label: 'Run B' }));
+
+      repo.insertWinner({
+        runId: r1.id,
+        result: WalkForwardSelectionResult.Selected,
+        selectedTrialId: null,
+        selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+        selectionConfigJson: '{}',
+        rationale: 'Winner 1.',
+        artifactPathsJson: null,
+        selectedAt: NOW,
+      });
+
+      repo.insertWinner({
+        runId: r2.id,
+        result: WalkForwardSelectionResult.NoWinner,
+        selectedTrialId: null,
+        selectionStrategy: WalkForwardSelectionStrategy.Threshold,
+        selectionConfigJson: '{}',
+        rationale: 'No winner.',
+        artifactPathsJson: null,
+        selectedAt: NOW,
+      });
+
+      expect(repo.countWinners()).toBe(2);
     });
   });
 });
