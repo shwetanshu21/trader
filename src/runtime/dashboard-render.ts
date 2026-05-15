@@ -139,11 +139,20 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
       </tr>`).join('');
 
   const strategyRows = recentStrategyDecisions.length === 0
-    ? '<tr><td colspan="6" class="muted">No strategy decisions recorded</td></tr>'
+    ? '<tr><td colspan="8" class="muted">No strategy decisions recorded</td></tr>'
     : recentStrategyDecisions.map(d => {
       const reasons = d.reasons.length > 0
         ? `<div class="reasons">${d.reasons.map(r => `<span class="reason">${escapeHtml(r)}</span>`).join('')}</div>`
         : '';
+      const hybridCell = d.hybrid
+        ? `<div class="hybrid-block">
+            <span class="score">D:${(d.hybrid.deterministicScore * 100).toFixed(0)}%</span>
+            <span class="score">M:${(d.hybrid.mergedScore * 100).toFixed(0)}%</span>
+            ${d.hybrid.llmScore != null ? `<span class="score llm">L:${(d.hybrid.llmScore * 100).toFixed(0)}%</span>` : `<span class="score muted">L:—</span>`}
+            ${d.hybrid.isDowngraded ? `<span class="downgrade-badge" title="${escapeHtml(d.hybrid.downgradeContext ?? '')}">▼ downgraded</span>` : ''}
+            ${d.hybrid.downgradeContext && !d.hybrid.isDowngraded ? `<span class="hybrid-note">${escapeHtml(d.hybrid.downgradeContext)}</span>` : ''}
+          </div>`
+        : '<span class="muted">—</span>';
       return `<tr>
         <td>${escapeHtml(d.exchange)}</td>
         <td>${escapeHtml(d.tradingsymbol)}</td>
@@ -151,6 +160,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         <td class="status-${d.decisionStatus}">${escapeHtml(d.decisionStatus)}</td>
         <td>${d.notional != null ? d.notional.toFixed(0) : '—'}</td>
         <td>${reasons}</td>
+        <td>${hybridCell}</td>
       </tr>`;
     }).join('');
 
@@ -337,6 +347,11 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
   .status-refused { color: #f87171; }
   .status-skipped { color: #94a3b8; }
   .status-pending { color: #fbbf24; }
+  .hybrid-block { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+  .score { display: inline-block; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.75rem; background: #1e3a5f; color: #93c5fd; font-variant-numeric: tabular-nums; }
+  .score.llm { background: #3b1f5e; color: #c4b5fd; }
+  .downgrade-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.7rem; background: #7f1d1d; color: #fca5a5; cursor: help; }
+  .hybrid-note { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.7rem; background: #1e3a5f; color: #93c5fd; }
   code { background: #0f172a; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.8rem; }
   ul { list-style: none; padding: 0; }
   li { margin: 0.25rem 0; }
@@ -411,7 +426,7 @@ ${universeSection}
 <div class="section">
   <h2>Strategy Decisions (${recentStrategyDecisions.length})</h2>
   <table>
-    <thead><tr><td>Exchange</td><td>Symbol</td><td>Side</td><td>Status</td><td>Notional</td><td>Reasons</td></tr></thead>
+    <thead><tr><td>Exchange</td><td>Symbol</td><td>Side</td><td>Status</td><td>Notional</td><td>Reasons</td><td>Hybrid</td></tr></thead>
     <tbody>${strategyRows}</tbody>
   </table>
 </div>

@@ -408,33 +408,44 @@ describe('S04 Runtime — Execution gate composition', () => {
     });
 
     it('consumes multiple approved proposals from the same tick', async () => {
-      const { supervisor, executionGate, attemptRepo, strategyDecisionRepo, proposalRepo, clock } =
+      const { supervisor, executionGate, attemptRepo, strategyDecisionRepo, proposalRepo, clock, instruments, stream } =
         createTestContext();
       clock.setPhase(MarketPhase.Regular);
 
-      mockFetchJson({
-        proposals: [
-          {
-            exchange: 'NSE',
-            tradingsymbol: 'RELIANCE',
-            side: 'buy',
-            product: 'MIS',
-            quantity: 1,
-            price: null,
-            triggerPrice: null,
-            orderType: 'MARKET',
-          },
-          {
-            exchange: 'NSE',
-            tradingsymbol: 'RELIANCE',
-            side: 'sell',
-            product: 'CNC',
-            quantity: 5,
-            price: 3000.00,
-            triggerPrice: null,
-            orderType: 'LIMIT',
-          },
-        ],
+      // Add a second instrument so the deterministic plugin produces 2 proposals
+      instruments.setInstruments('NSE', [
+        ...instruments.getInstrumentsBySegment('NSE'),
+        {
+          exchange: 'NSE',
+          tradingsymbol: 'TCS',
+          instrumentToken: 999999,
+          name: 'TCS LTD',
+          expiry: null,
+          strike: null,
+          lotSize: 1,
+          tickSize: 0.05,
+          instrumentType: 'EQ',
+          segment: 'NSE',
+          exchangeToken: 9999,
+        },
+      ]);
+      stream.setQuote('NSE:TCS', {
+        exchange: 'NSE',
+        tradingsymbol: 'TCS',
+        instrumentToken: 999999,
+        lastPrice: 3900.00,
+        change: 10.00,
+        changePercent: 0.26,
+        volume: 500_000,
+        oi: null,
+        high: 3910.00,
+        low: 3880.00,
+        open: 3890.00,
+        close: 3890.00,
+        bid: 3899.50,
+        ask: 3900.50,
+        priceTimestamp: Math.floor(Date.now() / 1000),
+        receivedAt: Date.now(),
       });
 
       await supervisor.doWork(new Date(), minimalHealth());

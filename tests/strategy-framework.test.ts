@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   type BoundedCandidate,
   type RankedCandidate,
@@ -6,11 +6,16 @@ import {
   type StrategyPluginIdentity,
   type StrategyFrameworkConfig,
   type CoordinatorResult,
+  LLMStatus,
+  MergePolicy,
+  type HybridCoordinatorResult,
+  type HybridCandidateEvidence,
 } from '../src/types/runtime.js';
 import {
   StrategyCoordinator,
   DEFAULT_FRAMEWORK_CONFIG,
 } from '../src/strategy/framework.js';
+import type { LlmEvaluationResult } from '../src/strategy/llm-ranking-strategy.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -60,6 +65,35 @@ function makeAlphaCandidate(
   return makeCandidate({ tradingsymbol, ...overrides });
 }
 
+/** Create an async-capable mock plugin that mimics LlmRankingStrategy. */
+function makeAsyncPlugin(
+  id: string,
+  name: string,
+  version: string,
+  scorer: (c: BoundedCandidate) => number = () => 0.5,
+  asyncResult?: LlmEvaluationResult,
+): StrategyPlugin & { evaluateAsync: (candidates: BoundedCandidate[]) => Promise<LlmEvaluationResult> } {
+  return {
+    identity: { id, name, version },
+    evaluate(candidates: BoundedCandidate[]): RankedCandidate[] {
+      return candidates.map(c => ({
+        candidate: c,
+        plugin: { id, name, version },
+        score: scorer(c),
+        rationale: 'Sync deterministic score',
+      }));
+    },
+    async evaluateAsync(_candidates: BoundedCandidate[]): Promise<LlmEvaluationResult> {
+      return asyncResult ?? {
+        rankings: [],
+        llmStatus: LLMStatus.Skipped,
+        llmScore: null,
+        llmRationale: null,
+      };
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Plugin contract sanity
 // ---------------------------------------------------------------------------
@@ -99,40 +133,86 @@ describe('StrategyPlugin contract', () => {
 });
 
 // ---------------------------------------------------------------------------
-// StrategyCoordinator — deterministic ordering
+// StrategyCoordinator — grouped hybrid evidence
 // ---------------------------------------------------------------------------
 
-describe('StrategyCoordinator — ordering', () => {
-  it('orders by score descending', async () => {
-    const highScorer = makePlugin(
-      'high-v1', 'High Scorer', '1.0.0',
-      c => (c.tradingsymbol === 'TCS' ? 0.9 : 0.1),
-    );
-    const coordinator = new StrategyCoordinator([highScorer], { maxCandidates: 5 });
+describe('StrategyCoordinator — grouped hybrid evidence', () => {
+  it('returns one HybridCandidateEvidence per candidate when single plugin used', async () => {
+    const plugin = makePlugin('test-v1', 'Test', '1.0.0', () => 0.5);
+    const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 5 });
+
     const candidates = [
-      makeAlphaCandidate('RELIANCE'),
       makeAlphaCandidate('TCS'),
+      makeAlphaCandidate('INFY'),
     ];
 
     const result = await coordinator.evaluate(candidates);
-    expect(result.candidates[0].candidate.tradingsymbol).toBe('TCS');
-    expect(result.candidates[1].candidate.tradingsymbol).toBe('RELIANCE');
+    expect(result.candidates).toHaveLength(2);
+    // Both have same score (0.5), same plugin → sort by exchange then symbol alphabetically
+    // INFY < TCS alphabetically
+    expect(result.candidates[0].candidate.tradingsymbol).toBe('INFY');
+    expect(result.candidates[1].candidate.tradingsymbol).toBe('TCS');
+    expect(result.candidates[0].candidateKey).toBe('NSE:INFY');
+    expect(result.candidates[1].candidateKey).toBe('NSE:TCS');
   });
 
-  it('breaks ties by plugin insertion order', async () => {
-    const pluginA = makePlugin('a-v1', 'A', '1.0.0', () => 1.0);
-    const pluginB = makePlugin('b-v1', 'B', '1.0.0', () => 1.0);
+  it('groups same candidate from multiple plugins into one evidence record', async () => {
+    const pluginA = makePlugin('a-v1', 'A', '1.0.0', () => 0.6);
+    const pluginB = makePlugin('b-v1', 'B', '1.0.0', () => 0.9);
     const coordinator = new StrategyCoordinator([pluginA, pluginB], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+
+    const result = await coordinator.evaluate(candidates);
+    // 1 candidate, 2 plugins → 1 grouped evidence record with 2 plugin scores
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].pluginScores).toHaveLength(2);
+    expect(result.candidates[0].pluginScores[0].plugin.id).toBe('a-v1');
+    expect(result.candidates[0].pluginScores[1].plugin.id).toBe('b-v1');
+    // deterministicScore = average of (0.6, 0.9) = 0.75
+    expect(result.candidates[0].deterministicScore).toBe(0.75);
+  });
+
+  it('deterministicScore is average of all plugin scores per candidate', async () => {
+    const pluginA = makePlugin('a-v1', 'A', '1.0.0', c =>
+      c.tradingsymbol === 'TCS' ? 0.9 : 0.1,
+    );
+    const pluginB = makePlugin('b-v1', 'B', '1.0.0', c =>
+      c.tradingsymbol === 'INFY' ? 0.8 : 0.2,
+    );
+    const coordinator = new StrategyCoordinator([pluginA, pluginB], { maxCandidates: 10 });
+
+    const candidates = [
+      makeAlphaCandidate('TCS'),
+      makeAlphaCandidate('INFY'),
+    ];
+
+    const result = await coordinator.evaluate(candidates);
+
+    // TCS: pluginA=0.9, pluginB=0.2 → det=0.55
+    const tcs = result.candidates.find(c => c.candidate.tradingsymbol === 'TCS')!;
+    expect(tcs.deterministicScore).toBeCloseTo((0.9 + 0.2) / 2, 5);
+
+    // INFY: pluginA=0.1, pluginB=0.8 → det=0.45
+    const infy = result.candidates.find(c => c.candidate.tradingsymbol === 'INFY')!;
+    expect(infy.deterministicScore).toBeCloseTo((0.1 + 0.8) / 2, 5);
+  });
+
+  it('mergedScore equals deterministicScore when no LLM plugin (DeterministicOnly)', async () => {
+    const plugin = makePlugin('det-v1', 'Deterministic', '1.0.0', () => 0.7);
+    const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 5 });
 
     const candidates = [makeAlphaCandidate('TCS')];
     const result = await coordinator.evaluate(candidates);
 
-    // Same candidate from both plugins — A first in insertion order
-    expect(result.candidates[0].plugin.id).toBe('a-v1');
-    expect(result.candidates[1].plugin.id).toBe('b-v1');
+    expect(result.candidates[0].deterministicScore).toBe(0.7);
+    expect(result.candidates[0].mergedScore).toBe(0.7);
+    expect(result.candidates[0].mergePolicy).toBe(MergePolicy.DeterministicOnly);
+    expect(result.candidates[0].llmStatus).toBe(LLMStatus.Skipped);
+    expect(result.candidates[0].llmScore).toBeNull();
   });
 
-  it('breaks ties by exchange then tradingsymbol alphabetically', async () => {
+  it('produces deterministic ordering by mergedScore then exchange then symbol', async () => {
     const plugin = makePlugin('test-v1', 'Test', '1.0.0', () => 1.0);
     const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 10 });
 
@@ -145,41 +225,143 @@ describe('StrategyCoordinator — ordering', () => {
 
     const result = await coordinator.evaluate(candidates);
 
-    // All same score (1.0), same plugin — sort by exchange then symbol
-    // BSE TCS, NSE INFY, NSE TCS, NSE ZOMATO
+    // All same mergedScore (1.0), same plugin → sort by exchange then symbol
     expect(result.candidates[0].candidate.exchange).toBe('BSE');
     expect(result.candidates[0].candidate.tradingsymbol).toBe('TCS');
-    expect(result.candidates[1].candidate.exchange).toBe('NSE');
     expect(result.candidates[1].candidate.tradingsymbol).toBe('INFY');
     expect(result.candidates[2].candidate.tradingsymbol).toBe('TCS');
     expect(result.candidates[3].candidate.tradingsymbol).toBe('ZOMATO');
   });
 
-  it('produces deterministic order given same inputs', async () => {
-    const plugin = makePlugin('det-v1', 'Deterministic', '1.0.0', c =>
-      c.tradingsymbol === 'AAPL' ? 0.8 : 0.5,
+  it('preserves each plugin score evidence with identity and rationale', async () => {
+    const plugin = makePlugin(
+      'momentum-v1', 'Momentum', '1.0.0',
+      c => c.tradingsymbol === 'TCS' ? 0.9 : 0.3,
+      c => `Momentum score for ${c.tradingsymbol}`,
     );
     const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 5 });
-    const candidates = [
-      makeAlphaCandidate('INFY'),
-      makeAlphaCandidate('TCS'),
-      makeAlphaCandidate('RELIANCE'),
-      makeAlphaCandidate('HDFC'),
-      makeAlphaCandidate('AAPL'),
-    ];
 
-    const result1 = await coordinator.evaluate(candidates);
-    const result2 = await coordinator.evaluate(candidates);
+    const candidates = [makeAlphaCandidate('TCS')];
+    const result = await coordinator.evaluate(candidates);
 
-    // Same length
-    expect(result1.candidates).toHaveLength(result2.candidates.length);
-    // Same order
-    for (let i = 0; i < result1.candidates.length; i++) {
-      expect(result1.candidates[i].candidate.tradingsymbol)
-        .toBe(result2.candidates[i].candidate.tradingsymbol);
-      expect(result1.candidates[i].score)
-        .toBe(result2.candidates[i].score);
-    }
+    expect(result.candidates[0].pluginScores).toHaveLength(1);
+    expect(result.candidates[0].pluginScores[0].plugin.id).toBe('momentum-v1');
+    expect(result.candidates[0].pluginScores[0].score).toBe(0.9);
+    expect(result.candidates[0].pluginScores[0].rationale).toBe('Momentum score for TCS');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// StrategyCoordinator — with async (LLM) plugin
+// ---------------------------------------------------------------------------
+
+describe('StrategyCoordinator — with async LLM plugin', () => {
+  it('includes LLM evidence in merged score when LLM is consulted', async () => {
+    const detPlugin = makePlugin('det-v1', 'Deterministic', '1.0.0', () => 0.6);
+    const llmPlugin = makeAsyncPlugin(
+      'llm-ranking-v1', 'LLM Ranking', '1.0.0',
+      () => 0.5,
+      {
+        rankings: [
+          { candidate: makeAlphaCandidate('TCS'), plugin: { id: 'llm-ranking-v1', name: 'LLM Ranking', version: '1.0.0' }, score: 0.8, rationale: 'LLM pick' },
+        ],
+        llmStatus: LLMStatus.Consulted,
+        llmScore: 0.8,
+        llmRationale: 'LLM ranked 1 of 1 candidates',
+      },
+    );
+    const coordinator = new StrategyCoordinator([detPlugin, llmPlugin], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const result = await coordinator.evaluate(candidates);
+
+    expect(result.candidates).toHaveLength(1);
+    // deterministicScore = 0.6 (from det-v1 only, llm scores aren't counted in deterministic)
+    expect(result.candidates[0].deterministicScore).toBe(0.6);
+    // llmScore = 0.8
+    expect(result.candidates[0].llmScore).toBe(0.8);
+    expect(result.candidates[0].llmStatus).toBe(LLMStatus.Consulted);
+    // mergedScore = (0.6 + 0.8) / 2 = 0.7 (Average merge)
+    expect(result.candidates[0].mergedScore).toBeCloseTo(0.7, 5);
+    expect(result.candidates[0].mergePolicy).toBe(MergePolicy.Average);
+  });
+
+  it('uses DeterministicOnly merge when LLM returns Error status', async () => {
+    const detPlugin = makePlugin('det-v1', 'Deterministic', '1.0.0', () => 0.6);
+    const llmPlugin = makeAsyncPlugin(
+      'llm-ranking-v1', 'LLM Ranking', '1.0.0',
+      () => 0.5,
+      {
+        rankings: [
+          { candidate: makeAlphaCandidate('TCS'), plugin: { id: 'llm-ranking-v1', name: 'LLM Ranking', version: '1.0.0' }, score: 0.5, rationale: 'Fallback' },
+        ],
+        llmStatus: LLMStatus.Error,
+        llmScore: null,
+        llmRationale: 'LLM provider error: timeout',
+      },
+    );
+    const coordinator = new StrategyCoordinator([detPlugin, llmPlugin], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const result = await coordinator.evaluate(candidates);
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].llmStatus).toBe(LLMStatus.Error);
+    expect(result.candidates[0].llmScore).toBeNull();
+    // mergedScore = deterministicScore = 0.6
+    expect(result.candidates[0].mergedScore).toBe(0.6);
+    expect(result.candidates[0].mergePolicy).toBe(MergePolicy.DeterministicOnly);
+  });
+
+  it('uses DeterministicOnly merge when LLM returns Degraded status', async () => {
+    const detPlugin = makePlugin('det-v1', 'Deterministic', '1.0.0', () => 0.6);
+    const llmPlugin = makeAsyncPlugin(
+      'llm-ranking-v1', 'LLM Ranking', '1.0.0',
+      () => 0.5,
+      {
+        rankings: [],
+        llmStatus: LLMStatus.Degraded,
+        llmScore: null,
+        llmRationale: 'LLM returned empty rankings',
+      },
+    );
+    const coordinator = new StrategyCoordinator([detPlugin, llmPlugin], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const result = await coordinator.evaluate(candidates);
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].llmStatus).toBe(LLMStatus.Degraded);
+    expect(result.candidates[0].llmScore).toBeNull();
+    expect(result.candidates[0].mergedScore).toBe(0.6);
+    expect(result.candidates[0].mergePolicy).toBe(MergePolicy.DeterministicOnly);
+  });
+
+  it('includes LLM plugin score evidence alongside deterministic scores', async () => {
+    const detPlugin = makePlugin('det-v1', 'Deterministic', '1.0.0', () => 0.6);
+    const llmPlugin = makeAsyncPlugin(
+      'llm-ranking-v1', 'LLM Ranking', '1.0.0',
+      () => 0.5,
+      {
+        rankings: [
+          { candidate: makeAlphaCandidate('TCS'), plugin: { id: 'llm-ranking-v1', name: 'LLM Ranking', version: '1.0.0' }, score: 0.8, rationale: 'LLM pick' },
+        ],
+        llmStatus: LLMStatus.Consulted,
+        llmScore: 0.8,
+        llmRationale: 'LLM ranked 1 of 1',
+      },
+    );
+    const coordinator = new StrategyCoordinator([detPlugin, llmPlugin], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const result = await coordinator.evaluate(candidates);
+
+    // pluginScores should include both deterministic and LLM evidence
+    expect(result.candidates[0].pluginScores).toHaveLength(2);
+    const detScore = result.candidates[0].pluginScores.find(p => p.plugin.id === 'det-v1')!;
+    expect(detScore.score).toBe(0.6);
+    const llmScore = result.candidates[0].pluginScores.find(p => p.plugin.id === 'llm-ranking-v1')!;
+    expect(llmScore.score).toBe(0.8);
   });
 });
 
@@ -281,7 +463,7 @@ describe('StrategyCoordinator — empty / refusal', () => {
     expect(result.hasPluginErrors).toBe(true);
     expect(result.pluginErrors['bad-v1']).toBe('Something went wrong');
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0].plugin.id).toBe('good-v1');
+    expect(result.candidates[0].pluginScores[0].plugin.id).toBe('good-v1');
   });
 
   it('aggregates synchronous plugin errors', async () => {
@@ -317,8 +499,8 @@ describe('StrategyCoordinator — empty / refusal', () => {
     expect(result.hasPluginErrors).toBe(true);
     expect(result.pluginErrors['bad-v1']).toBe('fail');
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0].plugin.id).toBe('good-v1');
-    expect(result.candidates[0].score).toBe(0.9);
+    expect(result.candidates[0].pluginScores[0].plugin.id).toBe('good-v1');
+    expect(result.candidates[0].pluginScores[0].score).toBe(0.9);
   });
 });
 
@@ -374,7 +556,7 @@ describe('StrategyCoordinator — metadata', () => {
 // ---------------------------------------------------------------------------
 
 describe('StrategyCoordinator — multi-plugin', () => {
-  it('aggregates ranked candidates from multiple plugins', async () => {
+  it('aggregates ranked candidates from multiple plugins into grouped evidence', async () => {
     const pluginA = makePlugin(
       'a-v1', 'A', '1.0.0',
       c => (c.tradingsymbol === 'TCS' ? 0.9 : 0.1),
@@ -393,31 +575,29 @@ describe('StrategyCoordinator — multi-plugin', () => {
 
     const result = await coordinator.evaluate(candidates);
 
-    // Each plugin produces result for each candidate → 6 total
-    // Score ordering: TCS (A:0.9) > INFY (B:0.8) > RELIANCE (A:0.1) > INFY (A:0.1) > RELIANCE (B:0.2) > TCS (B:0.1)... no wait
-    // A: TCS=0.9, INFY=0.1, RELIANCE=0.1
-    // B: TCS=0.2, INFY=0.8, RELIANCE=0.2
-    // Sorted: TCS/A(0.9), INFY/B(0.8), TCS/B(0.2), INFY/A(0.1), RELIANCE/A(0.1), RELIANCE/B(0.2)
-    // Wait, 0.2 > 0.1 so: TCS/A(0.9), INFY/B(0.8), TCS/B(0.2), RELIANCE/B(0.2), INFY/A(0.1), RELIANCE/A(0.1)
-    // TCS/B(0.2) and RELIANCE/B(0.2): same plugin, score → exchange (both NSE) → symbol alphabetical: RELIANCE < TCS
-    // Actually: RELIANCE < TCS alphabetically. So: TCS/B(0.2) first, then RELIANCE/B(0.2)? No, RELIANCE < TCS so RELIANCE comes first.
-    // But B scored both at 0.2. So within same plugin + score: sort by exchange then symbol.
-    // Both NSE. RELIANCE (R) vs TCS (T): R < T. So RELIANCE/B(0.2) before TCS/B(0.2).
-    // So: TCS/A(0.9), INFY/B(0.8), RELIANCE/B(0.2), TCS/B(0.2), INFY/A(0.1), RELIANCE/A(0.1)
-    expect(result.candidates).toHaveLength(6);
-    expect(result.candidates[0].candidate.tradingsymbol).toBe('TCS');
-    expect(result.candidates[0].plugin.id).toBe('a-v1');
-    expect(result.candidates[0].score).toBe(0.9);
+    // 3 candidates, 2 plugins → 3 grouped evidence records (one per candidate)
+    expect(result.candidates).toHaveLength(3);
 
-    expect(result.candidates[1].candidate.tradingsymbol).toBe('INFY');
-    expect(result.candidates[1].plugin.id).toBe('b-v1');
-    expect(result.candidates[1].score).toBe(0.8);
+    // TCS: A=0.9, B=0.2 → det=0.55
+    const tcs = result.candidates.find(c => c.candidate.tradingsymbol === 'TCS')!;
+    expect(tcs.deterministicScore).toBeCloseTo(0.55, 5);
+    expect(tcs.pluginScores).toHaveLength(2);
+
+    // INFY: A=0.1, B=0.8 → det=0.45
+    const infy = result.candidates.find(c => c.candidate.tradingsymbol === 'INFY')!;
+    expect(infy.deterministicScore).toBeCloseTo(0.45, 5);
+    expect(infy.pluginScores).toHaveLength(2);
+
+    // RELIANCE: A=0.1, B=0.2 → det=0.15
+    const rel = result.candidates.find(c => c.candidate.tradingsymbol === 'RELIANCE')!;
+    expect(rel.deterministicScore).toBeCloseTo(0.15, 5);
+    expect(rel.pluginScores).toHaveLength(2);
   });
 
-  it('capped at maxCandidates across all plugins', async () => {
+  it('capped at maxCandidates across all grouped evidence', async () => {
     const pluginA = makePlugin('a-v1', 'A', '1.0.0', () => 0.8);
     const pluginB = makePlugin('b-v1', 'B', '1.0.0', () => 0.9);
-    const coordinator = new StrategyCoordinator([pluginA, pluginB], { maxCandidates: 2 });
+    const coordinator = new StrategyCoordinator([pluginA, pluginB], { maxCandidates: 1 });
 
     const candidates = [
       makeAlphaCandidate('TCS'),
@@ -426,13 +606,8 @@ describe('StrategyCoordinator — multi-plugin', () => {
 
     const result = await coordinator.evaluate(candidates);
 
-    // 4 total (2 plugins × 2 candidates), capped to 2
-    // B scores higher (0.9) so B's candidates come first
-    // Within B: B/INFY(0.9), B/TCS(0.9) — tie → plugin same → exchange both NSE → symbol alphabetical: INFY, TCS
-    // So: B/INFY(0.9), B/TCS(0.9) — capped at 2
-    expect(result.candidates).toHaveLength(2);
-    expect(result.candidates[0].plugin.id).toBe('b-v1');
-    expect(result.candidates[1].plugin.id).toBe('b-v1');
+    // 2 candidates, 2 plugins → 2 grouped evidence records, capped to 1
+    expect(result.candidates).toHaveLength(1);
   });
 });
 
@@ -472,5 +647,36 @@ describe('StrategyCoordinator — config', () => {
     // Mutate the returned copy
     (config as StrategyFrameworkConfig).maxCandidates = 99;
     expect(coordinator.config.maxCandidates).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// StrategyCoordinator — evaluateLegacy backward compat
+// ---------------------------------------------------------------------------
+
+describe('StrategyCoordinator — evaluateLegacy backward compat', () => {
+  it('returns flat ranked candidates from hybrid result', async () => {
+    const pluginA = makePlugin('a-v1', 'A', '1.0.0', () => 0.6);
+    const pluginB = makePlugin('b-v1', 'B', '1.0.0', () => 0.9);
+    const coordinator = new StrategyCoordinator([pluginA, pluginB], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const result = await coordinator.evaluateLegacy(candidates);
+
+    // Should be CoordinatorResult (old shape)
+    expect(result.candidates).toHaveLength(2); // 2 plugin scores → 2 flat candidates
+    expect(result.candidates[0].plugin.id).toBe('a-v1');
+    expect(result.candidates[1].plugin.id).toBe('b-v1');
+    expect(result.plugins).toHaveLength(2);
+    expect(result.totalEvaluated).toBe(1);
+  });
+
+  it('returns empty result with no plugins', async () => {
+    const coordinator = new StrategyCoordinator([]);
+    const result = await coordinator.evaluateLegacy([makeCandidate()]);
+
+    expect(result.candidates).toEqual([]);
+    expect(result.plugins).toEqual([]);
+    expect(result.totalEvaluated).toBe(0);
   });
 });

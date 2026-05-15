@@ -21,6 +21,7 @@ import { PaperOrderRepository } from '../src/persistence/paper-order-repo.js';
 import { PaperFillRepository } from '../src/persistence/paper-fill-repo.js';
 import { PaperPositionRepository } from '../src/persistence/paper-position-repo.js';
 import { ExecutionRiskRepository } from '../src/persistence/execution-risk-repo.js';
+import { HybridScoreRepository } from '../src/persistence/hybrid-score-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -37,6 +38,8 @@ import {
   ExecutionOutcomeCode,
   BlockCode,
   UniverseCoverageVerdict,
+  LLMStatus,
+  MergePolicy,
   type DashboardSnapshot,
 } from '../src/types/runtime.js';
 
@@ -420,6 +423,77 @@ function seedStrategyDecision(
         { reasonCode: 'below_minimum_notional' as any, reasonMessage: 'Notional below minimum 10,000 INR' },
       ]
       : [],
+  );
+}
+
+/** Create a fully wired server + dashboard with hybrid score repository. */
+function createServerAndDashboardWithHybrid() {
+  const db = new DatabaseManager(':memory:');
+  const runtimeStateRepo = new RuntimeStateRepository(db.db);
+  const zerodhaRepo = new ZerodhaRepository(db.db);
+  const brokerRepo = new BrokerRepository(db.db);
+  const universeRepo = new UniverseRepository(db.db);
+  const universeService = new UniverseService(brokerRepo, universeRepo);
+  const proposalRepo = new ProposalRepository(db.db);
+  const blockedOrderRepo = new BlockedOrderRepository(db.db);
+  const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
+  const hybridScoreRepo = new HybridScoreRepository(db.db);
+  const lifecycle = new LifecycleManager(runtimeStateRepo);
+  lifecycle.start('Test setup');
+  const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+  const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
+  const scheduler = createMockScheduler();
+  const telemetry = createMockTelemetry();
+  const dashboard = new DashboardReadModel({
+    healthService,
+    runtimeStateRepo,
+    zerodhaRepo,
+    proposalRepo,
+    blockedOrderRepo,
+    strategyDecisionRepo,
+    clock,
+    universeService,
+    hybridScoreRepo,
+  });
+  const server = createHealthServer(healthService, scheduler, telemetry, db, dashboard);
+
+  return {
+    db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
+    proposalRepo, blockedOrderRepo, strategyDecisionRepo, hybridScoreRepo,
+    lifecycle, healthService, clock, scheduler, telemetry, dashboard, server,
+  };
+}
+
+/** Seed a hybrid score summary with ordered components for a proposal attempt. */
+function seedHybridScore(
+  hybridScoreRepo: HybridScoreRepository,
+  proposalAttemptId: number,
+  overrides?: Partial<{
+    deterministicScore: number;
+    llmScore: number | null;
+    llmStatus: LLMStatus;
+    llmRationale: string | null;
+    mergedScore: number;
+    mergePolicy: MergePolicy;
+    components: Array<{ componentName: string; score: number; weight: number; sortOrder: number }>;
+  }>,
+) {
+  return hybridScoreRepo.insertFull(
+    {
+      proposalAttemptId,
+      deterministicScore: overrides?.deterministicScore ?? 0.75,
+      llmScore: overrides?.llmScore ?? null,
+      llmStatus: overrides?.llmStatus ?? LLMStatus.Skipped,
+      llmRationale: overrides?.llmRationale ?? null,
+      mergedScore: overrides?.mergedScore ?? 0.75,
+      mergePolicy: overrides?.mergePolicy ?? MergePolicy.DeterministicOnly,
+      createdAt: Date.now(),
+    },
+    overrides?.components ?? [
+      { componentName: 'momentum', score: 0.8, weight: 0.5, sortOrder: 0 },
+      { componentName: 'volume', score: 0.7, weight: 0.3, sortOrder: 1 },
+      { componentName: 'volatility', score: 0.65, weight: 0.2, sortOrder: 2 },
+    ],
   );
 }
 
@@ -2495,6 +2569,338 @@ describe('Dashboard renderer — HTML escaping', () => {
       expect(data.execution.recentRiskEvents.length).toBe(1);
       expect(data.execution.recentRiskEvents[0].eventType).toBe('refusal');
       expect(data.execution.recentRiskEvents[0].message).toBe('Refused during market hours');
+    });
+  });
+});
+
+// ── Hybrid evidence on strategy surfaces ────────────────────────────────
+
+describe('Health server — hybrid evidence on strategy surfaces', () => {
+  let ctx: ReturnType<typeof createServerAndDashboardWithHybrid>;
+
+  beforeEach(async () => {
+    ctx = createServerAndDashboardWithHybrid();
+    await new Promise<void>((resolve, reject) => {
+      ctx.server.listen(0, '127.0.0.1', () => resolve());
+      ctx.server.on('error', reject);
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => {
+      ctx.server.close(() => {
+        ctx.db.close();
+        resolve();
+      });
+    });
+  });
+
+  // ── /health/strategy — hybrid evidence ──────────────────────────────
+
+  describe('/health/strategy — hybrid evidence', () => {
+    it('returns hybrid: null when no hybrid score exists for a decision', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      expect(data.recentDecisions[0].hybrid).toBeNull();
+    });
+
+    it('returns hybrid evidence with deterministic score and components when present', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'INFY' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'INFY',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.75,
+        mergedScore: 0.75,
+        mergePolicy: MergePolicy.DeterministicOnly,
+        llmStatus: LLMStatus.Skipped,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const decision = data.recentDecisions[0];
+      expect(decision.hybrid).not.toBeNull();
+      expect(decision.hybrid.deterministicScore).toBe(0.75);
+      expect(decision.hybrid.mergedScore).toBe(0.75);
+      expect(decision.hybrid.llmStatus).toBe('skipped');
+      expect(decision.hybrid.llmScore).toBeNull();
+      expect(decision.hybrid.components.length).toBe(3);
+      expect(decision.hybrid.components[0].componentName).toBe('momentum');
+      expect(decision.hybrid.components[0].score).toBe(0.8);
+      expect(decision.hybrid.components[1].componentName).toBe('volume');
+      expect(decision.hybrid.components[1].score).toBe(0.7);
+    });
+
+    it('includes llmScore, llmRationale, mergePolicy when LLM was consulted', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'HDFC' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'HDFC',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.80,
+        llmScore: 0.70,
+        llmStatus: LLMStatus.Consulted,
+        llmRationale: 'Strong fundamentals but weak technicals',
+        mergedScore: 0.75,
+        mergePolicy: MergePolicy.Average,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const decision = data.recentDecisions[0];
+      expect(decision.hybrid.llmScore).toBe(0.70);
+      expect(decision.hybrid.llmRationale).toBe('Strong fundamentals but weak technicals');
+      expect(decision.hybrid.mergePolicy).toBe('average');
+      expect(decision.hybrid.mergedScore).toBe(0.75);
+    });
+
+    it('derives isDowngraded true when LLM score is significantly lower', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'SBIN' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'SBIN',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.90,
+        llmScore: 0.50,
+        llmStatus: LLMStatus.Consulted,
+        llmRationale: 'High risk due to market volatility',
+        mergedScore: 0.70,
+        mergePolicy: MergePolicy.Average,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const decision = data.recentDecisions[0];
+      expect(decision.hybrid.isDowngraded).toBe(true);
+      expect(decision.hybrid.downgradeContext).toContain('below deterministic');
+    });
+
+    it('derives isDowngraded true when LLM status is error', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'ICICI' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'ICICI',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.75,
+        llmScore: null,
+        llmStatus: LLMStatus.Error,
+        llmRationale: 'Provider timeout',
+        mergedScore: 0.75,
+        mergePolicy: MergePolicy.DeterministicOnly,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const decision = data.recentDecisions[0];
+      expect(decision.hybrid.isDowngraded).toBe(true);
+      expect(decision.hybrid.downgradeContext).toContain('error');
+      expect(decision.hybrid.downgradeContext).toContain('Provider timeout');
+    });
+
+    it('derives isDowngraded false when LLM score is close to deterministic', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'WIPRO' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'WIPRO',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.75,
+        llmScore: 0.73,
+        llmStatus: LLMStatus.Consulted,
+        llmRationale: 'Similar assessment',
+        mergedScore: 0.74,
+        mergePolicy: MergePolicy.Average,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const decision = data.recentDecisions[0];
+      expect(decision.hybrid.isDowngraded).toBe(false);
+    });
+
+    it('returns ordered components by sort_order', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'AXIS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'AXIS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        components: [
+          { componentName: 'zeta', score: 0.9, weight: 0.1, sortOrder: 2 },
+          { componentName: 'alpha', score: 0.8, weight: 0.5, sortOrder: 0 },
+          { componentName: 'beta', score: 0.7, weight: 0.4, sortOrder: 1 },
+        ],
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const comps = data.recentDecisions[0].hybrid.components;
+      expect(comps.length).toBe(3);
+      // Ordered by sort_order (alpha, beta, zeta)
+      expect(comps[0].componentName).toBe('alpha');
+      expect(comps[1].componentName).toBe('beta');
+      expect(comps[2].componentName).toBe('zeta');
+    });
+  });
+
+  // ── /dashboard — hybrid evidence in JSON ──────────────────────────
+
+  describe('/dashboard — hybrid evidence in JSON', () => {
+    it('includes empty hybrid when no evidence exists', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.recentStrategyDecisions[0].hybrid).toBeNull();
+    });
+
+    it('includes hybrid evidence in recentStrategyDecisions', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'INFY' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'INFY',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id);
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      const d = data.recentStrategyDecisions[0];
+      expect(d.hybrid).not.toBeNull();
+      expect(d.hybrid.deterministicScore).toBe(0.75);
+      expect(d.hybrid.components.length).toBe(3);
+    });
+
+    it('totals remain repository-backed even with hybrid enrichment', async () => {
+      // Seed 25 decisions — totals must be accurate
+      for (let i = 0; i < 20; i++) {
+        const p = seedProposal(ctx.proposalRepo, { tradingsymbol: `APPROVED_${i}` });
+        seedStrategyDecision(ctx.strategyDecisionRepo, p.id, {
+          tradingsymbol: `APPROVED_${i}`,
+          decisionStatus: StrategyDecisionStatus.Approved,
+        });
+        if (i % 3 === 0) {
+          seedHybridScore(ctx.hybridScoreRepo, p.id);
+        }
+      }
+      for (let i = 0; i < 5; i++) {
+        const p = seedProposal(ctx.proposalRepo, { tradingsymbol: `REFUSED_${i}` });
+        seedStrategyDecision(ctx.strategyDecisionRepo, p.id, {
+          tradingsymbol: `REFUSED_${i}`,
+          decisionStatus: StrategyDecisionStatus.Refused,
+        });
+      }
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      expect(data.totalDecisions).toBe(25);
+      expect(data.approvedCount).toBe(20);
+      expect(data.refusedCount).toBe(5);
+      expect(data.recentDecisions.length).toBe(20);
+
+      // Some decisions should have hybrid evidence, some should not
+      const withHybrid = data.recentDecisions.filter((d: any) => d.hybrid !== null).length;
+      const withoutHybrid = data.recentDecisions.filter((d: any) => d.hybrid === null).length;
+      expect(withHybrid).toBeGreaterThan(0);
+      expect(withoutHybrid).toBeGreaterThan(0);
+    });
+  });
+
+  // ── /dashboard — hybrid evidence in HTML ──────────────────────────
+
+  describe('/dashboard — hybrid evidence in HTML', () => {
+    it('shows hybrid evidence column with score badges when present', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.80,
+        mergedScore: 0.80,
+        llmStatus: LLMStatus.Skipped,
+        mergePolicy: MergePolicy.DeterministicOnly,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('D:80%');
+      expect(res.body).toContain('M:80%');
+      expect(res.body).toContain('deterministic-only');
+    });
+
+    it('shows "L:—" when LLM score is null', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'INFY' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'INFY',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id);
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('L:—');
+    });
+
+    it('shows "L:XX%" when LLM score is present', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'HDFC' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'HDFC',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.80,
+        llmScore: 0.70,
+        llmStatus: LLMStatus.Consulted,
+        llmRationale: 'Decent but cautious',
+        mergedScore: 0.75,
+        mergePolicy: MergePolicy.Average,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('L:70%');
+    });
+
+    it('shows downgrade badge when isDowngraded is true', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'SBIN' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'SBIN',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.90,
+        llmScore: 0.50,
+        llmStatus: LLMStatus.Consulted,
+        mergedScore: 0.70,
+        mergePolicy: MergePolicy.Average,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('▼ downgraded');
+    });
+
+    it('does NOT include secret material in HTML with hybrid evidence', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id);
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).not.toContain('accessToken');
+      expect(res.body).not.toContain('apiKey');
     });
   });
 });

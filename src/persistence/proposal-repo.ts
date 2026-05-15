@@ -2,10 +2,14 @@ import type Database from 'better-sqlite3';
 import {
   ProposalStatus,
   ValidationReasonCode,
+  LLMStatus,
+  MergePolicy,
   type NewProposalAttempt,
   type ProposalAttemptRow,
   type ProposalAttemptWithReasons,
   type ValidationReason,
+  type NewHybridScoreSummary,
+  type NewHybridScoreComponent,
 } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -91,6 +95,73 @@ export class ProposalRepository {
     });
 
     const row = tx();
+
+    return {
+      ...row,
+      reasons: [...reasons],
+    };
+  }
+
+  /**
+   * Insert a proposal attempt together with its validation reasons AND hybrid
+   * score evidence in a single atomic transaction.
+   *
+   * Ensures no orphaned proposal_attempts or hybrid score rows can exist
+   * if a write failure occurs mid-way through the batch.
+   *
+   * Returns the full attempt row including its validation reasons.
+   */
+  insertAttemptWithReasonsAndHybridScore(
+    attempt: NewProposalAttempt,
+    reasons: ValidationReason[],
+    hybridSummary: NewHybridScoreSummary,
+    hybridComponents: NewHybridScoreComponent[],
+  ): ProposalAttemptWithReasons {
+    const row = this._db.transaction(() => {
+      // 1. Insert proposal attempt
+      const pa = this.insertAttempt(attempt);
+
+      // 2. Insert validation reasons
+      for (const reason of reasons) {
+        this.insertReason(pa.id, reason);
+      }
+
+      // 3. Insert hybrid score summary (FK → proposal_attempts.id)
+      const summaryResult = this._db.prepare(`
+        INSERT INTO hybrid_score_summary
+          (proposal_attempt_id, deterministic_score, llm_score, llm_status,
+           llm_rationale, merged_score, merge_policy, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        pa.id,
+        hybridSummary.deterministicScore,
+        hybridSummary.llmScore,
+        hybridSummary.llmStatus,
+        hybridSummary.llmRationale,
+        hybridSummary.mergedScore,
+        hybridSummary.mergePolicy,
+        hybridSummary.createdAt,
+      );
+      const summaryId = Number(summaryResult.lastInsertRowid);
+
+      // 4. Insert hybrid score component rows (FK → hybrid_score_summary.id)
+      const componentStmt = this._db.prepare(`
+        INSERT INTO hybrid_score_components
+          (summary_id, component_name, score, weight, sort_order)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      for (const comp of hybridComponents) {
+        componentStmt.run(
+          summaryId,
+          comp.componentName,
+          comp.score,
+          comp.weight,
+          comp.sortOrder,
+        );
+      }
+
+      return pa;
+    })();
 
     return {
       ...row,

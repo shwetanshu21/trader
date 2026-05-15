@@ -5,17 +5,22 @@
 //   - Scores based on volume, spread, and price availability
 //   - Returns empty array for empty input
 //   - Produces deterministic ordering
-//   - evaluateAsync falls back to deterministic when LLM call fails
-//   - evaluateAsync uses LLM results when provider returns rankings
+//   - evaluateAsync returns explicit LLM status evidence (Consulted/Degraded/Error/Skipped)
+//   - evaluateAsync falls back to deterministic when LLM call fails (with Degraded/Error status)
+//   - evaluateAsync uses LLM results when provider returns rankings (with Consulted status)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   type BoundedCandidate,
   type RankedCandidate,
   type ProposalEngineConfig,
+  LLMStatus,
 } from '../src/types/runtime.js';
 import { ProposalEngine } from '../src/proposals/proposal-engine.js';
-import { LlmRankingStrategy } from '../src/strategy/llm-ranking-strategy.js';
+import {
+  LlmRankingStrategy,
+  type LlmEvaluationResult,
+} from '../src/strategy/llm-ranking-strategy.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -89,6 +94,17 @@ describe('LlmRankingStrategy', () => {
 
       const results = plugin.evaluate([]);
       expect(results).toEqual([]);
+    });
+
+    it('evaluateAsync returns Skipped status for empty candidates', async () => {
+      const engine = new ProposalEngine(makeConfig());
+      const plugin = new LlmRankingStrategy(engine);
+
+      const result = await plugin.evaluateAsync([]);
+      expect(result.rankings).toEqual([]);
+      expect(result.llmStatus).toBe(LLMStatus.Skipped);
+      expect(result.llmScore).toBeNull();
+      expect(result.llmRationale).toBe('No candidates to evaluate');
     });
   });
 
@@ -227,10 +243,40 @@ describe('LlmRankingStrategy', () => {
     });
   });
 
-  describe('evaluateAsync — fallback on LLM failure', () => {
-    it('falls back to deterministic scoring when LLM call fails', async () => {
-      // Mock fetch to reject
-      globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+  describe('evaluateAsync — explicit LLM status evidence', () => {
+    it('returns Consulted status with LLM scores when provider succeeds', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          rankings: [
+            {
+              tradingsymbol: 'INFY',
+              exchange: 'NSE',
+              score: 0.9,
+              rationale: 'Strong momentum',
+            },
+          ],
+        }),
+      );
+
+      const engine = new ProposalEngine(makeConfig());
+      const plugin = new LlmRankingStrategy(engine);
+
+      const candidates = [
+        makeCandidate({ tradingsymbol: 'TCS' }),
+        makeCandidate({ tradingsymbol: 'INFY' }),
+      ];
+
+      const result = await plugin.evaluateAsync(candidates);
+
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
+      expect(result.llmScore).not.toBeNull();
+      expect(result.llmRationale).toContain('LLM ranked');
+      expect(result.rankings[0].candidate.tradingsymbol).toBe('INFY');
+      expect(result.rankings[0].score).toBe(0.9);
+    });
+
+    it('returns Error status with deterministic fallback when LLM call throws', async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network timeout'));
 
       const engine = new ProposalEngine(makeConfig());
       const plugin = new LlmRankingStrategy(engine);
@@ -240,15 +286,18 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'INFY', volume: 300_000 }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
-      // Should fall back to deterministic — TCS (higher vol) first
-      expect(results).toHaveLength(2);
-      expect(results[0].candidate.tradingsymbol).toBe('TCS');
-      expect(results[0].rationale).toContain('Deterministic');
+      // Should indicate error and fall back to deterministic
+      expect(result.llmStatus).toBe(LLMStatus.Error);
+      expect(result.llmScore).toBeNull();
+      expect(result.llmRationale).toContain('LLM provider error');
+      expect(result.llmRationale).toContain('Network timeout');
+      expect(result.rankings[0].candidate.tradingsymbol).toBe('TCS'); // Deterministic (higher vol)
+      expect(result.rankings[0].rationale).toContain('Deterministic');
     });
 
-    it('falls back to deterministic when LLM returns empty rankings', async () => {
+    it('returns Degraded status with deterministic fallback when LLM returns empty', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue(
         jsonResponse({ someUnexpectedField: 'value' }),
       );
@@ -260,14 +309,17 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'TCS', volume: 500_000 }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
-      // Should fall back to deterministic
-      expect(results).toHaveLength(1);
-      expect(results[0].rationale).toContain('Deterministic');
+      // Should indicate degraded and fall back to deterministic
+      expect(result.llmStatus).toBe(LLMStatus.Degraded);
+      expect(result.llmScore).toBeNull();
+      expect(result.llmRationale).toContain('empty rankings');
+      expect(result.rankings).toHaveLength(1);
+      expect(result.rankings[0].rationale).toContain('Deterministic');
     });
 
-    it('falls back to deterministic when provider returns 5xx', async () => {
+    it('returns Error status with deterministic fallback when provider returns 5xx', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue(
         new Response('Server Error', { status: 500 }),
       );
@@ -279,11 +331,12 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'TCS', volume: 500_000 }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
-      // Should fall back to deterministic
-      expect(results).toHaveLength(1);
-      expect(results[0].rationale).toContain('Deterministic');
+      expect(result.llmStatus).toBe(LLMStatus.Error);
+      expect(result.llmScore).toBeNull();
+      expect(result.rankings).toHaveLength(1);
+      expect(result.rankings[0].rationale).toContain('Deterministic');
     });
   });
 
@@ -316,15 +369,16 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'INFY', volume: 200_000 }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
       // LLM says INFY > TCS
-      expect(results).toHaveLength(2);
-      expect(results[0].candidate.tradingsymbol).toBe('INFY');
-      expect(results[0].score).toBe(0.9);
-      expect(results[0].rationale).toBe('Strong momentum');
-      expect(results[1].candidate.tradingsymbol).toBe('TCS');
-      expect(results[1].score).toBe(0.7);
+      expect(result.rankings).toHaveLength(2);
+      expect(result.rankings[0].candidate.tradingsymbol).toBe('INFY');
+      expect(result.rankings[0].score).toBe(0.9);
+      expect(result.rankings[0].rationale).toBe('Strong momentum');
+      expect(result.rankings[1].candidate.tradingsymbol).toBe('TCS');
+      expect(result.rankings[1].score).toBe(0.7);
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
     });
 
     it('falls back to deterministic for candidates not in LLM rankings', async () => {
@@ -349,15 +403,16 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'INFY', volume: 100 }), // Not in LLM response
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
       // TCS has LLM score, INFY gets deterministic fallback
-      expect(results).toHaveLength(2);
-      expect(results[0].candidate.tradingsymbol).toBe('TCS');
-      expect(results[0].score).toBe(0.95);
+      expect(result.rankings).toHaveLength(2);
+      expect(result.rankings[0].candidate.tradingsymbol).toBe('TCS');
+      expect(result.rankings[0].score).toBe(0.95);
 
-      expect(results[1].candidate.tradingsymbol).toBe('INFY');
-      expect(results[1].rationale).toContain('Deterministic');
+      expect(result.rankings[1].candidate.tradingsymbol).toBe('INFY');
+      expect(result.rankings[1].rationale).toContain('Deterministic');
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
     });
 
     it('uses proposals array as fallback when no rankings key', async () => {
@@ -386,13 +441,14 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'INFY', volume: 100_000 }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
       // The proposal array maps to score 0.8 for TCS; INFY gets deterministic
-      expect(results).toHaveLength(2);
-      const tcs = results.find(r => r.candidate.tradingsymbol === 'TCS');
+      expect(result.rankings).toHaveLength(2);
+      const tcs = result.rankings.find(r => r.candidate.tradingsymbol === 'TCS');
       expect(tcs).toBeDefined();
       expect(tcs!.score).toBe(0.8);
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
     });
 
     it('clamps LLM scores to 0–1 range', async () => {
@@ -416,10 +472,11 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'TCS' }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
-      expect(results).toHaveLength(1);
-      expect(results[0].score).toBe(1.0); // Clamped to 1.0
+      expect(result.rankings).toHaveLength(1);
+      expect(result.rankings[0].score).toBe(1.0); // Clamped to 1.0
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
     });
   });
 
@@ -455,7 +512,7 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'TCS', volume: 500_000 }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
       expect(capturedUrl).toBe('https://custom.example.com/rank');
       expect(capturedBody).not.toBeNull();
@@ -463,8 +520,9 @@ describe('LlmRankingStrategy', () => {
       expect(capturedBody!['task']).toBe('rank_candidates');
       expect(capturedBody!['candidates']).toBeInstanceOf(Array);
 
-      expect(results).toHaveLength(1);
-      expect(results[0].score).toBe(0.85);
+      expect(result.rankings).toHaveLength(1);
+      expect(result.rankings[0].score).toBe(0.85);
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
     });
 
     it('sends OpenAI-compatible request via sendOpenAiRequest when providerMode is openai-compatible', async () => {
@@ -508,7 +566,7 @@ describe('LlmRankingStrategy', () => {
         makeCandidate({ tradingsymbol: 'TCS', volume: 500_000 }),
       ];
 
-      const results = await plugin.evaluateAsync(candidates);
+      const result = await plugin.evaluateAsync(candidates);
 
       // Should hit the OpenAI-compatible endpoint
       expect(capturedUrl).toBe('https://crof.ai/v1/chat/completions');
@@ -516,8 +574,9 @@ describe('LlmRankingStrategy', () => {
       expect(capturedBody!['messages']).toBeInstanceOf(Array);
       expect(capturedBody!['response_format']).toEqual({ type: 'json_object' });
 
-      expect(results).toHaveLength(1);
-      expect(results[0].score).toBe(0.9);
+      expect(result.rankings).toHaveLength(1);
+      expect(result.rankings[0].score).toBe(0.9);
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
     });
   });
 });

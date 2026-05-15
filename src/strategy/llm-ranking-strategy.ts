@@ -17,9 +17,33 @@ import {
   type RankedCandidate,
   type StrategyPlugin,
   type ProposalEngineConfig,
+  LLMStatus,
 } from '../types/runtime.js';
 import { ProposalEngine } from '../proposals/proposal-engine.js';
 import type { ProviderProposalResponse } from '../types/runtime.js';
+
+// ---------------------------------------------------------------------------
+// LlmEvaluationResult — explicit LLM evidence returned by evaluateAsync
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of an async LLM evaluation, carrying explicit LLM status evidence.
+ *
+ * Replaces the previous silent fallback (where a failed LLM call returned
+ * deterministic scores with no indication the LLM was ever consulted).
+ * Consumers can inspect `llmStatus` to determine whether the LLM was
+ * consulted, degraded, errored, or skipped.
+ */
+export interface LlmEvaluationResult {
+  /** Ranked candidates with scores from the LLM (or deterministic fallback). */
+  rankings: RankedCandidate[];
+  /** LLM provider consultation status. */
+  llmStatus: LLMStatus;
+  /** LLM-provided score (0–1), or null when LLM was not consulted or failed. */
+  llmScore: number | null;
+  /** Human-readable LLM rationale, or null. */
+  llmRationale: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,38 +78,146 @@ export class LlmRankingStrategy implements StrategyPlugin {
   }
 
   /**
-   * Evaluate bounded candidates through the LLM provider.
+   * Evaluate bounded candidates through deterministic scoring.
    *
-   * Builds a ranking prompt from the candidate set, calls the provider,
-   * and maps the response to RankedCandidate[]. When the LLM call fails
-   * (timeout, HTTP error, malformed response), falls back to deterministic
-   * scoring (equal scores).
+   * This synchronous method returns deterministic fallback scores immediately,
+   * consistent with the synchronous StrategyPlugin contract. For LLM-enhanced
+   * scoring with explicit status evidence, use `evaluateAsync()`.
+   *
+   * Scoring factors (normalized 0–1):
+   *  - Volume score: log-scale normalized (0–1)
+   *  - Spread score: tight spreads score higher (0–1)
+   *  - Composite score: weighted combination of the above
    *
    * @param candidates - Full set of bounded candidates for this round.
-   * @returns RankedCandidate[] with scores from the LLM (or fallback).
+   * @returns RankedCandidate[] with deterministic scores.
    */
   evaluate(candidates: BoundedCandidate[]): RankedCandidate[] {
     if (candidates.length === 0) {
       return [];
     }
 
-    // We need to use async internally but the interface is sync.
-    // Kick off the LLM call and return fallback scores immediately,
-    // then update in-place if the call succeeds.
-    // Actually, the StrategyPlugin interface is synchronous (evaluate returns
-    // RankedCandidate[] synchronously). But the LLM call is async.
-    //
-    // The design choice here: we make the evaluate method kick off the
-    // LLM call, return fallback (deterministic) scores immediately for
-    // the current tick, and the LLM-enhanced results can be used on the
-    // next tick. This keeps the plugin contract deterministic and sync.
-    //
-    // For now, we use deterministic fallback scoring that sorts by:
-    // 1. Volume (descending — higher volume = higher score)
-    // 2. Spread tightness (bid/ask spread normalized)
-    // This gives useful results without requiring a live LLM call.
-
     return this._deterministicRank(candidates);
+  }
+
+  /**
+   * Asynchronously rank candidates via the LLM provider.
+   *
+   * Returns explicit LLM status evidence alongside the ranked candidates.
+   * - If the LLM call succeeds: `llmStatus = Consulted`, rankings carry LLM scores.
+   * - If the LLM call fails (timeout, HTTP error, malformed response):
+   *   `llmStatus = Error`, rankings fall back to deterministic.
+   * - If the LLM returns empty: `llmStatus = Degraded`, rankings fall back to deterministic.
+   * - This preserves deterministic fallback semantics while making the
+   *   degradation explicit for downstream audit surfaces.
+   *
+   * @returns LlmEvaluationResult with rankings and LLM status evidence.
+   */
+  async evaluateAsync(candidates: BoundedCandidate[]): Promise<LlmEvaluationResult> {
+    if (candidates.length === 0) {
+      return {
+        rankings: [],
+        llmStatus: LLMStatus.Skipped,
+        llmScore: null,
+        llmRationale: 'No candidates to evaluate',
+      };
+    }
+
+    // Truncate candidates for the LLM prompt
+    const truncated = candidates.slice(0, MAX_LLM_CANDIDATES);
+
+    let llmRankings: Array<{
+      tradingsymbol: string;
+      exchange: string;
+      score: number;
+      rationale: string;
+      proposal?: Record<string, unknown>;
+    }> | null = null;
+    let llmCallError: string | null = null;
+
+    try {
+      const payload = this._buildRankingPrompt(truncated);
+      const response = await this._sendRankingRequest(payload);
+      llmRankings = response;
+    } catch (err) {
+      llmCallError = err instanceof Error ? err.message : String(err);
+    }
+
+    // If LLM call failed or returned nothing, return degradation evidence
+    if (!llmRankings || llmRankings.length === 0) {
+      const fallback = this._deterministicRank(candidates);
+      return {
+        rankings: fallback,
+        llmStatus: llmCallError ? LLMStatus.Error : LLMStatus.Degraded,
+        llmScore: null,
+        llmRationale: llmCallError
+          ? `LLM provider error: ${llmCallError}`
+          : 'LLM returned empty rankings — using deterministic fallback',
+      };
+    }
+
+    // Build a lookup from (exchange:symbol) → LLM ranking
+    const rankingMap = new Map<string, {
+      score: number;
+      rationale: string;
+      proposal?: Record<string, unknown>;
+    }>();
+
+    for (const r of llmRankings) {
+      const key = `${r.exchange}:${r.tradingsymbol}`;
+      rankingMap.set(key, {
+        score: Math.max(0, Math.min(1, r.score)),
+        rationale: r.rationale || 'LLM-ranked',
+        proposal: r.proposal as Record<string, unknown> | undefined,
+      });
+    }
+
+    // Build ranked results: LLM scores where available, fallback for rest
+    const results: RankedCandidate[] = candidates.map(candidate => {
+      const key = `${candidate.exchange}:${candidate.tradingsymbol}`;
+      const ranking = rankingMap.get(key);
+
+      if (ranking) {
+        return {
+          candidate,
+          plugin: { ...PLUGIN_IDENTITY },
+          score: ranking.score,
+          rationale: ranking.rationale,
+          metadata: ranking.proposal ? { proposalParams: ranking.proposal } : undefined,
+        };
+      }
+
+      // Fallback for candidates the LLM didn't rank
+      const fallbackScore = this._computeDeterministicScore(candidate);
+      return {
+        candidate,
+        plugin: { ...PLUGIN_IDENTITY },
+        score: fallbackScore,
+        rationale: this._buildDeterministicRationale(candidate, fallbackScore),
+      };
+    });
+
+    // Sort by score descending, then exchange, then symbol
+    results.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const exchCmp = a.candidate.exchange.localeCompare(b.candidate.exchange);
+      if (exchCmp !== 0) return exchCmp;
+      return a.candidate.tradingsymbol.localeCompare(b.candidate.tradingsymbol);
+    });
+
+    // Collect LLM-level score (average of all LLM-ranked candidates for a summary)
+    const llmScores = results
+      .filter(r => rankingMap.has(`${r.candidate.exchange}:${r.candidate.tradingsymbol}`))
+      .map(r => r.score);
+
+    return {
+      rankings: results,
+      llmStatus: LLMStatus.Consulted,
+      llmScore: llmScores.length > 0
+        ? llmScores.reduce((a, b) => a + b, 0) / llmScores.length
+        : null,
+      llmRationale: `LLM ranked ${llmRankings.length} of ${candidates.length} candidates`,
+    };
   }
 
   /**
@@ -187,97 +319,6 @@ export class LlmRankingStrategy implements StrategyPlugin {
   }
 
   /**
-   * Asynchronously rank candidates via the LLM provider.
-   * This is not called synchronously by the plugin contract but can be
-   * invoked by consumers that want async LLM-enhanced ranking.
-   *
-   * @returns RankedCandidate[] with LLM-enhanced scores, or deterministic fallback.
-   */
-  async evaluateAsync(candidates: BoundedCandidate[]): Promise<RankedCandidate[]> {
-    // Truncate candidates for the LLM prompt
-    const truncated = candidates.slice(0, MAX_LLM_CANDIDATES);
-
-    let llmRankings: Array<{
-      tradingsymbol: string;
-      exchange: string;
-      score: number;
-      rationale: string;
-      proposal?: {
-        side: string;
-        product: string;
-        quantity: number;
-        price: number | null;
-        triggerPrice: number | null;
-        orderType: string;
-      };
-    }> | null = null;
-
-    try {
-      const payload = this._buildRankingPrompt(truncated);
-      const response = await this._sendRankingRequest(payload);
-      llmRankings = response;
-    } catch {
-      // LLM call failed — fall back to deterministic
-      return this._deterministicRank(candidates);
-    }
-
-    if (!llmRankings || llmRankings.length === 0) {
-      return this._deterministicRank(candidates);
-    }
-
-    // Build a lookup from (exchange:symbol) → LLM ranking
-    const rankingMap = new Map<string, {
-      score: number;
-      rationale: string;
-      proposal?: Record<string, unknown>;
-    }>();
-
-    for (const r of llmRankings) {
-      const key = `${r.exchange}:${r.tradingsymbol}`;
-      rankingMap.set(key, {
-        score: Math.max(0, Math.min(1, r.score)),
-        rationale: r.rationale || 'LLM-ranked',
-        proposal: r.proposal as Record<string, unknown> | undefined,
-      });
-    }
-
-    // Build ranked results: LLM scores where available, fallback for rest
-    const results: RankedCandidate[] = candidates.map(candidate => {
-      const key = `${candidate.exchange}:${candidate.tradingsymbol}`;
-      const ranking = rankingMap.get(key);
-
-      if (ranking) {
-        return {
-          candidate,
-          plugin: { ...PLUGIN_IDENTITY },
-          score: ranking.score,
-          rationale: ranking.rationale,
-          metadata: ranking.proposal ? { proposalParams: ranking.proposal } : undefined,
-        };
-      }
-
-      // Fallback for candidates the LLM didn't rank
-      const fallbackScore = this._computeDeterministicScore(candidate);
-      return {
-        candidate,
-        plugin: { ...PLUGIN_IDENTITY },
-        score: fallbackScore,
-        rationale: this._buildDeterministicRationale(candidate, fallbackScore),
-      };
-    });
-
-    // Sort by score descending, then exchange, then symbol
-    results.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      const exchCmp = a.candidate.exchange.localeCompare(b.candidate.exchange);
-      if (exchCmp !== 0) return exchCmp;
-      return a.candidate.tradingsymbol.localeCompare(b.candidate.tradingsymbol);
-    });
-
-    return results;
-  }
-
-  /**
    * Build the ranking prompt payload for the LLM provider.
    */
   private _buildRankingPrompt(
@@ -344,7 +385,7 @@ export class LlmRankingStrategy implements StrategyPlugin {
     // The response uses the ProviderProposalResponse shape which has
     // a "proposals" array. For ranking, we expect a "rankings" array.
     // Check both "rankings" and fallback to "proposals".
-    const rankings = (response as Record<string, unknown>).rankings as
+    const rankings = (response as unknown as Record<string, unknown>).rankings as
       Array<{
         tradingsymbol: string;
         exchange: string;

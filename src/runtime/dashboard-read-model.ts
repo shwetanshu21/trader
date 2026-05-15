@@ -17,6 +17,8 @@ import type {
   DashboardBlockedOrder,
   DashboardLifecycleEvent,
   DashboardStrategyDecision,
+  DashboardHybridEvidence,
+  HybridScoreSummaryWithComponents,
   DashboardPaperOrder,
   DashboardPaperFill,
   DashboardPaperPosition,
@@ -39,6 +41,7 @@ import type { PaperOrderRepository } from '../persistence/paper-order-repo.js';
 import type { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import type { PaperPositionRepository } from '../persistence/paper-position-repo.js';
 import type { ExecutionRiskRepository } from '../persistence/execution-risk-repo.js';
+import type { HybridScoreRepository } from '../persistence/hybrid-score-repo.js';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -72,6 +75,8 @@ export interface DashboardReadModelOptions {
   paperPositionRepo?: PaperPositionRepository | null;
   /** Optional — execution risk repository for halt state and risk events. */
   riskRepo?: ExecutionRiskRepository | null;
+  /** Optional — hybrid score repository for strategy decision hybrid evidence. */
+  hybridScoreRepo?: HybridScoreRepository | null;
 }
 
 export class DashboardReadModel {
@@ -89,6 +94,7 @@ export class DashboardReadModel {
   private readonly _paperFillRepo: PaperFillRepository | null;
   private readonly _paperPositionRepo: PaperPositionRepository | null;
   private readonly _riskRepo: ExecutionRiskRepository | null;
+  private readonly _hybridScoreRepo: HybridScoreRepository | null;
 
   constructor(options: DashboardReadModelOptions) {
     this._healthService = options.healthService;
@@ -105,6 +111,7 @@ export class DashboardReadModel {
     this._paperFillRepo = options.paperFillRepo ?? null;
     this._paperPositionRepo = options.paperPositionRepo ?? null;
     this._riskRepo = options.riskRepo ?? null;
+    this._hybridScoreRepo = options.hybridScoreRepo ?? null;
   }
 
   /** Assemble a full dashboard snapshot. */
@@ -244,8 +251,16 @@ export class DashboardReadModel {
 
     try {
       const decisions = this._strategyDecisionRepo.getRecentDecisions(MAX_RECENT_STRATEGY_DECISIONS);
+
+      // Batch load hybrid evidence for all decisions in one pass
+      const proposalIds = decisions.map(d => d.proposalAttemptId);
+      const hybridMap = this._hybridScoreRepo
+        ? this._hybridScoreRepo.getByProposalAttemptIds(proposalIds)
+        : new Map<number, HybridScoreSummaryWithComponents>();
+
       return decisions.map(d => {
         const reasons = this._strategyDecisionRepo!.getReasonsForDecision(d.id);
+        const hybrid = hybridMap.get(d.proposalAttemptId) ?? null;
         return {
           id: d.id,
           proposalAttemptId: d.proposalAttemptId,
@@ -266,11 +281,55 @@ export class DashboardReadModel {
           exposureTag: d.riskExposureTag,
           lastPrice: d.quoteLastPrice,
           reasons: reasons.map(r => r.reasonMessage),
+          hybrid: hybrid ? this._toHybridEvidence(hybrid) : null,
         };
       });
     } catch {
+      // Repo access failure — return empty list rather than crashing dashboard
       return [];
     }
+  }
+
+  /**
+   * Convert a hybrid score summary with components into the operator-facing
+   * DashboardHybridEvidence DTO, deriving downgrade metadata.
+   */
+  private _toHybridEvidence(summary: HybridScoreSummaryWithComponents): DashboardHybridEvidence {
+    const DETERMINISTIC_PENALTY_THRESHOLD = 0.05; // 5% gap = downgrade
+    const llmScore = summary.llmScore;
+    const detScore = summary.deterministicScore;
+
+    // Downgrade when: LLM failed/degraded, OR LLM score is meaningfully lower
+    let isDowngraded = false;
+    let downgradeContext: string | null = null;
+
+    if (summary.llmStatus === 'error' || summary.llmStatus === 'degraded') {
+      isDowngraded = true;
+      downgradeContext = `LLM consultation ${summary.llmStatus}${summary.llmRationale ? `: ${summary.llmRationale}` : ''}`;
+    } else if (llmScore !== null && detScore !== null && (detScore - llmScore) > DETERMINISTIC_PENALTY_THRESHOLD) {
+      isDowngraded = true;
+      const gap = ((detScore - llmScore) * 100).toFixed(1);
+      downgradeContext = `LLM score (${(llmScore * 100).toFixed(1)}%) is ${gap}% below deterministic score (${(detScore * 100).toFixed(1)}%)`;
+    } else if (summary.llmStatus === 'skipped') {
+      // Skipped LLM is informational, not a degradation
+      downgradeContext = 'LLM consultation skipped (deterministic-only scoring)';
+    }
+
+    return {
+      deterministicScore: summary.deterministicScore,
+      llmScore: summary.llmScore,
+      llmStatus: summary.llmStatus,
+      llmRationale: summary.llmRationale,
+      mergedScore: summary.mergedScore,
+      mergePolicy: summary.mergePolicy,
+      components: summary.components.map(c => ({
+        componentName: c.componentName,
+        score: c.score,
+        weight: c.weight,
+      })),
+      isDowngraded,
+      downgradeContext,
+    };
   }
 
   /**

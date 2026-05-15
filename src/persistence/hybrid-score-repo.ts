@@ -141,6 +141,43 @@ export class HybridScoreRepository {
   }
 
   /**
+   * Retrieve hybrid score summaries by multiple proposal attempt ids.
+   *
+   * Batched lookup to avoid N+1 queries in the read model. Returns a Map
+   * keyed by proposal_attempt_id for fast joining. Components are loaded
+   * per summary via individual queries (bounded by the number of matched ids).
+   */
+  getByProposalAttemptIds(proposalAttemptIds: number[]): Map<number, HybridScoreSummaryWithComponents> {
+    if (proposalAttemptIds.length === 0) return new Map();
+
+    const placeholders = proposalAttemptIds.map(() => '?').join(',');
+    const rows = this._db.prepare(`
+      SELECT id, proposal_attempt_id, deterministic_score, llm_score, llm_status,
+             llm_rationale, merged_score, merge_policy, created_at
+      FROM hybrid_score_summary
+      WHERE proposal_attempt_id IN (${placeholders})
+    `).all(...proposalAttemptIds) as HybridScoreSummaryDbRow[];
+
+    const result = new Map<number, HybridScoreSummaryWithComponents>();
+
+    for (const row of rows) {
+      const components = this._db.prepare(`
+        SELECT id, summary_id, component_name, score, weight, sort_order
+        FROM hybrid_score_components
+        WHERE summary_id = ?
+        ORDER BY sort_order ASC
+      `).all(row.id) as HybridScoreComponentDbRow[];
+
+      result.set(row.proposal_attempt_id, {
+        ...mapSummaryRow(row),
+        components: components.map(mapComponentRow),
+      });
+    }
+
+    return result;
+  }
+
+  /**
    * Retrieve recent hybrid score summaries, newest first, with their
    * ordered component rows.
    */

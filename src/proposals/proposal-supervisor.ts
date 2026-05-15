@@ -21,6 +21,7 @@ import type {
   NewProposalAttempt,
   BoundedCandidate,
   StrategyPlugin,
+  HybridCandidateEvidence,
 } from '../types/runtime.js';
 import {
   ProposalStatus,
@@ -32,6 +33,7 @@ import type { SessionRuntimePort, InstrumentCatalogPort, QuoteStreamPort } from 
 import type { MarketClock } from '../runtime/market-clock.js';
 import type { QuoteSnapshot } from '../integrations/broker/types.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
+import { HybridScoreRepository } from '../persistence/hybrid-score-repo.js';
 import { ProposalEngine, type EngineContext, type NormalizedProposal } from './proposal-engine.js';
 import { IndiaProposalValidator, type ValidatorInput } from './india-validator.js';
 import { UniverseService, type UniverseCoverageSummary } from '../universe/universe-service.js';
@@ -57,6 +59,8 @@ export class ProposalSupervisor implements TickWork {
 
   /** Strategy coordinator with the LLM ranking plugin. */
   private readonly _coordinator: StrategyCoordinator;
+  /** Optional hybrid score repository for atomic proposal + hybrid evidence persistence. */
+  private readonly _hybridScoreRepo: HybridScoreRepository | null;
 
   /** Local in-flight guard — true while a proposal generation is active. */
   private _inFlight: boolean = false;
@@ -82,6 +86,8 @@ export class ProposalSupervisor implements TickWork {
     coordinator?: StrategyCoordinator;
     /** Optional additional strategy plugins beyond the default LLM ranking plugin. */
     additionalPlugins?: StrategyPlugin[];
+    /** Optional hybrid score repository for atomic proposal + evidence persistence. */
+    hybridScoreRepo?: HybridScoreRepository | null;
   }) {
     this._engine = options.engine;
     this._validator = options.validator;
@@ -92,6 +98,7 @@ export class ProposalSupervisor implements TickWork {
     this._clock = options.clock;
     this._maxProposals = options.maxProposals ?? 5;
     this._universeService = options.universeService ?? null;
+    this._hybridScoreRepo = options.hybridScoreRepo ?? null;
 
     // Use externally-constructed coordinator when provided (production path).
     // Otherwise build one internally (backward compatibility for tests).
@@ -278,7 +285,7 @@ export class ProposalSupervisor implements TickWork {
     }
 
     // ── Phase 6: Map ranked candidates to proposal attempts ────────────
-    const proposals = this._mapRankedToProposals(coordinatorResult.candidates, now);
+    const proposals = this._mapHybridToProposals(coordinatorResult.candidates, now);
 
     if (proposals.length === 0) {
       this._repo.insertAttemptWithReasons(
@@ -302,6 +309,12 @@ export class ProposalSupervisor implements TickWork {
         }],
       );
       return;
+    }
+
+    // Build a candidate key → evidence lookup for hybrid score persistence
+    const evidenceByKey = new Map<string, HybridCandidateEvidence>();
+    for (const evidence of coordinatorResult.candidates) {
+      evidenceByKey.set(evidence.candidateKey, evidence);
     }
 
     // ── Phase 7: Resolve instrument tokens and validate each proposal ───
@@ -344,11 +357,42 @@ export class ProposalSupervisor implements TickWork {
       // Set the proposal status to match the verdict before persisting
       attempt.proposalStatus = verdict.status;
 
-      // Persist the attempt with its validation reasons
-      if (verdict.status === ProposalStatus.Accepted) {
-        this._repo.insertAttemptWithReasons(attempt, []);
+      // Look up hybrid evidence for this candidate
+      const candidateKey = `${attempt.exchange}:${attempt.tradingsymbol}`;
+      const evidence = evidenceByKey.get(candidateKey);
+
+      if (this._hybridScoreRepo && evidence) {
+        // Persist proposal + reasons + hybrid score evidence atomically
+        const hybridComponents = evidence.pluginScores.map((ps, idx) => ({
+          summaryId: 0, // placeholder — assigned by the insert
+          componentName: ps.plugin.id,
+          score: ps.score,
+          weight: 1.0,
+          sortOrder: idx,
+        }));
+
+        this._repo.insertAttemptWithReasonsAndHybridScore(
+          attempt,
+          verdict.status === ProposalStatus.Accepted ? [] : verdict.reasons,
+          {
+            proposalAttemptId: 0, // placeholder — assigned by the insert
+            deterministicScore: evidence.deterministicScore,
+            llmScore: evidence.llmScore,
+            llmStatus: evidence.llmStatus,
+            llmRationale: evidence.llmRationale,
+            mergedScore: evidence.mergedScore,
+            mergePolicy: evidence.mergePolicy,
+            createdAt: now,
+          },
+          hybridComponents,
+        );
       } else {
-        this._repo.insertAttemptWithReasons(attempt, verdict.reasons);
+        // Fallback to basic persistence when hybrid repo is not wired
+        if (verdict.status === ProposalStatus.Accepted) {
+          this._repo.insertAttemptWithReasons(attempt, []);
+        } else {
+          this._repo.insertAttemptWithReasons(attempt, verdict.reasons);
+        }
       }
     }
 
@@ -457,29 +501,22 @@ export class ProposalSupervisor implements TickWork {
   }
 
   /**
-   * Map ranked candidates from the coordinator to NormalizedProposal entries.
+   * Map hybrid candidate evidence from the coordinator to NormalizedProposal entries.
    *
-   * Each ranked candidate is mapped to a NewProposalAttempt with the
-   * candidate's instrument details and default order parameters.
-   * If the ranked candidate has metadata with proposalParams, those
-   * are used instead of defaults.
+   * Each HybridCandidateEvidence produces one proposal attempt using the candidate's
+   * instrument details and default order parameters. If the evidence carries
+   * proposalParams (typically from the LLM plugin), those override defaults.
    */
-  private _mapRankedToProposals(
-    ranked: Array<{
-      candidate: BoundedCandidate;
-      plugin: { id: string; name: string; version: string };
-      score: number;
-      rationale: string;
-      metadata?: Record<string, unknown>;
-    }>,
+  private _mapHybridToProposals(
+    candidates: import('../types/runtime.js').HybridCandidateEvidence[],
     now: number,
   ): NormalizedProposal[] {
     const proposals: NormalizedProposal[] = [];
 
-    for (const entry of ranked) {
+    for (const entry of candidates) {
       const c = entry.candidate;
 
-      // Check for LLM-provided proposal params in metadata
+      // Check for LLM-provided proposal params in the evidence
       let side = 'buy';
       let product = 'MIS';
       let quantity = 1;
@@ -488,7 +525,7 @@ export class ProposalSupervisor implements TickWork {
       let orderType = 'MARKET';
       let tag: string | null = null;
 
-      const proposalParams = entry.metadata?.proposalParams as Record<string, unknown> | undefined;
+      const proposalParams = entry.proposalParams;
       if (proposalParams) {
         // Use LLM-provided params if available and valid
         const pSide = String(proposalParams.side ?? '').toLowerCase();
@@ -524,7 +561,9 @@ export class ProposalSupervisor implements TickWork {
         triggerPrice = null;
       }
 
-      tag = `strategy-${entry.plugin.id}`;
+      // Use the first plugin's id for tagging
+      const pluginId = entry.pluginScores.length > 0 ? entry.pluginScores[0].plugin.id : 'unknown';
+      tag = `strategy-${pluginId}`;
 
       // Build the NewProposalAttempt
       const attempt: NewProposalAttempt = {

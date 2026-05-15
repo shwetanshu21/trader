@@ -695,6 +695,44 @@ export interface DashboardLifecycleEvent {
 // ---------------------------------------------------------------------------
 
 /**
+ * Operator-facing hybrid evidence for a strategy decision.
+ *
+ * Nested block within DashboardStrategyDecision that carries deterministic
+ * component scores, LLM status/rationale, merged score, and derived
+ * downgrade context. Set to null when no persisted hybrid evidence exists.
+ *
+ * Reuses S02 hybrid primitives (LLMStatus, MergePolicy) rather than
+ * inventing parallel enums. Token-safe.
+ */
+export interface DashboardHybridEvidence {
+  /** Final aggregated deterministic score (0–1). */
+  deterministicScore: number;
+  /** LLM-provided score (0–1), or null when LLM was not consulted or failed. */
+  llmScore: number | null;
+  /** LLM provider consultation status (reuses LLMStatus enum values). */
+  llmStatus: string;
+  /** Human-readable LLM rationale, or null. */
+  llmRationale: string | null;
+  /** Final merged score (0–1) after applying the merge policy. */
+  mergedScore: number;
+  /** The merge policy that was applied (reuses MergePolicy enum values). */
+  mergePolicy: string;
+  /** Ordered deterministic component scores. */
+  components: Array<{
+    /** Component name (e.g. 'momentum', 'volume'). */
+    componentName: string;
+    /** Component score (0–1). */
+    score: number;
+    /** Component weight in the deterministic aggregation. */
+    weight: number;
+  }>;
+  /** Whether the decision was effectively downgraded by hybrid scoring. */
+  isDowngraded: boolean;
+  /** Human-readable downgrade explanation, or null. */
+  downgradeContext: string | null;
+}
+
+/**
  * A single strategy decision for the operator dashboard.
  * Covers both approved candidates and refused decisions with reasons.
  * Token-safe: never includes access tokens, API keys, or secret-bearing material.
@@ -738,6 +776,8 @@ export interface DashboardStrategyDecision {
   lastPrice: number | null;
   /** Ordered refusal reason messages (empty when approved). */
   reasons: string[];
+  /** Hybrid scoring evidence, or null when no persisted hybrid evidence exists. */
+  hybrid: DashboardHybridEvidence | null;
 }
 
 export type ZerodhaConfig = BrokerConfig;
@@ -1891,4 +1931,85 @@ export type NewHybridScoreComponent = Omit<HybridScoreComponentRow, 'id'>;
 export interface HybridScoreSummaryWithComponents extends HybridScoreSummaryRow {
   /** Ordered component scores (sorted by sort_order). */
   components: HybridScoreComponentRow[];
+}
+
+// ---------------------------------------------------------------------------
+// Strategy coordinator — grouped hybrid candidate evidence (S02 / T02)
+// ---------------------------------------------------------------------------
+
+/**
+ * Plugin scoring evidence — one per plugin that scored a candidate.
+ *
+ * Captures the individual plugin score, rationale, and optional metadata
+ * that feeds into the grouped hybrid evaluation record.
+ */
+export interface PluginScoreEvidence {
+  /** Plugin identity that produced this score. */
+  plugin: StrategyPluginIdentity;
+  /** Normalized score from this plugin (0–1). */
+  score: number;
+  /** Human-readable justification for the score. */
+  rationale: string;
+  /** Optional additional metadata for diagnostics. */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Grouped hybrid evaluation record — one per unique candidate identity.
+ *
+ * Replaces the flat `RankedCandidate[]` model where the same candidate could
+ * appear multiple times (once per plugin). Each `HybridCandidateEvidence` entry
+ * carries deterministic component scores from each plugin, an aggregated
+ * deterministic score, explicit LLM status/rationale, and a final merged score.
+ *
+ * Downstream paths (runtime, persistence, operator surfaces) can audit
+ * hybrid scoring truthfully without inferring evidence from downstream tables.
+ */
+export interface HybridCandidateEvidence {
+  /** The bounded candidate this evidence applies to. */
+  candidate: BoundedCandidate;
+  /** Unique candidate key (exchange:tradingsymbol). */
+  candidateKey: string;
+  /** Plugin scoring evidence — one entry per plugin that scored this candidate. */
+  pluginScores: PluginScoreEvidence[];
+  /** Aggregated deterministic score (0–1) from non-LLM plugin scores. */
+  deterministicScore: number;
+  /** LLM-provided score (0–1), or null when LLM was not consulted or failed. */
+  llmScore: number | null;
+  /** LLM provider consultation status. */
+  llmStatus: LLMStatus;
+  /** Human-readable LLM rationale, or null. */
+  llmRationale: string | null;
+  /** Final merged score (0–1) after applying the merge policy. */
+  mergedScore: number;
+  /** The merge policy that was applied to produce mergedScore. */
+  mergePolicy: MergePolicy;
+  /** Optional proposal params from the highest-priority source (e.g. LLM plugin). */
+  proposalParams?: Record<string, unknown>;
+  /** Whether any plugin errors occurred for this candidate. */
+  hasPluginErrors: boolean;
+  /** Plugin errors keyed by plugin ID, if any. */
+  pluginErrors: Record<string, string>;
+}
+
+/**
+ * Full result from the strategy framework coordinator with grouped hybrid scoring.
+ *
+ * Replaces `CoordinatorResult` in the evaluation path. Each candidate identity
+ * (exchange + tradingsymbol) appears exactly once, carrying all plugin scoring
+ * evidence, LLM status, and a final merged score.
+ */
+export interface HybridCoordinatorResult {
+  /** Grouped hybrid evidence, one entry per unique candidate identity, ordered by mergedScore descending. */
+  candidates: HybridCandidateEvidence[];
+  /** Plugins that participated in this evaluation round. */
+  plugins: StrategyPluginIdentity[];
+  /** Total number of unique candidates that were evaluated. */
+  totalEvaluated: number;
+  /** Whether any plugin errors occurred across all candidates. */
+  hasPluginErrors: boolean;
+  /** Plugin errors keyed by plugin ID, across all candidates. */
+  pluginErrors: Record<string, string>;
+  /** Total wall-clock duration of the evaluation round in ms. */
+  durationMs: number;
 }
