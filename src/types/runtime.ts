@@ -1722,6 +1722,118 @@ export type {
 } from '../integrations/broker/types.js';
 
 // ---------------------------------------------------------------------------
+// Strategy run — append-only replay-ready artifact for screening rounds
+// ---------------------------------------------------------------------------
+
+/**
+ * Full persisted strategy run row.
+ *
+ * One run per screening round (coordinator evaluation). Carries plugin
+ * identities, framework config, universe snapshot linkage, plugin errors,
+ * and duration metadata so future replay code can reconstruct the round
+ * without re-executing plugins.
+ */
+export interface StrategyRunRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Framework config stored as JSON (StrategyFrameworkConfig). */
+  frameworkConfig: string;
+  /** Plugin identities stored as JSON (StrategyPluginIdentity[]). */
+  pluginsJson: string;
+  /** Plugin errors stored as JSON (Record<string, string>), or null. */
+  pluginErrorsJson: string | null;
+  /** FK → universe_snapshots(id). Null when no snapshot was used. */
+  universeSnapshotId: number | null;
+  /** Total number of unique candidates evaluated in this round. */
+  totalEvaluated: number;
+  /** Whether any plugin errors occurred. */
+  hasPluginErrors: boolean;
+  /** Total wall-clock duration of the evaluation round in ms. */
+  durationMs: number;
+  /** Unix timestamp (ms) when this run was recorded. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new strategy run (without id). */
+export type NewStrategyRun = Omit<StrategyRunRow, 'id'>;
+
+/**
+ * Full persisted strategy run candidate row.
+ *
+ * One row per candidate identity (exchange + tradingsymbol) within a run.
+ * Carries the full scoring evidence (plugin scores, LLM status, merged score),
+ * emitted state tracking, and optional forward-link to proposal_attempts
+ * when the candidate was selected for proposal generation.
+ */
+export interface StrategyRunCandidateRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → strategy_runs(id). */
+  strategyRunId: number;
+  /** Unique candidate key (e.g. 'NSE:RELIANCE'). */
+  candidateKey: string;
+  /** 1-based rank within this run (deterministic ordering by merged score). */
+  rank: number;
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE'). */
+  tradingsymbol: string;
+  /** Kite instrument token, or null. */
+  instrumentToken: number | null;
+  /** Instrument type (e.g. 'EQ', 'CE', 'PE'). */
+  instrumentType: string;
+  /** Lot size for the instrument. */
+  lotSize: number;
+  /** Tick size (minimum price increment). */
+  tickSize: number;
+  /** Trade side determined by upstream context. */
+  side: string;
+  /** Last traded price, or null. */
+  lastPrice: number | null;
+  /** Best bid price, or null. */
+  bid: number | null;
+  /** Best ask price, or null. */
+  ask: number | null;
+  /** Trading volume, or null. */
+  volume: number | null;
+  /** Plugin scoring evidence stored as JSON (PluginScoreEvidence[]). */
+  scoresJson: string;
+  /** Aggregated deterministic score (0–1). */
+  deterministicScore: number;
+  /** LLM-provided score (0–1), or null. */
+  llmScore: number | null;
+  /** LLM provider consultation status, or null. */
+  llmStatus: string | null;
+  /** Human-readable LLM rationale, or null. */
+  llmRationale: string | null;
+  /** Final merged score (0–1). */
+  mergedScore: number;
+  /** Merge policy string, or null. */
+  mergePolicy: string | null;
+  /** Proposal params stored as JSON (Record<string, unknown>), or null. */
+  proposalParamsJson: string | null;
+  /** Plugin errors keyed by plugin ID stored as JSON, or null. */
+  pluginErrorsJson: string | null;
+  /** Whether any plugin errors occurred for this candidate. */
+  hasPluginErrors: boolean;
+  /** Whether this candidate was emitted as a proposal attempt. */
+  emitted: boolean;
+  /** FK → proposal_attempts(id). Non-null when emitted. */
+  proposalAttemptId: number | null;
+}
+
+/** Shape for inserting a new strategy run candidate (without id). */
+export type NewStrategyRunCandidate = Omit<StrategyRunCandidateRow, 'id'>;
+
+/**
+ * Joined artifact — a strategy run with its ordered candidate rows loaded.
+ */
+export interface StrategyRunWithCandidates extends StrategyRunRow {
+  /** Ordered candidates (by rank ascending). */
+  candidates: StrategyRunCandidateRow[];
+}
+
+// ---------------------------------------------------------------------------
 // Strategy Framework — pluggable screening and ranking DTOs
 // ---------------------------------------------------------------------------
 

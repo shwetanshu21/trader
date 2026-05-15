@@ -405,6 +405,59 @@ CREATE TABLE IF NOT EXISTS hybrid_score_components (
 
 CREATE INDEX IF NOT EXISTS idx_hybrid_components_summary ON hybrid_score_components(summary_id);
 CREATE INDEX IF NOT EXISTS idx_hybrid_components_order ON hybrid_score_components(summary_id, sort_order);
+
+-- S05: Strategy run — append-only replay-ready artifact for screening rounds
+CREATE TABLE IF NOT EXISTS strategy_runs (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  framework_config      TEXT    NOT NULL,
+  plugins_json          TEXT    NOT NULL,
+  plugin_errors_json    TEXT,
+  universe_snapshot_id  INTEGER REFERENCES universe_snapshots(id),
+  total_evaluated       INTEGER NOT NULL,
+  has_plugin_errors     INTEGER NOT NULL DEFAULT 0,
+  duration_ms           INTEGER NOT NULL,
+  created_at            INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_runs_created ON strategy_runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_strategy_runs_snapshot ON strategy_runs(universe_snapshot_id);
+
+-- S05: Strategy run candidates — one row per candidate identity within a run
+CREATE TABLE IF NOT EXISTS strategy_run_candidates (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_run_id       INTEGER NOT NULL REFERENCES strategy_runs(id),
+  candidate_key         TEXT    NOT NULL,
+  rank                  INTEGER NOT NULL,
+  exchange              TEXT    NOT NULL,
+  tradingsymbol         TEXT    NOT NULL,
+  instrument_token      INTEGER,
+  instrument_type       TEXT    NOT NULL DEFAULT 'EQ',
+  lot_size              INTEGER NOT NULL DEFAULT 1,
+  tick_size             REAL    NOT NULL DEFAULT 0.05,
+  side                  TEXT    NOT NULL,
+  last_price            REAL,
+  bid                   REAL,
+  ask                   REAL,
+  volume                INTEGER,
+  scores_json           TEXT    NOT NULL,
+  deterministic_score   REAL    NOT NULL,
+  llm_score             REAL,
+  llm_status            TEXT,
+  llm_rationale         TEXT,
+  merged_score          REAL    NOT NULL,
+  merge_policy          TEXT,
+  proposal_params_json  TEXT,
+  plugin_errors_json    TEXT,
+  has_plugin_errors     INTEGER NOT NULL DEFAULT 0,
+  emitted               INTEGER NOT NULL DEFAULT 0,
+  proposal_attempt_id   INTEGER REFERENCES proposal_attempts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_run ON strategy_run_candidates(strategy_run_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_rank ON strategy_run_candidates(strategy_run_id, rank);
+CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_key ON strategy_run_candidates(strategy_run_id, candidate_key);
+CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_proposal ON strategy_run_candidates(proposal_attempt_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_run_candidates_emitted ON strategy_run_candidates(strategy_run_id, emitted);
 `;
 
 export class DatabaseManager {
