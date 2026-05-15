@@ -1,4 +1,4 @@
-import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig, StrategyFrameworkConfig } from '../types/runtime.js';
 import { ExecutionMode } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -116,6 +116,9 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
   // ── EXECUTION MODE ─────────────────────────────────────────────────────
   const execution = parseExecutionConfig(env, errors);
 
+  // ── STRATEGY FRAMEWORK ────────────────────────────────────────────────
+  const strategy = parseStrategyFrameworkConfig(env, errors);
+
   // ── Fail on hard errors ─────────────────────────────────────────────────
   if (errors.length > 0) {
     const summary = errors.map(e => `  — ${e.field}: ${e.message}`).join('\n');
@@ -143,6 +146,7 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     zerodha: broker,
     proposalEngine,
     execution,
+    strategy,
   };
 }
 
@@ -531,6 +535,39 @@ function parseExecutionConfig(
         ? marketHoursStalenessMs
         : 120_000,
     },
+  };
+}
+
+/**
+ * Parse strategy framework configuration.
+ * TRADER_STRATEGY_MAX_CANDIDATES defaults to 5.
+ * TRADER_STRATEGY_PARALLEL_PLUGINS defaults to 'true'.
+ */
+function parseStrategyFrameworkConfig(
+  env: Record<string, string | undefined>,
+  errors: ConfigValidationError[],
+): StrategyFrameworkConfig {
+  // ── Max candidates per tick ─────────────────────────────────────────────
+  const maxRaw = env.TRADER_STRATEGY_MAX_CANDIDATES ?? '5';
+  const maxCandidates = Number(maxRaw);
+  if (!Number.isFinite(maxCandidates) || maxCandidates < 1 || maxCandidates > 100) {
+    errors.push({
+      field: 'TRADER_STRATEGY_MAX_CANDIDATES',
+      message: `Must be between 1 and 100, got "${maxRaw}". Defaulting to 5.`,
+      provided: maxRaw,
+    });
+  }
+  const resolvedMax = Number.isFinite(maxCandidates) && maxCandidates >= 1 && maxCandidates <= 100
+    ? maxCandidates
+    : 5;
+
+  // ── Parallel plugins ────────────────────────────────────────────────────
+  const parallelRaw = env.TRADER_STRATEGY_PARALLEL_PLUGINS?.toLowerCase() ?? 'true';
+  const parallelPlugins = parallelRaw !== 'false';
+
+  return {
+    maxCandidates: resolvedMax,
+    parallelPlugins,
   };
 }
 

@@ -75,6 +75,11 @@ export class ProposalSupervisor implements TickWork {
     clock: MarketClock;
     maxProposals?: number;
     universeService?: UniverseService | null;
+    /** Optional externally-constructed strategy coordinator. When provided,
+     *  the supervisor uses this coordinator instead of building one internally.
+     *  This is the production path — the runtime composition root constructs
+     *  and injects the coordinator. */
+    coordinator?: StrategyCoordinator;
     /** Optional additional strategy plugins beyond the default LLM ranking plugin. */
     additionalPlugins?: StrategyPlugin[];
   }) {
@@ -88,15 +93,20 @@ export class ProposalSupervisor implements TickWork {
     this._maxProposals = options.maxProposals ?? 5;
     this._universeService = options.universeService ?? null;
 
-    // Build the strategy coordinator with the LLM ranking plugin
-    const llmPlugin = new LlmRankingStrategy(this._engine);
-    const plugins = options.additionalPlugins
-      ? [llmPlugin, ...options.additionalPlugins]
-      : [llmPlugin];
+    // Use externally-constructed coordinator when provided (production path).
+    // Otherwise build one internally (backward compatibility for tests).
+    if (options.coordinator) {
+      this._coordinator = options.coordinator;
+    } else {
+      const llmPlugin = new LlmRankingStrategy(this._engine);
+      const plugins = options.additionalPlugins
+        ? [llmPlugin, ...options.additionalPlugins]
+        : [llmPlugin];
 
-    this._coordinator = new StrategyCoordinator(plugins, {
-      maxCandidates: this._maxProposals,
-    });
+      this._coordinator = new StrategyCoordinator(plugins, {
+        maxCandidates: this._maxProposals,
+      });
+    }
   }
 
   // ── TickWork ────────────────────────────────────────────────────────────

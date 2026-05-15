@@ -265,6 +265,8 @@ export interface RuntimeConfig {
   proposalEngine: ProposalEngineConfig | null;
   /** Execution mode config. Default: blocked. */
   execution: ExecutionConfig;
+  /** Strategy framework config. */
+  strategy: StrategyFrameworkConfig;
 }
 
 // ---------------------------------------------------------------------------

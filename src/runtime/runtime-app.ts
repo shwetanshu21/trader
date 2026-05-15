@@ -49,6 +49,8 @@ import {
   type StrategyEvaluationInput,
   type StrategyEvaluationResult,
 } from '../strategy-risk/strategy-risk-supervisor.js';
+import { StrategyCoordinator } from '../strategy/framework.js';
+import { LlmRankingStrategy } from '../strategy/llm-ranking-strategy.js';
 import { UniverseService } from '../universe/universe-service.js';
 import { UniverseSupervisor } from '../universe/universe-supervisor.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
@@ -272,6 +274,14 @@ export class RuntimeApp {
       const engine = new ProposalEngine(this.config.proposalEngine);
       const validator = new IndiaProposalValidator();
 
+      // Construct the pluggable strategy coordinator with the LLM ranking plugin
+      const llmPlugin = new LlmRankingStrategy(engine);
+      const strategyCfg = this.config.strategy ?? { maxCandidates: 5, parallelPlugins: true };
+      const strategyCoordinator = new StrategyCoordinator(
+        [llmPlugin],
+        { maxCandidates: strategyCfg.maxCandidates },
+      );
+
       proposalSupervisor = new ProposalSupervisor({
         engine,
         validator,
@@ -282,6 +292,7 @@ export class RuntimeApp {
         clock,
         maxProposals: this.config.proposalEngine.maxProposalsPerTick,
         universeService,
+        coordinator: strategyCoordinator,
       });
 
       // Build ModeAwareExecutionService with the configured mode
