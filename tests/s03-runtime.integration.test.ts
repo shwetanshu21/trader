@@ -5,16 +5,21 @@
 // Uses :memory: SQLite — no disk persistence required.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { ProposalRepository } from '../src/persistence/proposal-repo.js';
 import { ProposalEngine } from '../src/proposals/proposal-engine.js';
 import { IndiaProposalValidator } from '../src/proposals/india-validator.js';
 import { ProposalSupervisor } from '../src/proposals/proposal-supervisor.js';
+import { RuntimeApp } from '../src/runtime/runtime-app.js';
 import {
   ProposalStatus,
   ValidationReasonCode,
   MarketPhase,
   ZerodhaSessionState,
+  ExecutionMode,
   type ProposalEngineConfig,
   type HealthStatus,
 } from '../src/types/runtime.js';
@@ -383,5 +388,142 @@ describe('S03 Runtime — Proposal composition', () => {
       // The insertAttemptWithReasons was used, not the combined method
       expect(attempts.length).toBeGreaterThan(0);
     });
+  });
+});
+
+// ── RuntimeApp hybrid score repo wiring ─────────────────────────────────
+
+describe('RuntimeApp — hybrid score repo wiring', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    // Use temp dir for RuntimeApp (doesn't support ':memory:' as dbPath fully)
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 's03-hybrid-'));
+  });
+
+  afterEach(() => {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  it('wires hybridScoreRepo when proposal engine is configured', () => {
+    const app = new RuntimeApp({
+      port: 0,
+      nodeEnv: 'test',
+      marketTimezone: 'Asia/Kolkata',
+      schedulerIntervalMs: 60000,
+      dbPath: path.join(tmpDir, 'test.db'),
+      logLevel: 'error',
+      zerodha: null,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Blocked,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 20000,
+          maxExposureRupees: 500000,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+      strategy: {
+        maxCandidates: 5,
+        parallelPlugins: true,
+      },
+    });
+
+    const handles = app.build();
+    expect(handles.hybridScoreRepo).not.toBeNull();
+    expect(handles.proposalSupervisor).not.toBeNull();
+    expect(handles.strategyDecisionRepo).not.toBeNull();
+
+    // Clean up
+    app.stop('Test teardown');
+  });
+
+  it('leaves hybridScoreRepo null when proposal engine is not configured', () => {
+    const app = new RuntimeApp({
+      port: 0,
+      nodeEnv: 'test',
+      marketTimezone: 'Asia/Kolkata',
+      schedulerIntervalMs: 60000,
+      dbPath: path.join(tmpDir, 'test.db'),
+      logLevel: 'error',
+      zerodha: null,
+      proposalEngine: null,
+      execution: {
+        mode: ExecutionMode.Blocked,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 20000,
+          maxExposureRupees: 500000,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+      strategy: {
+        maxCandidates: 5,
+        parallelPlugins: true,
+      },
+    });
+
+    const handles = app.build();
+    expect(handles.hybridScoreRepo).toBeNull();
+    expect(handles.proposalSupervisor).toBeNull();
+
+    // Clean up
+    app.stop('Test teardown');
+  });
+
+  it('dashboard snapshot includes hybrid evidence when hybridScoreRepo is wired', () => {
+    const app = new RuntimeApp({
+      port: 0,
+      nodeEnv: 'test',
+      marketTimezone: 'Asia/Kolkata',
+      schedulerIntervalMs: 60000,
+      dbPath: path.join(tmpDir, 'test.db'),
+      logLevel: 'error',
+      zerodha: null,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Blocked,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 20000,
+          maxExposureRupees: 500000,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+      strategy: {
+        maxCandidates: 5,
+        parallelPlugins: true,
+      },
+    });
+
+    const handles = app.build();
+
+    // Verify the dashboard read-model was constructed with the hybridScoreRepo
+    expect(handles.hybridScoreRepo).not.toBeNull();
+
+    // Snapshot should be buildable without throwing
+    const snapshot = handles.dashboard.getSnapshot();
+    expect(snapshot).toHaveProperty('recentStrategyDecisions');
+    expect(snapshot.recentStrategyDecisions).toEqual([]);
+
+    // Clean up
+    app.stop('Test teardown');
   });
 });

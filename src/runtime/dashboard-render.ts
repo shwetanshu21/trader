@@ -149,8 +149,11 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
             <span class="score">D:${(d.hybrid.deterministicScore * 100).toFixed(0)}%</span>
             <span class="score">M:${(d.hybrid.mergedScore * 100).toFixed(0)}%</span>
             ${d.hybrid.llmScore != null ? `<span class="score llm">L:${(d.hybrid.llmScore * 100).toFixed(0)}%</span>` : `<span class="score muted">L:—</span>`}
+            <span class="score policy">${escapeHtml(d.hybrid.mergePolicy)}</span>
             ${d.hybrid.isDowngraded ? `<span class="downgrade-badge" title="${escapeHtml(d.hybrid.downgradeContext ?? '')}">▼ downgraded</span>` : ''}
-            ${d.hybrid.downgradeContext && !d.hybrid.isDowngraded ? `<span class="hybrid-note">${escapeHtml(d.hybrid.downgradeContext)}</span>` : ''}
+            ${d.hybrid.components.length > 0 ? `<div class="hybrid-comps">${d.hybrid.components.map(c => `<span class="comp">${escapeHtml(c.componentName)}:${(c.score * 100).toFixed(0)}%</span>`).join('')}</div>` : ''}
+            ${d.hybrid.llmRationale ? `<div class="hybrid-rationale">${escapeHtml(d.hybrid.llmRationale)}</div>` : ''}
+            ${d.hybrid.downgradeContext && !d.hybrid.isDowngraded ? `<div class="hybrid-note">${escapeHtml(d.hybrid.downgradeContext)}</div>` : ''}
           </div>`
         : '<span class="muted">—</span>';
       return `<tr>
@@ -350,7 +353,11 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
   .hybrid-block { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
   .score { display: inline-block; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.75rem; background: #1e3a5f; color: #93c5fd; font-variant-numeric: tabular-nums; }
   .score.llm { background: #3b1f5e; color: #c4b5fd; }
+  .score.policy { background: #1a3a2a; color: #6ee7b7; }
   .downgrade-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.7rem; background: #7f1d1d; color: #fca5a5; cursor: help; }
+  .hybrid-comps { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-top: 0.15rem; }
+  .hybrid-comps .comp { display: inline-block; padding: 0.05rem 0.3rem; border-radius: 0.2rem; font-size: 0.65rem; background: #1e293b; color: #94a3b8; }
+  .hybrid-rationale { font-size: 0.7rem; color: #a78bfa; margin-top: 0.1rem; }
   .hybrid-note { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.7rem; background: #1e3a5f; color: #93c5fd; }
   code { background: #0f172a; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.8rem; }
   ul { list-style: none; padding: 0; }

@@ -43,6 +43,7 @@ import { PaperOrderRepository } from '../persistence/paper-order-repo.js';
 import { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import { PaperPositionRepository } from '../persistence/paper-position-repo.js';
 import { BlockedExecutionAdapter, LiveExecutionAdapter } from '../execution/execution-adapters.js';
+import { HybridScoreRepository } from '../persistence/hybrid-score-repo.js';
 import {
   StrategyRiskSupervisor,
   type StrategyRiskPort,
@@ -71,6 +72,7 @@ export interface RuntimeAppHandles {
   proposalRepo: ProposalRepository | null;
   blockedOrderRepo: BlockedOrderRepository | null;
   strategyDecisionRepo: StrategyDecisionRepository | null;
+  hybridScoreRepo: HybridScoreRepository | null;
   executionAttemptRepo: ExecutionAttemptRepository | null;
   executionService: ModeAwareExecutionService | null;
   lifecycle: LifecycleManager;
@@ -257,6 +259,7 @@ export class RuntimeApp {
     let executionGateSupervisor: ExecutionGateSupervisor | null = null;
     let strategyRiskSupervisor: StrategyRiskSupervisor | null = null;
     let strategyDecisionRepo: StrategyDecisionRepository | null = null;
+    let hybridScoreRepo: HybridScoreRepository | null = null;
     let executionService: ModeAwareExecutionService | null = null;
     let riskRepo: ExecutionRiskRepository | null = null;
     let riskGuard: ExecutionRiskGuard | null = null;
@@ -271,6 +274,7 @@ export class RuntimeApp {
       proposalRepo = new ProposalRepository(dbManager.db);
       blockedOrderRepo = new BlockedOrderRepository(dbManager.db);
       strategyDecisionRepo = new StrategyDecisionRepository(dbManager.db);
+      hybridScoreRepo = new HybridScoreRepository(dbManager.db);
       const engine = new ProposalEngine(this.config.proposalEngine);
       const validator = new IndiaProposalValidator();
 
@@ -293,6 +297,7 @@ export class RuntimeApp {
         maxProposals: this.config.proposalEngine.maxProposalsPerTick,
         universeService,
         coordinator: strategyCoordinator,
+        hybridScoreRepo,
       });
 
       // Build ModeAwareExecutionService with the configured mode
@@ -360,7 +365,7 @@ export class RuntimeApp {
       logBoot('Proposal engine: not configured (proposal generation disabled)');
     }
 
-    // ── Phase 7: build scheduler with ordered tick work ──────────────────
+    // ── Phase 7: build scheduler with ordered tick work ────────────────── ──────────────────
     // Order: broker -> universe -> proposal -> strategy-risk -> execution gate
     const tickWork = [
       ...(brokerSupervisor ? [brokerSupervisor] : []),
@@ -380,7 +385,7 @@ export class RuntimeApp {
       tickWork,
     });
 
-    // ── Phase 7: create dashboard read-model ──────────────────────────────
+    // ── Phase 8: create dashboard read-model ──────────────────────────────
     const dashboard = new DashboardReadModel({
       healthService,
       runtimeStateRepo,
@@ -396,9 +401,10 @@ export class RuntimeApp {
       paperFillRepo: fillRepo,
       paperPositionRepo: positionRepo,
       riskRepo,
+      hybridScoreRepo,
     });
 
-    // ── Phase 8: create health HTTP server with dashboard routes ───────────
+    // ── Phase 9: create health HTTP server with dashboard routes ───────────
     const server = createHealthServer(healthService, scheduler, telemetry, dbManager, dashboard, this.config.execution.operatorBindHost);
 
     // Build handles
@@ -413,6 +419,7 @@ export class RuntimeApp {
       proposalRepo,
       blockedOrderRepo,
       strategyDecisionRepo,
+      hybridScoreRepo,
       executionAttemptRepo,
       executionService,
       lifecycle,

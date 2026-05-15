@@ -2082,6 +2082,254 @@ describe('Dashboard renderer — HTML escaping', () => {
 
   // ── Risk state rendering ────────────────────────────────────────────────
 
+  // ── Hybrid evidence rendering ──────────────────────────────────────────
+
+  describe('Dashboard renderer — hybrid evidence rendering', () => {
+    it('renders merge policy badge', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test Market', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [
+          {
+            id: 1, proposalAttemptId: 1, decisionStatus: 'approved',
+            strategyId: 'test', strategyVersion: '1.0.0',
+            decidedAt: '2025-01-01T00:00:00.000Z',
+            exchange: 'NSE', tradingsymbol: 'RELIANCE', side: 'buy',
+            product: 'MIS', quantity: 75, price: null, triggerPrice: null,
+            orderType: 'MARKET', notional: 213787.50, sizingBasis: 'last_price',
+            exposureTag: 'intraday', lastPrice: 2850.50, reasons: [],
+            hybrid: {
+              deterministicScore: 0.80,
+              llmScore: 0.70,
+              llmStatus: 'consulted',
+              llmRationale: 'Good momentum',
+              mergedScore: 0.75,
+              mergePolicy: 'average',
+              components: [
+                { componentName: 'momentum', score: 0.8, weight: 0.5 },
+                { componentName: 'volume', score: 0.7, weight: 0.3 },
+              ],
+              isDowngraded: false,
+              downgradeContext: null,
+            },
+          },
+        ],
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('average');
+      expect(html).toContain('D:80%');
+      expect(html).toContain('L:70%');
+      expect(html).toContain('M:75%');
+    });
+
+    it('renders component summary', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [
+          {
+            id: 1, proposalAttemptId: 1, decisionStatus: 'approved',
+            strategyId: 'test', strategyVersion: '1.0.0',
+            decidedAt: '2025-01-01T00:00:00.000Z',
+            exchange: 'NSE', tradingsymbol: 'TCS', side: 'buy',
+            product: 'MIS', quantity: 1, price: null, triggerPrice: null,
+            orderType: 'MARKET', notional: 3000, sizingBasis: 'last_price',
+            exposureTag: 'intraday', lastPrice: 3000, reasons: [],
+            hybrid: {
+              deterministicScore: 0.75,
+              llmScore: null,
+              llmStatus: 'skipped',
+              llmRationale: null,
+              mergedScore: 0.75,
+              mergePolicy: 'deterministic_only',
+              components: [
+                { componentName: 'momentum', score: 0.8, weight: 0.5 },
+                { componentName: 'volume', score: 0.7, weight: 0.3 },
+                { componentName: 'volatility', score: 0.65, weight: 0.2 },
+              ],
+              isDowngraded: false,
+              downgradeContext: null,
+            },
+          },
+        ],
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      // All three component scores should be rendered
+      expect(html).toContain('momentum:80%');
+      expect(html).toContain('volume:70%');
+      expect(html).toContain('volatility:65%');
+    });
+
+    it('renders LLM rationale when present', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [
+          {
+            id: 1, proposalAttemptId: 1, decisionStatus: 'approved',
+            strategyId: 'test', strategyVersion: '1.0.0',
+            decidedAt: '2025-01-01T00:00:00.000Z',
+            exchange: 'NSE', tradingsymbol: 'INFY', side: 'buy',
+            product: 'MIS', quantity: 1, price: null, triggerPrice: null,
+            orderType: 'MARKET', notional: 1500, sizingBasis: 'last_price',
+            exposureTag: 'intraday', lastPrice: 1500, reasons: [],
+            hybrid: {
+              deterministicScore: 0.80,
+              llmScore: 0.70,
+              llmStatus: 'consulted',
+              llmRationale: 'Strong fundamentals, decent technicals',
+              mergedScore: 0.75,
+              mergePolicy: 'average',
+              components: [],
+              isDowngraded: false,
+              downgradeContext: null,
+            },
+          },
+        ],
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('Strong fundamentals, decent technicals');
+    });
+
+    it('shows "—" when hybrid is null', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [
+          {
+            id: 1, proposalAttemptId: 1, decisionStatus: 'approved',
+            strategyId: 'test', strategyVersion: '1.0.0',
+            decidedAt: '2025-01-01T00:00:00.000Z',
+            exchange: 'NSE', tradingsymbol: 'TCS', side: 'buy',
+            product: 'MIS', quantity: 1, price: null, triggerPrice: null,
+            orderType: 'MARKET', notional: 3000, sizingBasis: 'last_price',
+            exposureTag: 'intraday', lastPrice: 3000, reasons: [],
+            hybrid: null,
+          },
+        ],
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('&mdash;');
+    });
+
+    it('renders downgrade badge with tooltip when downgraded', async () => {
+      const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
+      const snapshot: DashboardSnapshot = {
+        assembledAt: '2025-01-01T00:00:00.000Z',
+        marketProfile: {
+          marketId: 'TEST', displayName: 'Test', timezone: 'UTC',
+          currentPhase: 'closed', isTradingDay: false, settlementCycle: 'T+1',
+        },
+        health: {
+          verdict: 'healthy', uptimeMs: 1000, lifecycleState: 'running',
+          degradedReasons: [], checkedAt: '2025-01-01T00:00:00.000Z',
+        },
+        runtime: {
+          schedulerStatus: 'idle', marketPhase: 'closed',
+          lastTickTimestamp: null, startedAt: null, tickCount: 0, lastError: null,
+        },
+        broker: null,
+        recentProposals: [],
+        recentBlockedOrders: [],
+        recentLifecycleEvents: [],
+        recentStrategyDecisions: [
+          {
+            id: 1, proposalAttemptId: 1, decisionStatus: 'approved',
+            strategyId: 'test', strategyVersion: '1.0.0',
+            decidedAt: '2025-01-01T00:00:00.000Z',
+            exchange: 'NSE', tradingsymbol: 'SBIN', side: 'buy',
+            product: 'MIS', quantity: 1, price: null, triggerPrice: null,
+            orderType: 'MARKET', notional: 600, sizingBasis: 'last_price',
+            exposureTag: 'intraday', lastPrice: 600, reasons: [],
+            hybrid: {
+              deterministicScore: 0.90,
+              llmScore: 0.50,
+              llmStatus: 'consulted',
+              llmRationale: null,
+              mergedScore: 0.70,
+              mergePolicy: 'average',
+              components: [],
+              isDowngraded: true,
+              downgradeContext: 'LLM score (50.0%) is 40.0% below deterministic score (90.0%)',
+            },
+          },
+        ],
+      };
+
+      const html = renderDashboardHtml(snapshot);
+      expect(html).toContain('▼ downgraded');
+      expect(html).toContain('LLM score (50.0%) is 40.0% below deterministic score (90.0%)');
+    });
+  });
+
   describe('Dashboard renderer — risk state rendering', () => {
     it('renders risk state section when riskState is present', async () => {
       const { renderDashboardHtml } = await import('../src/runtime/dashboard-render.js');
@@ -2888,6 +3136,82 @@ describe('Health server — hybrid evidence on strategy surfaces', () => {
 
       const res = await fetchUrl(ctx.server, '/dashboard');
       expect(res.body).toContain('▼ downgraded');
+    });
+
+    it('shows merge policy badge in HTML', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        mergePolicy: MergePolicy.Average,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('average');
+    });
+
+    it('shows component summary in HTML', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        components: [
+          { componentName: 'momentum', score: 0.8, weight: 0.5, sortOrder: 0 },
+          { componentName: 'volume', score: 0.7, weight: 0.3, sortOrder: 1 },
+        ],
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('momentum:80%');
+      expect(res.body).toContain('volume:70%');
+    });
+
+    it('shows LLM rationale in HTML when present', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'HDFC' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'HDFC',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.80,
+        llmScore: 0.70,
+        llmStatus: LLMStatus.Consulted,
+        llmRationale: 'Strong fundamentals, weak technicals',
+        mergedScore: 0.75,
+        mergePolicy: MergePolicy.Average,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Strong fundamentals, weak technicals');
+    });
+
+    it('escapes HTML in component names and LLM rationale', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'SBIN' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'SBIN',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+      seedHybridScore(ctx.hybridScoreRepo, proposal.id, {
+        deterministicScore: 0.75,
+        llmScore: 0.70,
+        llmStatus: LLMStatus.Consulted,
+        llmRationale: 'Score < 0.8 & reason > "limit"',
+        mergedScore: 0.72,
+        mergePolicy: MergePolicy.Average,
+        components: [
+          { componentName: 'momentum<test>', score: 0.8, weight: 0.5, sortOrder: 0 },
+        ],
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('momentum&lt;test&gt;');
+      expect(res.body).not.toContain('<test>');
+      expect(res.body).toContain('Score &lt; 0.8 &amp; reason &gt;');
+      expect(res.body).not.toContain('Score < 0.8');
     });
 
     it('does NOT include secret material in HTML with hybrid evidence', async () => {
