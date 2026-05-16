@@ -602,6 +602,39 @@ CREATE TABLE IF NOT EXISTS walk_forward_winners (
 CREATE INDEX IF NOT EXISTS idx_wf_winners_run ON walk_forward_winners(run_id);
 CREATE INDEX IF NOT EXISTS idx_wf_winners_result ON walk_forward_winners(result);
 CREATE INDEX IF NOT EXISTS idx_wf_winners_trial ON walk_forward_winners(selected_trial_id);
+
+-- M006/S01: Strategy lifecycle state — current-phase singleton per strategy identity
+CREATE TABLE IF NOT EXISTS strategy_lifecycle_state (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_id       TEXT    NOT NULL,
+  strategy_version  TEXT    NOT NULL,
+  market_id         TEXT    NOT NULL,
+  phase             TEXT    NOT NULL DEFAULT 'backtest',
+  updated_at        INTEGER NOT NULL,
+  UNIQUE(strategy_id, strategy_version, market_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lifecycle_state_identity ON strategy_lifecycle_state(strategy_id, strategy_version, market_id);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_state_phase ON strategy_lifecycle_state(phase);
+
+-- M006/S01: Governance decisions — append-only log
+CREATE TABLE IF NOT EXISTS governance_decisions (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_id       TEXT    NOT NULL,
+  strategy_version  TEXT    NOT NULL,
+  market_id         TEXT    NOT NULL,
+  verdict           TEXT    NOT NULL,
+  previous_phase    TEXT    NOT NULL,
+  new_phase         TEXT    NOT NULL,
+  rationale         TEXT    NOT NULL DEFAULT '',
+  evidence_json     TEXT,
+  winner_id         INTEGER REFERENCES walk_forward_winners(id),
+  recorded_at       INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gov_decisions_identity ON governance_decisions(strategy_id, strategy_version, market_id);
+CREATE INDEX IF NOT EXISTS idx_gov_decisions_recorded ON governance_decisions(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_gov_decisions_verdict ON governance_decisions(verdict);
 `;
 
 export class DatabaseManager {

@@ -2120,8 +2120,160 @@ export interface HybridCoordinatorResult {
   totalEvaluated: number;
   /** Whether any plugin errors occurred across all candidates. */
   hasPluginErrors: boolean;
-  /** Plugin errors keyed by plugin ID, across all candidates. */
-  pluginErrors: Record<string, string>;
   /** Total wall-clock duration of the evaluation round in ms. */
   durationMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Strategy lifecycle governance — DTOs for M006 lifecycle phase management
+// ---------------------------------------------------------------------------
+
+/**
+ * Ordered lifecycle phase for a strategy.
+ *
+ * Each phase acts as an execution ceiling beneath the global execution mode:
+ * - `backtest`: Strategy is in backtest/validation — no execution allowed.
+ * - `paper`: Strategy may execute via paper broker only.
+ * - `live`: Strategy may execute via live broker (subject to global mode cap).
+ *
+ * Ordering: backtest (0) < paper (1) < live (2).
+ * A strategy's effective execution ceiling is MIN(globalMode, lifecyclePhase).
+ */
+export enum StrategyLifecyclePhase {
+  /** Default starting phase — backtest only, no execution beyond data collection. */
+  Backtest = 'backtest',
+  /** Approved for paper trading — paper execution only. */
+  Paper = 'paper',
+  /** Approved for live trading — subject to global execution mode cap. */
+  Live = 'live',
+}
+
+/**
+ * Governance verdict for a strategy promotion evaluation.
+ *
+ * - `hold`: Do not promote — keep the current lifecycle phase.
+ * - `promote`: Advance the strategy to the next lifecycle phase.
+ */
+export enum GovernanceVerdict {
+  /** Keep the current lifecycle phase — promotion criteria not met. */
+  Hold = 'hold',
+  /** Advance to the next lifecycle phase — promotion criteria met. */
+  Promote = 'promote',
+}
+
+/**
+ * Persisted current-state row for a strategy's lifecycle phase.
+ *
+ * One row per (strategyId, strategyVersion, marketId) composite identity.
+ * Uses ON CONFLICT REPLACE for upsert semantics.
+ */
+export interface StrategyLifecycleStateRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Strategy identity (e.g. 'india-nse-eq-v1'). */
+  strategyId: string;
+  /** Strategy version (e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** Market profile ID (e.g. 'INDIA_NSE_EQ'). */
+  marketId: string;
+  /** Current lifecycle phase. */
+  phase: StrategyLifecyclePhase;
+  /** Unix timestamp (ms) when this row was last updated. */
+  updatedAt: number;
+}
+
+/** Shape for upserting a strategy lifecycle state (without id). */
+export interface NewStrategyLifecycleState {
+  strategyId: string;
+  strategyVersion: string;
+  marketId: string;
+  phase: StrategyLifecyclePhase;
+  updatedAt: number;
+}
+
+/**
+ * Append-only governance decision row.
+ *
+ * Each governance evaluation produces one row, keyed by strategy identity
+ * and recorded-at. Carries verdict, phase transition context, rationale,
+ * and an evidence snapshot (JSON) of the threshold/scores that informed
+ * the decision — enabling historical audit of why promotions were held or granted.
+ */
+export interface GovernanceDecisionRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Strategy identity (e.g. 'india-nse-eq-v1'). */
+  strategyId: string;
+  /** Strategy version (e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** Market profile ID (e.g. 'INDIA_NSE_EQ'). */
+  marketId: string;
+  /** Governance verdict. */
+  verdict: GovernanceVerdict;
+  /** Strategy lifecycle phase before this governance evaluation. */
+  previousPhase: StrategyLifecyclePhase;
+  /** Strategy lifecycle phase after this governance evaluation. */
+  newPhase: StrategyLifecyclePhase;
+  /** Human-readable rationale explaining the verdict. */
+  rationale: string;
+  /** Evidence snapshot — JSON blob of threshold config values, scores, and supporting data. */
+  evidenceJson: string | null;
+  /** Optional FK → walk_forward_winners(id). Set when the evaluation references a walk-forward winner. */
+  winnerId: number | null;
+  /** Unix timestamp (ms) when this decision was recorded. */
+  recordedAt: number;
+}
+
+/** Shape for inserting a new governance decision (without id). */
+export interface NewGovernanceDecision {
+  strategyId: string;
+  strategyVersion: string;
+  marketId: string;
+  verdict: GovernanceVerdict;
+  previousPhase: StrategyLifecyclePhase;
+  newPhase: StrategyLifecyclePhase;
+  rationale: string;
+  evidenceJson: string | null;
+  winnerId: number | null;
+  recordedAt: number;
+}
+
+/**
+ * Threshold configuration for the first governance promotion rule set.
+ *
+ * Governs whether a strategy may be promoted from backtest → paper or
+ * paper → live based on walk-forward winner evidence.
+ */
+export interface GovernanceThresholdConfig {
+  /** Minimum merged score (0–1) required for promotion. Default: 0.7. */
+  minMergedScore: number;
+  /** Minimum Sharpe ratio required for promotion. Default: 1.0. */
+  minSharpeRatio: number;
+  /** Maximum allowed drawdown percentage (0–100). Default: 30. */
+  maxDrawdown: number;
+  /** Minimum number of walk-forward windows with evidence. Default: 2. */
+  minWindowCount: number;
+  /** Minimum number of out-of-sample windows with evidence. Default: 1. */
+  minOutOfSampleWindows: number;
+}
+
+/**
+ * Default promotion threshold configuration.
+ */
+export const DEFAULT_GOVERNANCE_THRESHOLDS: GovernanceThresholdConfig = {
+  minMergedScore: 0.7,
+  minSharpeRatio: 1.0,
+  maxDrawdown: 30,
+  minWindowCount: 2,
+  minOutOfSampleWindows: 1,
+};
+
+/** Extended strategy framework config with promotion governance settings. */
+export interface StrategyFrameworkConfig {
+  /** Maximum number of ranked candidates to include in the result. */
+  maxCandidates: number;
+  /** When true, plugins run in parallel. When false, sequential (default: true). */
+  parallelPlugins: boolean;
+  /** Promotion governance threshold configuration. */
+  promotion: GovernanceThresholdConfig;
 }

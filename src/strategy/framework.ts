@@ -24,6 +24,7 @@
 import {
   LLMStatus,
   MergePolicy,
+  DEFAULT_GOVERNANCE_THRESHOLDS,
   type BoundedCandidate,
   type RankedCandidate,
   type CoordinatorResult,
@@ -43,6 +44,7 @@ import type { LlmEvaluationResult } from './llm-ranking-strategy.js';
 export const DEFAULT_FRAMEWORK_CONFIG: StrategyFrameworkConfig = {
   maxCandidates: 5,
   parallelPlugins: true,
+  promotion: { ...DEFAULT_GOVERNANCE_THRESHOLDS },
 };
 
 // ---------------------------------------------------------------------------

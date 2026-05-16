@@ -1,5 +1,5 @@
-import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig, StrategyFrameworkConfig } from '../types/runtime.js';
-import { ExecutionMode } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig, StrategyFrameworkConfig, GovernanceThresholdConfig } from '../types/runtime.js';
+import { ExecutionMode, DEFAULT_GOVERNANCE_THRESHOLDS } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Parsed env accessor — reads `process.env` once at startup.
@@ -565,10 +565,103 @@ function parseStrategyFrameworkConfig(
   const parallelRaw = env.TRADER_STRATEGY_PARALLEL_PLUGINS?.toLowerCase() ?? 'true';
   const parallelPlugins = parallelRaw !== 'false';
 
+  // ── Promotion governance thresholds ─────────────────────────────────────
+  const promotion = parseGovernanceThresholds(env, errors);
+
   return {
     maxCandidates: resolvedMax,
     parallelPlugins,
+    promotion,
   };
+}
+
+/**
+ * Parse promotion governance threshold configuration from environment variables.
+ *
+ * All thresholds are optional and fall back to DEFAULT_GOVERNANCE_THRESHOLDS.
+ */
+function parseGovernanceThresholds(
+  env: Record<string, string | undefined>,
+  errors: ConfigValidationError[],
+): GovernanceThresholdConfig {
+  const thresholds: GovernanceThresholdConfig = { ...DEFAULT_GOVERNANCE_THRESHOLDS };
+
+  // ── Min merged score (0–1) ──────────────────────────────────────────────
+  const mergedScoreRaw = env.TRADER_STRATEGY_PROMOTION_MIN_MERGED_SCORE;
+  if (mergedScoreRaw !== undefined) {
+    const val = Number(mergedScoreRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 1) {
+      errors.push({
+        field: 'TRADER_STRATEGY_PROMOTION_MIN_MERGED_SCORE',
+        message: `Must be between 0 and 1, got "${mergedScoreRaw}". Defaulting to ${thresholds.minMergedScore}.`,
+        provided: mergedScoreRaw,
+      });
+    } else {
+      thresholds.minMergedScore = val;
+    }
+  }
+
+  // ── Min Sharpe ratio ────────────────────────────────────────────────────
+  const sharpeRaw = env.TRADER_STRATEGY_PROMOTION_MIN_SHARPE_RATIO;
+  if (sharpeRaw !== undefined) {
+    const val = Number(sharpeRaw);
+    if (!Number.isFinite(val) || val < -10 || val > 10) {
+      errors.push({
+        field: 'TRADER_STRATEGY_PROMOTION_MIN_SHARPE_RATIO',
+        message: `Must be between -10 and 10, got "${sharpeRaw}". Defaulting to ${thresholds.minSharpeRatio}.`,
+        provided: sharpeRaw,
+      });
+    } else {
+      thresholds.minSharpeRatio = val;
+    }
+  }
+
+  // ── Max drawdown (0–100) ────────────────────────────────────────────────
+  const ddRaw = env.TRADER_STRATEGY_PROMOTION_MAX_DRAWDOWN;
+  if (ddRaw !== undefined) {
+    const val = Number(ddRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 100) {
+      errors.push({
+        field: 'TRADER_STRATEGY_PROMOTION_MAX_DRAWDOWN',
+        message: `Must be between 0 and 100, got "${ddRaw}". Defaulting to ${thresholds.maxDrawdown}.`,
+        provided: ddRaw,
+      });
+    } else {
+      thresholds.maxDrawdown = val;
+    }
+  }
+
+  // ── Min window count ────────────────────────────────────────────────────
+  const winCountRaw = env.TRADER_STRATEGY_PROMOTION_MIN_WINDOW_COUNT;
+  if (winCountRaw !== undefined) {
+    const val = Number(winCountRaw);
+    if (!Number.isFinite(val) || val < 1 || val > 1000) {
+      errors.push({
+        field: 'TRADER_STRATEGY_PROMOTION_MIN_WINDOW_COUNT',
+        message: `Must be between 1 and 1000, got "${winCountRaw}". Defaulting to ${thresholds.minWindowCount}.`,
+        provided: winCountRaw,
+      });
+    } else {
+      thresholds.minWindowCount = val;
+    }
+  }
+
+  // ── Min out-of-sample windows ───────────────────────────────────────────
+  const oosRaw = env.TRADER_STRATEGY_PROMOTION_MIN_OUT_OF_SAMPLE_WINDOWS;
+  if (oosRaw !== undefined) {
+    const val = Number(oosRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 1000) {
+      errors.push({
+        field: 'TRADER_STRATEGY_PROMOTION_MIN_OUT_OF_SAMPLE_WINDOWS',
+        message: `Must be between 0 and 1000, got "${oosRaw}". Defaulting to ${thresholds.minOutOfSampleWindows}.`,
+        provided: oosRaw,
+      });
+    } else {
+      thresholds.minOutOfSampleWindows = val;
+    }
+  }
+
+  return thresholds;
 }
 
 export class ConfigValidationErrorImpl extends Error {
