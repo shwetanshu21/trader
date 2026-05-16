@@ -6,6 +6,7 @@ const UPSTOX_API_BASE_URL = 'https://api.upstox.com';
 const UPSTOX_PROFILE_URL = `${UPSTOX_API_BASE_URL}/v2/user/profile`;
 const UPSTOX_FULL_QUOTES_URL = `${UPSTOX_API_BASE_URL}/v2/market-quote/quotes`;
 const UPSTOX_INSTRUMENTS_URL = 'https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz';
+const UPSTOX_HISTORICAL_CANDLES_URL = `${UPSTOX_API_BASE_URL}/v2/historical-candles`;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_INSTRUMENT_CACHE_MS = 60 * 60 * 1000;
@@ -41,6 +42,14 @@ export interface UpstoxInstrumentRecord {
 export interface UpstoxQuoteResponse {
   status: string;
   data: Record<string, Record<string, unknown>>;
+}
+
+/** [timestamp_ms, open, high, low, close, volume, open_interest] */
+export type UpstoxHistoricalCandle = [number, number, number, number, number, number, number];
+
+export interface UpstoxHistoricalCandlesResponse {
+  status: string;
+  data: { candles: UpstoxHistoricalCandle[] };
 }
 
 export interface UpstoxRestClientStatus {
@@ -117,6 +126,19 @@ export class UpstoxRestClient {
     });
     this._lastQuoteFetchAt = Date.now();
     return data;
+  }
+
+  async fetchHistoricalCandles(
+    instrumentKey: string,
+    interval: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<UpstoxHistoricalCandlesResponse> {
+    const token = readUpstoxTokenRecord();
+    const url = `${UPSTOX_HISTORICAL_CANDLES_URL}/${instrumentKey}/${interval}/${toDate}/${fromDate}`;
+    return this._fetchJson<UpstoxHistoricalCandlesResponse>(url, {
+      headers: authHeaders(token.accessToken),
+    });
   }
 
   private async _getInstrumentCache(): Promise<UpstoxInstrumentRecord[]> {

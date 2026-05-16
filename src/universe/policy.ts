@@ -27,75 +27,22 @@ import {
 const POLICY_VERSION = '1.0.0';
 
 // ---------------------------------------------------------------------------
-// NSE EQ Allowlist — actively traded equities
+// NSE EQ Allowlist — all NSE equities
 // ---------------------------------------------------------------------------
-// Sourced from NSE 50-index constituents plus liquid additional symbols.
-// Sorted alphabetically for deterministic ordering.
+// Sentinel value '*' means all NSE EQ instruments synced from the broker
+// are eligible. The UniverseService resolves this to the full instrument set
+// at snapshot computation time.
 
-const NSE_EQ_ALLOWLIST: string[] = [
-  'ADANIENT',
-  'ADANIPORTS',
-  'APOLLOHOSP',
-  'ASIANPAINT',
-  'AXISBANK',
-  'BAJAJ-AUTO',
-  'BAJFINANCE',
-  'BAJAJFINSV',
-  'BEL',
-  'BHARTIARTL',
-  'BPCL',
-  'BRITANNIA',
-  'CIPLA',
-  'COALINDIA',
-  'DIVISLAB',
-  'DRREDDY',
-  'EICHERMOT',
-  'GRASIM',
-  'HCLTECH',
-  'HDFCBANK',
-  'HDFCLIFE',
-  'HEROMOTOCO',
-  'HINDALCO',
-  'HINDUSTAN_UNILEVER',
-  'ICICIBANK',
-  'INDUSINDBK',
-  'INFY',
-  'ITC',
-  'JSW_STEEL',
-  'KOTAKBANK',
-  'LT',
-  'M&M',
-  'MARUTI',
-  'NESTLEIND',
-  'NTPC',
-  'ONGC',
-  'POWERGRID',
-  'RELIANCE',
-  'SBILIFE',
-  'SBIN',
-  'SHRIRAMFIN',
-  'SUNPHARMA',
-  'TATACONSUM',
-  'TATAMOTORS',
-  'TATASTEEL',
-  'TCS',
-  'TECHM',
-  'TITAN',
-  'ULTRACEMCO',
-  'WIPRO',
-];
+const NSE_EQ_ALLOWLIST: string[] = ['*'];
 
 // ---------------------------------------------------------------------------
-// NFO FUT Allowlist — actively traded futures (top NSE 50 underlyings)
+// NFO FUT Allowlist — all F&O futures
 // ---------------------------------------------------------------------------
-// Futures symbols typically follow the pattern <STOCK><YYYYMMDFUT>.
-// The policy tracks the underlying stock name; the actual tradingsymbol
-// is resolved from the instrument master at runtime.
-//
-// For the M003 scope, we only include EQ selectable members.
-// F&O selection will be added in a later milestone.
+// Sentinel value '*' means all NFO FUT instruments synced from the broker
+// are eligible. Futures symbols follow the pattern <STOCK><YYYYMMDFUT>
+// and are resolved from the instrument master at runtime.
 
-const NFO_FUT_ALLOWLIST: string[] = [];
+const NFO_FUT_ALLOWLIST: string[] = ['*'];
 
 // ---------------------------------------------------------------------------
 // Thresholds
@@ -122,7 +69,7 @@ const MAX_QUOTE_STALENESS_MS = 120_000;
 /** The single India tradable universe policy instance. */
 export const INDIA_UNIVERSE_POLICY: UniversePolicyConfig = {
   version: POLICY_VERSION,
-  label: 'India NSE Equity Universe v1',
+  label: 'India All-Equity + F&O Futures Universe v1',
   allowlist: {
     NSE: NSE_EQ_ALLOWLIST,
     NFO: NFO_FUT_ALLOWLIST,

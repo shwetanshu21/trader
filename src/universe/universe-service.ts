@@ -67,7 +67,6 @@ export class UniverseService {
   computeSnapshot(): UniverseSnapshot {
     const now = Date.now();
     const threshold = thresholdLabel(this._policy);
-    const eligibleSet = getEligibleSymbols('NSE', this._policy);
 
     // Load all NSE instruments from the broker store
     const nseInstruments = this._brokerRepo.getInstrumentsByExchange('NSE');
@@ -89,8 +88,20 @@ export class UniverseService {
       instrumentType: string;
     }> = [];
 
-    // NSE allowlist members
-    for (const symbol of (this._policy.allowlist['NSE'] ?? [])) {
+    // Helper: resolve allowlist for an exchange
+    const resolveAllowlist = (exchange: string, instruments: Array<{tradingsymbol: string; instrumentType: string}>): string[] => {
+      const raw = this._policy.allowlist[exchange] ?? [];
+      if (raw.length === 1 && raw[0] === '*') {
+        // Wildcard — all instruments of the default type are eligible
+        return instruments.map(i => i.tradingsymbol);
+      }
+      return raw;
+    };
+
+    // NSE allowlist members (EQ segment)
+    const nseResolved = resolveAllowlist('NSE', nseInstruments);
+    const nseSeen = new Set<string>();
+    for (const symbol of nseResolved) {
       const inst = instrumentMap.get(symbol);
       allCandidates.push({
         exchange: 'NSE',
@@ -98,7 +109,33 @@ export class UniverseService {
         instrumentToken: inst?.instrumentToken ?? null,
         instrumentType: inst?.instrumentType ?? 'EQ',
       });
+      nseSeen.add(symbol);
     }
+
+    // NFO allowlist members (FUT segment)
+    const nfoInstruments = this._brokerRepo.getInstrumentsByExchange('NFO');
+    const nfoInstrumentMap = new Map<string, { instrumentToken: number; instrumentType: string }>();
+    for (const inst of nfoInstruments) {
+      nfoInstrumentMap.set(inst.tradingsymbol, {
+        instrumentToken: inst.instrumentToken,
+        instrumentType: inst.instrumentType,
+      });
+    }
+    const nfoResolved = resolveAllowlist('NFO', nfoInstruments);
+    const nfoSeen = new Set<string>();
+    for (const symbol of nfoResolved) {
+      const inst = nfoInstrumentMap.get(symbol);
+      allCandidates.push({
+        exchange: 'NFO',
+        tradingsymbol: symbol,
+        instrumentToken: inst?.instrumentToken ?? null,
+        instrumentType: inst?.instrumentType ?? 'FUT',
+      });
+      nfoSeen.add(symbol);
+    }
+
+    // Rebuild eligible set from resolved allowlist
+    const eligibleSet = new Set([...nseResolved, ...nfoResolved]);
 
     // Also include any instruments not in the allowlist but in the master
     // for the ineligible count — gives operators visibility into what's available vs allowed
@@ -136,7 +173,8 @@ export class UniverseService {
 
     for (const candidate of sortedCandidates) {
       const isEligible = eligibleSet.has(candidate.tradingsymbol);
-      const quoteKey = `NSE:${candidate.tradingsymbol}`;
+      const exchange = candidate.exchange || 'NSE';
+      const quoteKey = `${exchange}:${candidate.tradingsymbol}`;
       const quote = quoteMap.get(quoteKey);
 
       let hasQuote = false;
