@@ -36,7 +36,8 @@ import type { StrategyDecisionRepository } from '../persistence/strategy-decisio
 import type { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import type { MarketClock } from './market-clock.js';
 import type { UniverseService } from '../universe/universe-service.js';
-import { ExecutionMode, StrategyDecisionStatus, type ExecutionHealth, type DashboardRiskState, type DashboardRiskEvent } from '../types/runtime.js';
+import type { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-repo.js';
+import { ExecutionMode, StrategyDecisionStatus, type ExecutionHealth, type DashboardRiskState, type DashboardRiskEvent, type DashboardLifecycleGovernance, type DashboardGovernanceDecision } from '../types/runtime.js';
 import type { PaperOrderRepository } from '../persistence/paper-order-repo.js';
 import type { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import type { PaperPositionRepository } from '../persistence/paper-position-repo.js';
@@ -77,6 +78,8 @@ export interface DashboardReadModelOptions {
   riskRepo?: ExecutionRiskRepository | null;
   /** Optional — hybrid score repository for strategy decision hybrid evidence. */
   hybridScoreRepo?: HybridScoreRepository | null;
+  /** Optional — strategy lifecycle repository for governance evidence. */
+  strategyLifecycleRepo?: StrategyLifecycleRepository | null;
 }
 
 export class DashboardReadModel {
@@ -95,6 +98,7 @@ export class DashboardReadModel {
   private readonly _paperPositionRepo: PaperPositionRepository | null;
   private readonly _riskRepo: ExecutionRiskRepository | null;
   private readonly _hybridScoreRepo: HybridScoreRepository | null;
+  private readonly _lifecycleRepo: StrategyLifecycleRepository | null;
 
   constructor(options: DashboardReadModelOptions) {
     this._healthService = options.healthService;
@@ -112,6 +116,7 @@ export class DashboardReadModel {
     this._paperPositionRepo = options.paperPositionRepo ?? null;
     this._riskRepo = options.riskRepo ?? null;
     this._hybridScoreRepo = options.hybridScoreRepo ?? null;
+    this._lifecycleRepo = options.strategyLifecycleRepo ?? null;
   }
 
   /** Assemble a full dashboard snapshot. */
@@ -132,6 +137,7 @@ export class DashboardReadModel {
       recentStrategyDecisions: this._getRecentStrategyDecisions(),
       universe: this._getDashboardUniverse(),
       execution: this._getExecutionEvidence(),
+      lifecycleGovernance: this._getLifecycleGovernance(),
     };
   }
 
@@ -527,6 +533,53 @@ export class DashboardReadModel {
       }));
     } catch {
       return [];
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Lifecycle governance
+  // -----------------------------------------------------------------------
+
+  /**
+   * Assemble lifecycle governance evidence block.
+   *
+   * Returns null when no lifecycle repo is wired (graceful degradation).
+   * Totals come from repository COUNT queries, not from bounded lists.
+   */
+  private _getLifecycleGovernance(): DashboardLifecycleGovernance | null {
+    if (!this._lifecycleRepo) return null;
+
+    try {
+      const totalStates = this._lifecycleRepo.countStates();
+      const totalDecisions = this._lifecycleRepo.decisionCount();
+      const currentStates = this._lifecycleRepo.getAllCurrentStates();
+      const recentDecisions = this._lifecycleRepo.getAllDecisions(20);
+
+      return {
+        totalStates,
+        totalDecisions,
+        currentStates: currentStates.map(s => ({
+          strategyId: s.strategyId,
+          strategyVersion: s.strategyVersion,
+          marketId: s.marketId,
+          phase: s.phase,
+          updatedAt: new Date(s.updatedAt).toISOString(),
+        })),
+        recentDecisions: recentDecisions.map(d => ({
+          id: d.id,
+          strategyId: d.strategyId,
+          strategyVersion: d.strategyVersion,
+          marketId: d.marketId,
+          verdict: d.verdict,
+          previousPhase: d.previousPhase,
+          newPhase: d.newPhase,
+          rationale: d.rationale,
+          recordedAt: new Date(d.recordedAt).toISOString(),
+        })),
+      };
+    } catch {
+      // Repo access failure — return null rather than crashing dashboard
+      return null;
     }
   }
 }

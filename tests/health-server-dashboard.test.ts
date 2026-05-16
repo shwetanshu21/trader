@@ -22,6 +22,7 @@ import { PaperFillRepository } from '../src/persistence/paper-fill-repo.js';
 import { PaperPositionRepository } from '../src/persistence/paper-position-repo.js';
 import { ExecutionRiskRepository } from '../src/persistence/execution-risk-repo.js';
 import { HybridScoreRepository } from '../src/persistence/hybrid-score-repo.js';
+import { StrategyLifecycleRepository } from '../src/persistence/strategy-lifecycle-repo.js';
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
@@ -40,6 +41,8 @@ import {
   UniverseCoverageVerdict,
   LLMStatus,
   MergePolicy,
+  GovernanceVerdict,
+  StrategyLifecyclePhase,
   type DashboardSnapshot,
 } from '../src/types/runtime.js';
 
@@ -3227,6 +3230,354 @@ describe('Health server — hybrid evidence on strategy surfaces', () => {
       const res = await fetchUrl(ctx.server, '/dashboard');
       expect(res.body).not.toContain('accessToken');
       expect(res.body).not.toContain('apiKey');
+    });
+  });
+});
+
+// ── Lifecycle governance routes ──────────────────────────────────────────
+
+describe('Health server — lifecycle governance routes', () => {
+  /**
+   * Create a fully wired server + dashboard + lifecycle repo.
+   */
+  function createServerWithLifecycle() {
+    const db = new DatabaseManager(':memory:');
+    const runtimeStateRepo = new RuntimeStateRepository(db.db);
+    const zerodhaRepo = new ZerodhaRepository(db.db);
+    const brokerRepo = new BrokerRepository(db.db);
+    const universeRepo = new UniverseRepository(db.db);
+    const universeService = new UniverseService(brokerRepo, universeRepo);
+    const proposalRepo = new ProposalRepository(db.db);
+    const blockedOrderRepo = new BlockedOrderRepository(db.db);
+    const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
+    const lifecycle = new LifecycleManager(runtimeStateRepo);
+    lifecycle.start('Test setup');
+    const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+    const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
+    const scheduler = createMockScheduler();
+    const telemetry = createMockTelemetry();
+    const lifecycleRepo = new StrategyLifecycleRepository(db.db);
+    const dashboard = new DashboardReadModel({
+      healthService,
+      runtimeStateRepo,
+      zerodhaRepo,
+      proposalRepo,
+      blockedOrderRepo,
+      strategyDecisionRepo,
+      clock,
+      universeService,
+      strategyLifecycleRepo: lifecycleRepo,
+    });
+    const server = createHealthServer(healthService, scheduler, telemetry, db, dashboard);
+
+    return {
+      db, runtimeStateRepo, zerodhaRepo, brokerRepo, universeRepo, universeService,
+      proposalRepo, blockedOrderRepo, strategyDecisionRepo,
+      lifecycle, healthService, clock, scheduler, telemetry, dashboard, server, lifecycleRepo,
+    };
+  }
+
+  describe('/health/lifecycle', () => {
+    it('returns 200 with empty governance when no states or decisions exist', async () => {
+      const ctx = createServerWithLifecycle();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/lifecycle');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.totalStates).toBe(0);
+      expect(data.totalDecisions).toBe(0);
+      expect(data.currentStates).toEqual([]);
+      expect(data.recentDecisions).toEqual([]);
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+
+    it('returns 404 when lifecycle repo is not wired', async () => {
+      const ctx = createServerAndDashboard();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/lifecycle');
+      expect(res.status).toBe(404);
+      const data = JSON.parse(res.body);
+      expect(data.error).toContain('lifecycle repo not wired');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+
+    it('returns 503 when dashboard is not wired', async () => {
+      const db = new DatabaseManager(':memory:');
+      const runtimeStateRepo = new RuntimeStateRepository(db.db);
+      const lifecycle = new LifecycleManager(runtimeStateRepo);
+      lifecycle.start('Test');
+      const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+      const scheduler = createMockScheduler();
+      const telemetry = createMockTelemetry();
+      const server = createHealthServer(healthService, scheduler, telemetry, db);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+      const res = await fetchUrl(server, '/health/lifecycle');
+      expect(res.status).toBe(503);
+      const data = JSON.parse(res.body);
+      expect(data.error).toContain('Dashboard not available');
+
+      await new Promise<void>((resolve) => { server.close(() => { db.close(); resolve(); }); });
+    });
+
+    it('returns lifecycle state and governance decisions', async () => {
+      const ctx = createServerWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.upsertCurrentState({
+        strategyId: 'strategy-a',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        phase: StrategyLifecyclePhase.Backtest,
+        updatedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 'strategy-a',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Promote,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Paper,
+        rationale: 'All thresholds met',
+        evidenceJson: null,
+        winnerId: null,
+        recordedAt: now,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/lifecycle');
+      expect(res.status).toBe(200);
+      const data = JSON.parse(res.body);
+      expect(data.totalStates).toBe(1);
+      expect(data.totalDecisions).toBe(1);
+      expect(data.currentStates.length).toBe(1);
+      expect(data.currentStates[0].strategyId).toBe('strategy-a');
+      expect(data.currentStates[0].phase).toBe('backtest');
+      expect(data.recentDecisions.length).toBe(1);
+      expect(data.recentDecisions[0].verdict).toBe('promote');
+      expect(data.recentDecisions[0].rationale).toBe('All thresholds met');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+
+    it('does NOT include access tokens or secret material', async () => {
+      const ctx = createServerWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Hold,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'No trigger', evidenceJson: null, winnerId: null, recordedAt: now,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/lifecycle');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+      expect(body).not.toContain('apiSecret');
+      expect(body).not.toContain('evidenceJson');
+      expect(body).not.toContain('evidence_json');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+  });
+
+  // ── Dashboard lifecycle governance in HTML ─────────────────────────
+
+  describe('Dashboard HTML — lifecycle governance evidence', () => {
+    it('shows "lifecycle repo not wired" when lifecycle repo is not wired', async () => {
+      const ctx = createServerAndDashboard();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Lifecycle Governance');
+      expect(res.body).toContain('lifecycle repo not wired');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+
+    it('shows lifecycle states and decisions when lifecycle repo is wired', async () => {
+      const ctx = createServerWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.upsertCurrentState({
+        strategyId: 'strategy-a',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        phase: StrategyLifecyclePhase.Backtest,
+        updatedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 'strategy-a', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Hold,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'Not ready', evidenceJson: null, winnerId: null, recordedAt: now,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('Lifecycle Governance');
+      expect(res.body).toContain('Current States');
+      expect(res.body).toContain('strategy-a');
+      expect(res.body).toContain('backtest');
+      expect(res.body).toContain('Governance Decisions');
+      expect(res.body).toContain('hold');
+      expect(res.body).toContain('Not ready');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+
+    it('shows promote and demote verdicts with correct styling', async () => {
+      const ctx = createServerWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.upsertCurrentState({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        phase: StrategyLifecyclePhase.Paper, updatedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Promote,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Paper,
+        rationale: 'Promotion criteria met', evidenceJson: null, winnerId: null, recordedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Demote,
+        previousPhase: StrategyLifecyclePhase.Paper,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'Demotion triggered by risk breach', evidenceJson: null, winnerId: null, recordedAt: now + 1000,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('promote');
+      expect(res.body).toContain('demote');
+      expect(res.body).toContain('Promotion criteria met');
+      expect(res.body).toContain('Demotion triggered by risk breach');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+
+    it('does NOT include secret material in HTML', async () => {
+      const ctx = createServerWithLifecycle();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).not.toContain('accessToken');
+      expect(res.body).not.toContain('apiKey');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+  });
+
+  // ── Dashboard lifecycle governance in JSON ──────────────────────────
+
+  describe('Dashboard JSON — lifecycle governance evidence', () => {
+    it('includes lifecycleGovernance as null when repo not wired', async () => {
+      const ctx = createServerAndDashboard();
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data).toHaveProperty('lifecycleGovernance');
+      expect(data.lifecycleGovernance).toBeNull();
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
+    });
+
+    it('includes populated lifecycleGovernance when repo is wired', async () => {
+      const ctx = createServerWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.upsertCurrentState({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        phase: StrategyLifecyclePhase.Backtest, updatedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Promote,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Paper,
+        rationale: 'Passed all checks', evidenceJson: null, winnerId: null, recordedAt: now,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ctx.server.listen(0, '127.0.0.1', () => resolve());
+        ctx.server.on('error', reject);
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.lifecycleGovernance).not.toBeNull();
+      expect(data.lifecycleGovernance.totalStates).toBe(1);
+      expect(data.lifecycleGovernance.totalDecisions).toBe(1);
+      expect(data.lifecycleGovernance.currentStates.length).toBe(1);
+      expect(data.lifecycleGovernance.currentStates[0].strategyId).toBe('s1');
+      expect(data.lifecycleGovernance.recentDecisions.length).toBe(1);
+      expect(data.lifecycleGovernance.recentDecisions[0].verdict).toBe('promote');
+
+      await new Promise<void>((resolve) => {
+        ctx.server.close(() => { ctx.db.close(); resolve(); });
+      });
     });
   });
 });

@@ -548,6 +548,8 @@ export interface DashboardSnapshot {
   universe: DashboardUniverse | null;
   /** Execution evidence block — null when no attempt repo is wired. */
   execution: ExecutionHealth | null;
+  /** Lifecycle governance evidence — null when no lifecycle repo is wired. */
+  lifecycleGovernance: DashboardLifecycleGovernance | null;
 }
 
 /** Market profile identity and session metadata. */
@@ -2448,4 +2450,64 @@ export interface StrategyFrameworkConfig {
   promotion: GovernanceThresholdConfig;
   /** Demotion governance threshold configuration. */
   demotion: DemotionThresholdConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Strategy lifecycle governance — dashboard/health DTOs for operator surfaces
+// ---------------------------------------------------------------------------
+
+/**
+ * A governance decision row for the operator dashboard.
+ *
+ * Token-safe: never includes evidence snapshots or internal diagnostic data.
+ * All timestamps converted to ISO-8601 strings.
+ */
+export interface DashboardGovernanceDecision {
+  /** Governance decision row ID. */
+  id: number;
+  /** Strategy identity (e.g. 'india-nse-eq-v1'). */
+  strategyId: string;
+  /** Strategy version (e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** Market profile ID (e.g. 'INDIA_NSE_EQ'). */
+  marketId: string;
+  /** Governance verdict: 'hold', 'promote', or 'demote'. */
+  verdict: string;
+  /** Previous lifecycle phase before this evaluation. */
+  previousPhase: string;
+  /** New lifecycle phase after this evaluation. */
+  newPhase: string;
+  /** Human-readable rationale. */
+  rationale: string;
+  /** ISO‑8601 timestamp when the decision was recorded. */
+  recordedAt: string;
+}
+
+/**
+ * Lifecycle governance evidence block for the operator dashboard.
+ *
+ * Block-level metadata (total states, total decisions) comes from persisted
+ * COUNT queries, not from bounded recent lists, so they remain accurate even
+ * when the cap is exceeded. Recent decisions are bounded (max 20).
+ */
+export interface DashboardLifecycleGovernance {
+  /** Total number of lifecycle state rows across all strategies. */
+  totalStates: number;
+  /** Total number of governance decisions in the append-only log. */
+  totalDecisions: number;
+  /** Current lifecycle states across all strategies. */
+  currentStates: Array<{
+    /** Strategy identity. */
+    strategyId: string;
+    /** Strategy version. */
+    strategyVersion: string;
+    /** Market profile ID. */
+    marketId: string;
+    /** Current lifecycle phase. */
+    phase: string;
+    /** ISO‑8601 timestamp of last update. */
+    updatedAt: string;
+  }>;
+  /** Recent governance decisions across all strategies (newest first, max 20). */
+  recentDecisions: DashboardGovernanceDecision[];
 }

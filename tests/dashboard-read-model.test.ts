@@ -20,6 +20,7 @@ import { PaperPositionRepository } from '../src/persistence/paper-position-repo.
 import { LifecycleManager } from '../src/runtime/lifecycle.js';
 import { HealthService } from '../src/runtime/health-service.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
+import { StrategyLifecycleRepository } from '../src/persistence/strategy-lifecycle-repo.js';
 import { DashboardReadModel } from '../src/runtime/dashboard-read-model.js';
 import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
 import {
@@ -36,6 +37,8 @@ import {
   ZerodhaSessionState,
   BlockCode,
   UniverseCoverageVerdict,
+  GovernanceVerdict,
+  StrategyLifecyclePhase,
   type DashboardSnapshot,
 } from '../src/types/runtime.js';
 
@@ -1405,6 +1408,298 @@ describe('DashboardReadModel — execution evidence', () => {
       expect(json).not.toContain('accessToken');
       expect(json).not.toContain('apiKey');
       expect(json).not.toContain('apiSecret');
+      ctx.db.close();
+    });
+  });
+});
+
+// ── Lifecycle governance ─────────────────────────────────────────────────
+
+describe('DashboardReadModel — lifecycle governance evidence', () => {
+  function createContextWithLifecycle() {
+    const db = new DatabaseManager(':memory:');
+    const runtimeStateRepo = new RuntimeStateRepository(db.db);
+    const zerodhaRepo = new ZerodhaRepository(db.db);
+    const brokerRepo = new BrokerRepository(db.db);
+    const universeRepo = new UniverseRepository(db.db);
+    const universeService = new UniverseService(brokerRepo, universeRepo);
+    const proposalRepo = new ProposalRepository(db.db);
+    const blockedOrderRepo = new BlockedOrderRepository(db.db);
+    const strategyDecisionRepo = new StrategyDecisionRepository(db.db);
+    const lifecycle = new LifecycleManager(runtimeStateRepo);
+    lifecycle.start('Test setup');
+    const healthService = new HealthService(lifecycle, runtimeStateRepo, Date.now());
+    const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
+    const lifecycleRepo = new StrategyLifecycleRepository(db.db);
+    const dashboard = new DashboardReadModel({
+      healthService,
+      runtimeStateRepo,
+      zerodhaRepo,
+      proposalRepo,
+      blockedOrderRepo,
+      strategyDecisionRepo,
+      clock,
+      universeService,
+      strategyLifecycleRepo: lifecycleRepo,
+    });
+
+    return {
+      db,
+      runtimeStateRepo,
+      zerodhaRepo,
+      brokerRepo,
+      universeRepo,
+      universeService,
+      proposalRepo,
+      blockedOrderRepo,
+      strategyDecisionRepo,
+      lifecycle,
+      healthService,
+      clock,
+      dashboard,
+      lifecycleRepo,
+    };
+  }
+
+  describe('lifecycleGovernance block shape', () => {
+    it('returns populated governance when lifecycle repo is wired', () => {
+      const ctx = createContextWithLifecycle();
+      const snapshot = ctx.dashboard.getSnapshot();
+
+      expect(snapshot.lifecycleGovernance).not.toBeNull();
+      expect(snapshot.lifecycleGovernance!.totalStates).toBe(0);
+      expect(snapshot.lifecycleGovernance!.totalDecisions).toBe(0);
+      expect(snapshot.lifecycleGovernance!.currentStates).toEqual([]);
+      expect(snapshot.lifecycleGovernance!.recentDecisions).toEqual([]);
+      ctx.db.close();
+    });
+
+    it('returns null governance when no lifecycle repo is wired', () => {
+      const ctx = createTestContext();
+      const snapshot = ctx.dashboard.getSnapshot();
+
+      expect(snapshot.lifecycleGovernance).toBeNull();
+      ctx.db.close();
+    });
+
+    it('has lifecycleGovernance as a top-level key in the snapshot', () => {
+      const ctx = createContextWithLifecycle();
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot).toHaveProperty('lifecycleGovernance');
+      ctx.db.close();
+    });
+  });
+
+  describe('lifecycleGovernance — current states', () => {
+    it('includes seeded lifecycle states', () => {
+      const ctx = createContextWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.upsertCurrentState({
+        strategyId: 'strategy-a',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        phase: StrategyLifecyclePhase.Backtest,
+        updatedAt: now,
+      });
+      ctx.lifecycleRepo.upsertCurrentState({
+        strategyId: 'strategy-b',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        phase: StrategyLifecyclePhase.Paper,
+        updatedAt: now + 1000,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.lifecycleGovernance!.totalStates).toBe(2);
+      expect(snapshot.lifecycleGovernance!.currentStates.length).toBe(2);
+
+      const a = snapshot.lifecycleGovernance!.currentStates.find(s => s.strategyId === 'strategy-a');
+      expect(a).toBeDefined();
+      expect(a!.phase).toBe('backtest');
+      expect(a!.updatedAt).toBe(new Date(now).toISOString());
+
+      const b = snapshot.lifecycleGovernance!.currentStates.find(s => s.strategyId === 'strategy-b');
+      expect(b).toBeDefined();
+      expect(b!.phase).toBe('paper');
+      ctx.db.close();
+    });
+
+    it('totalStates reflects persisted COUNT, not array length when states exist', () => {
+      const ctx = createContextWithLifecycle();
+      const now = Date.now();
+
+      for (let i = 0; i < 5; i++) {
+        ctx.lifecycleRepo.upsertCurrentState({
+          strategyId: `strategy-${i}`,
+          strategyVersion: '1.0.0',
+          marketId: 'INDIA_NSE_EQ',
+          phase: StrategyLifecyclePhase.Backtest,
+          updatedAt: now + i,
+        });
+      }
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.lifecycleGovernance!.totalStates).toBe(5);
+      expect(snapshot.lifecycleGovernance!.currentStates.length).toBe(5);
+      ctx.db.close();
+    });
+  });
+
+  describe('lifecycleGovernance — governance decisions', () => {
+    it('includes seeded governance decisions', () => {
+      const ctx = createContextWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 'strategy-a',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Promote,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Paper,
+        rationale: 'All thresholds met',
+        evidenceJson: null,
+        winnerId: null,
+        recordedAt: now,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.lifecycleGovernance!.totalDecisions).toBe(1);
+      expect(snapshot.lifecycleGovernance!.recentDecisions.length).toBe(1);
+      expect(snapshot.lifecycleGovernance!.recentDecisions[0].verdict).toBe('promote');
+      expect(snapshot.lifecycleGovernance!.recentDecisions[0].rationale).toBe('All thresholds met');
+      ctx.db.close();
+    });
+
+    it('includes all verdict types (hold, promote, demote)', () => {
+      const ctx = createContextWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Hold,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'Not ready', evidenceJson: null, winnerId: null, recordedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Promote,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Paper,
+        rationale: 'Ready', evidenceJson: null, winnerId: null, recordedAt: now + 1000,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Demote,
+        previousPhase: StrategyLifecyclePhase.Paper,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'Drift detected', evidenceJson: null, winnerId: null, recordedAt: now + 2000,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(snapshot.lifecycleGovernance!.totalDecisions).toBe(3);
+      const verdicts = snapshot.lifecycleGovernance!.recentDecisions.map(d => d.verdict);
+      expect(verdicts).toContain('hold');
+      expect(verdicts).toContain('promote');
+      expect(verdicts).toContain('demote');
+      ctx.db.close();
+    });
+
+    it('returns decisions newest first', () => {
+      const ctx = createContextWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Hold,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'oldest', evidenceJson: null, winnerId: null, recordedAt: now - 5000,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Promote,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Paper,
+        rationale: 'middle', evidenceJson: null, winnerId: null, recordedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Demote,
+        previousPhase: StrategyLifecyclePhase.Paper,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'newest', evidenceJson: null, winnerId: null, recordedAt: now + 5000,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const rationales = snapshot.lifecycleGovernance!.recentDecisions.map(d => d.rationale);
+      expect(rationales).toEqual(['newest', 'middle', 'oldest']);
+      ctx.db.close();
+    });
+
+    it('limits recent decisions to 20', () => {
+      const ctx = createContextWithLifecycle();
+      const now = Date.now();
+
+      for (let i = 0; i < 25; i++) {
+        ctx.lifecycleRepo.insertDecision({
+          strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+          verdict: GovernanceVerdict.Hold,
+          previousPhase: StrategyLifecyclePhase.Backtest,
+          newPhase: StrategyLifecyclePhase.Backtest,
+          rationale: `Decision ${i}`, evidenceJson: null, winnerId: null, recordedAt: now + i,
+        });
+      }
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      // Total from COUNT query is 25
+      expect(snapshot.lifecycleGovernance!.totalDecisions).toBe(25);
+      // Recent list is capped at 20
+      expect(snapshot.lifecycleGovernance!.recentDecisions.length).toBe(20);
+      ctx.db.close();
+    });
+
+    it('recordedAt is a valid ISO timestamp', () => {
+      const ctx = createContextWithLifecycle();
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Promote,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Paper,
+        rationale: 'Ready', evidenceJson: null, winnerId: null, recordedAt: Date.now(),
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      expect(() => new Date(snapshot.lifecycleGovernance!.recentDecisions[0].recordedAt)).not.toThrow();
+      ctx.db.close();
+    });
+
+    it('does NOT include access tokens or secret material', () => {
+      const ctx = createContextWithLifecycle();
+      const now = Date.now();
+
+      ctx.lifecycleRepo.upsertCurrentState({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        phase: StrategyLifecyclePhase.Backtest, updatedAt: now,
+      });
+      ctx.lifecycleRepo.insertDecision({
+        strategyId: 's1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+        verdict: GovernanceVerdict.Hold,
+        previousPhase: StrategyLifecyclePhase.Backtest,
+        newPhase: StrategyLifecyclePhase.Backtest,
+        rationale: 'No trigger', evidenceJson: null, winnerId: null, recordedAt: now,
+      });
+
+      const snapshot = ctx.dashboard.getSnapshot();
+      const json = JSON.stringify(snapshot);
+      expect(json).not.toContain('accessToken');
+      expect(json).not.toContain('access_token');
+      expect(json).not.toContain('apiKey');
+      expect(json).not.toContain('apiSecret');
+      expect(json).not.toContain('evidenceJson');
+      expect(json).not.toContain('evidence_json');
       ctx.db.close();
     });
   });

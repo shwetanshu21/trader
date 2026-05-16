@@ -415,6 +415,7 @@ export class RuntimeApp {
       paperPositionRepo: positionRepo,
       riskRepo,
       hybridScoreRepo,
+      strategyLifecycleRepo: lifecycleRepo,
     });
 
     // ── Phase 9: create health HTTP server with dashboard routes ───────────

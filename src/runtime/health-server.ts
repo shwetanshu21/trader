@@ -209,6 +209,32 @@ export function createHealthServer(
           break;
         }
 
+        // ── Lifecycle governance route ──────────────────────────────────
+
+        case '/health/lifecycle': {
+          if (!dashboard) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Dashboard not available' }));
+            break;
+          }
+          const lSnapshot = dashboard.getSnapshot();
+          const lifecycleGovernance = lSnapshot.lifecycleGovernance;
+          if (lifecycleGovernance) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(lifecycleGovernance, null, 2));
+          } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              totalStates: 0,
+              totalDecisions: 0,
+              currentStates: [],
+              recentDecisions: [],
+              error: 'No lifecycle governance evidence available — lifecycle repo not wired',
+            }));
+          }
+          break;
+        }
+
         default: {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found', path: url.pathname }));

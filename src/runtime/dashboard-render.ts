@@ -6,6 +6,13 @@
 import type { DashboardSnapshot } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Max governance decisions to show in HTML. */
+const MAX_LIFECYCLE_DECISIONS_HTML = 20;
+
+// ---------------------------------------------------------------------------
 // HTML escaping
 // ---------------------------------------------------------------------------
 
@@ -440,6 +447,8 @@ ${universeSection}
 
 ${executionSection}
 
+${renderLifecycleGovernanceSection(snapshot.lifecycleGovernance)}
+
 <div class="section">
   <h2>Lifecycle Events (${recentLifecycleEvents.length})</h2>
   <table>
@@ -454,6 +463,70 @@ ${executionSection}
 </div>
 </body>
 </html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle governance section (rendered between execution and lifecycle events)
+// ---------------------------------------------------------------------------
+
+function renderLifecycleGovernanceSection(
+  governance: DashboardSnapshot['lifecycleGovernance'],
+): string {
+  if (!governance) {
+    return `
+      <div class="section">
+        <h2>Lifecycle Governance</h2>
+        <p class="muted">No lifecycle governance evidence available — lifecycle repo not wired</p>
+      </div>`;
+  }
+
+  // ── Current states table ─────────────────────────────────────────────
+  const stateRows = governance.currentStates.length === 0
+    ? '<tr><td colspan="3" class="muted">No lifecycle states persisted</td></tr>'
+    : governance.currentStates.map(s => `
+      <tr>
+        <td><code>${escapeHtml(s.strategyId)}</code></td>
+        <td><code>${escapeHtml(s.strategyVersion)}</code></td>
+        <td><code>${escapeHtml(s.marketId)}</code></td>
+        <td><span class="status-${escapeHtml(s.phase)}">${escapeHtml(s.phase)}</span></td>
+        <td>${escapeHtml(s.updatedAt)}</td>
+      </tr>`).join('');
+
+  // ── Recent decisions table ──────────────────────────────────────────
+  const decisionRows = governance.recentDecisions.length === 0
+    ? '<tr><td colspan="6" class="muted">No governance decisions recorded</td></tr>'
+    : governance.recentDecisions.slice(0, MAX_LIFECYCLE_DECISIONS_HTML).map(d => {
+      const verdictClass = d.verdict === 'promote' ? 'accepted' : d.verdict === 'demote' ? 'refused' : 'skipped';
+      return `<tr>
+        <td><code>${escapeHtml(d.strategyId)}</code></td>
+        <td><span class="status-${verdictClass}">${escapeHtml(d.verdict)}</span></td>
+        <td><code>${escapeHtml(d.previousPhase)}</code></td>
+        <td><code>${escapeHtml(d.newPhase)}</code></td>
+        <td style="max-width:300px;word-break:break-word;">${escapeHtml(d.rationale)}</td>
+        <td>${escapeHtml(d.recordedAt)}</td>
+      </tr>`;
+    }).join('');
+
+  return `
+    <div class="section">
+      <h2>Lifecycle Governance</h2>
+      <table>
+        <tr><td>Total State Rows</td><td class="td-value">${governance.totalStates}</td></tr>
+        <tr><td>Total Decisions</td><td class="td-value">${governance.totalDecisions}</td></tr>
+      </table>
+
+      <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Current States (${governance.currentStates.length})</h3>
+      <table style="margin-top:0.5rem;">
+        <thead><tr><td>Strategy</td><td>Version</td><td>Market</td><td>Phase</td><td>Updated</td></tr></thead>
+        <tbody>${stateRows}</tbody>
+      </table>
+
+      <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Recent Governance Decisions (${governance.recentDecisions.length})</h3>
+      <table style="margin-top:0.5rem;">
+        <thead><tr><td>Strategy</td><td>Verdict</td><td>From</td><td>To</td><td>Rationale</td><td>Timestamp</td></tr></thead>
+        <tbody>${decisionRows}</tbody>
+      </table>
+    </div>`;
 }
 
 /** Render the dashboard snapshot as pretty-printed JSON. */
