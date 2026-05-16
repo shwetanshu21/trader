@@ -79,6 +79,41 @@ export interface NewWalkForwardRun {
 }
 
 // ---------------------------------------------------------------------------
+// WalkForwardCheckpointRow — durable progress snapshots for long runs
+// ---------------------------------------------------------------------------
+
+/**
+ * Append-only checkpoint row for a walk-forward run.
+ *
+ * Checkpoints are written after durable progress boundaries so interrupted
+ * processes can resume from the next incomplete trial instead of restarting
+ * the full run.
+ */
+export interface WalkForwardCheckpointRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → walk_forward_runs(id). */
+  runId: number;
+  /** Number of fully persisted trials at checkpoint time. */
+  completedTrialCount: number;
+  /** Highest completed trial index, or null when nothing completed yet. */
+  lastCompletedTrialIndex: number | null;
+  /** Optional JSON metadata for diagnostics/resume context. */
+  metadataJson: string | null;
+  /** Unix timestamp (ms) when the checkpoint was saved. */
+  savedAt: number;
+}
+
+/** Shape for inserting a new walk-forward checkpoint (without id). */
+export interface NewWalkForwardCheckpoint {
+  runId: number;
+  completedTrialCount: number;
+  lastCompletedTrialIndex: number | null;
+  metadataJson: string | null;
+  savedAt: number;
+}
+
+// ---------------------------------------------------------------------------
 // WalkForwardWindowRow — a single rolling window within a run
 // ---------------------------------------------------------------------------
 
@@ -394,4 +429,173 @@ export interface WalkForwardWinnerWithContext extends WalkForwardWinnerRow {
   selectedTrial: WalkForwardTrialWithWindows | null;
   /** Ranked candidates at selection time (for forensic inspection). */
   rankedCandidates: WalkForwardRankedCandidate[];
+}
+
+// ---------------------------------------------------------------------------
+// Winner-selector input/output types
+// ---------------------------------------------------------------------------
+
+/**
+ * Comparison detail for a single candidate in the selection decision.
+ *
+ * Documents why each candidate was chosen as winner, disqualified, or
+ * placed as runner-up.
+ */
+export interface WalkForwardCandidateComparison {
+  /** Trial row ID. */
+  trialId: number;
+  /** 1-based rank within the run. */
+  rank: number;
+  /** Human-readable trial label. */
+  label: string;
+  /** Final merged score (0–1). */
+  mergedScore: number;
+  /** Whether this candidate was selected, is a runner-up, or was disqualified. */
+  outcome: 'winner' | 'runner_up' | 'disqualified';
+  /** Human-readable list of reasons for this outcome. */
+  reasons: string[];
+  /** Numerical scores that justify the outcome. */
+  evidenceScores?: {
+    /** Average out-of-sample Sharpe ratio, or null. */
+    avgSharpe?: number | null;
+    /** Maximum out-of-sample drawdown, or null. */
+    maxDrawdown?: number | null;
+    /** Average out-of-sample win rate, or null. */
+    avgWinRate?: number | null;
+    /** Number of out-of-sample windows evaluated. */
+    outOfSampleWindowCount?: number;
+  };
+}
+
+/**
+ * Structured output of a winner-selection decision.
+ *
+ * Produced by the selector and consumed by the artifact emitter for
+ * persisting stable JSON artifacts.
+ */
+export interface WalkForwardSelectionOutput {
+  /** Selection result indicator. */
+  result: WalkForwardSelectionResult;
+  /** FK → walk_forward_trials(id), or null for no-winner outcomes. */
+  selectedTrialId: number | null;
+  /** Selection strategy used. */
+  selectionStrategy: WalkForwardSelectionStrategy;
+  /** Selection configuration snapshot as JSON. */
+  selectionConfigJson: string;
+  /** Human-readable rationale explaining the decision. */
+  rationale: string;
+  /** Comparison details for each top candidate. */
+  comparisons: WalkForwardCandidateComparison[];
+}
+
+// ---------------------------------------------------------------------------
+// Artifact types
+// ---------------------------------------------------------------------------
+
+/**
+ * Winner artifact persisted as JSON under data/artifacts/walk-forward/<run-id>/.
+ *
+ * Captures the full selection decision with rationale, comparison context,
+ * and enough metadata to reconstruct the governance surface.
+ */
+export interface WalkForwardWinnerArtifact {
+  /** Schema version for forward compatibility. */
+  schemaVersion: 1;
+  /** Artifact type discriminator. */
+  artifactType: 'winner-selection';
+  /** FK → walk_forward_runs(id). */
+  runId: number;
+  /** Human-readable run label. */
+  runLabel: string;
+  /** ISO-8601 timestamp of selection. */
+  selectionTimestamp: string;
+  /** Selection configuration used. */
+  selectionConfig: WalkForwardSelectionConfig;
+  /** Selection result. */
+  result: WalkForwardSelectionResult;
+  /** Details of the selected winner (null for no-winner outcomes). */
+  winner: {
+    trialId: number | null;
+    trialLabel: string | null;
+    paramsJson: string | null;
+    mergedScore: number | null;
+    deterministicScore: number | null;
+    llmScore: number | null;
+  } | null;
+  /** Human-readable selection rationale. */
+  rationale: string;
+  /** Per-candidate comparison details. */
+  comparisons: WalkForwardCandidateComparison[];
+}
+
+/**
+ * Diagnostics artifact persisted under data/artifacts/walk-forward/<run-id>/.
+ *
+ * Carries aggregate scores, per-window evidence summary, ranked candidate
+ * list, and proof-fidelity fields derived from the provider/evaluator contracts.
+ */
+export interface WalkForwardDiagnosticsArtifact {
+  /** Schema version for forward compatibility. */
+  schemaVersion: 1;
+  /** Artifact type discriminator. */
+  artifactType: 'winner-diagnostics';
+  /** FK → walk_forward_runs(id). */
+  runId: number;
+  /** Human-readable run label. */
+  runLabel: string;
+  /** ISO-8601 timestamp when diagnostics were generated. */
+  generatedAt: string;
+  /** Selection decision summary. */
+  selection: {
+    result: WalkForwardSelectionResult;
+    rationale: string;
+    comparisonsCount: number;
+  };
+  /** Aggregate cross-run metrics. */
+  aggregateMetrics: {
+    scoreStability: number;
+    topKOverlap: number;
+    llmConsultationRate: number | null;
+    llmDivergence: number | null;
+  };
+  /** Ranked candidates at selection time (ordered by rank ascending). */
+  rankedCandidates: WalkForwardRankedCandidate[];
+  /** Compact trade-log style evidence summarizing per-window execution. */
+  tradeLog: Array<{
+    trialId: number;
+    windowIndex: number;
+    windowType: WalkForwardWindowType;
+    tradeCount: number;
+    totalReturn: number;
+    winRate: number | null;
+    sharpeRatio: number | null;
+    maxDrawdown: number | null;
+  }>;
+  /** Data fidelity evidence from the provider. */
+  evidenceFidelity: {
+    providerLabel: string;
+    effectiveFidelity: string;
+    hasData: boolean;
+    windowCount: number;
+    trialCount: number;
+    outOfSampleWindows: number;
+    screeningCadenceMinutes: number | null;
+    executionResolutionMinutes: number | null;
+    supportsFineGrainedExecution: boolean;
+  };
+}
+
+/**
+ * Standalone trade-log artifact persisted beside winner/diagnostics outputs.
+ *
+ * This turns the compact trade-log evidence into its own durable artifact so
+ * milestone-level verification can point at an explicit trade-log file.
+ */
+export interface WalkForwardTradeLogArtifact {
+  schemaVersion: 1;
+  artifactType: 'trade-log';
+  runId: number;
+  runLabel: string;
+  generatedAt: string;
+  entries: WalkForwardDiagnosticsArtifact['tradeLog'];
 }

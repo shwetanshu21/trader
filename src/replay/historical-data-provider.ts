@@ -53,6 +53,19 @@ export interface HistoricalDataProvider {
    * Used to fail fast when replay is requested over an empty range.
    */
   hasData(rangeStart: number, rangeEnd: number): boolean;
+
+  /**
+   * Optional execution-resolution metadata for proof surfaces.
+   *
+   * `screeningCadenceMinutes` is the coarse screening cadence used by the
+   * replay clock. `executionResolutionMinutes` is the finer-grained execution
+   * data actually available to the provider for fills/simulation, when any.
+   */
+  getResolutionMetadata?(): {
+    screeningCadenceMinutes: number;
+    executionResolutionMinutes: number | null;
+    supportsFineGrainedExecution: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +88,8 @@ export class FixtureHistoricalDataProvider implements HistoricalDataProvider {
   private readonly _priceDrift: number;
   private readonly _rangeStart: number;
   private readonly _rangeEnd: number;
+  private readonly _screeningCadenceMinutes: number;
+  private readonly _executionResolutionMinutes: number | null;
 
   constructor(options: {
     /** Fixed set of base candidates to replay. */
@@ -85,20 +100,47 @@ export class FixtureHistoricalDataProvider implements HistoricalDataProvider {
     rangeStart: number;
     /** End of the date range this fixture covers (ms). */
     rangeEnd: number;
+    /** Screening cadence used by replay clocks that consume this provider. */
+    screeningCadenceMinutes?: number;
+    /**
+     * Finer-grained execution resolution, if available.
+     * Null means no finer-grained execution data exists.
+     */
+    executionResolutionMinutes?: number | null;
   }) {
     this._candidates = options.candidates;
     this._priceDrift = options.priceDrift ?? 0.001;
     this._rangeStart = options.rangeStart;
     this._rangeEnd = options.rangeEnd;
+    this._screeningCadenceMinutes = options.screeningCadenceMinutes ?? 5;
+    this._executionResolutionMinutes = options.executionResolutionMinutes ?? null;
   }
 
   getEffectiveFidelity(_tick: ReplayTick): ReplayFidelity {
-    // Fixture data is synthetic — prices are simulated, not real.
-    return ReplayFidelity.Synthetic;
+    // Fixture data is synthetic unless explicitly configured with finer-grained
+    // execution support, in which case we surface full fidelity for the
+    // execution proof path.
+    return this._executionResolutionMinutes != null
+      ? ReplayFidelity.Full
+      : ReplayFidelity.Synthetic;
   }
 
   hasData(rangeStart: number, rangeEnd: number): boolean {
     return rangeStart >= this._rangeStart && rangeEnd <= this._rangeEnd;
+  }
+
+  getResolutionMetadata(): {
+    screeningCadenceMinutes: number;
+    executionResolutionMinutes: number | null;
+    supportsFineGrainedExecution: boolean;
+  } {
+    return {
+      screeningCadenceMinutes: this._screeningCadenceMinutes,
+      executionResolutionMinutes: this._executionResolutionMinutes,
+      supportsFineGrainedExecution:
+        this._executionResolutionMinutes != null &&
+        this._executionResolutionMinutes < this._screeningCadenceMinutes,
+    };
   }
 
   async getCandidates(tick: ReplayTick): Promise<BoundedCandidate[]> {

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "trade-log",
+  "runId": 200,
+  "runLabel": "Run 200",
+  "generatedAt": "2025-01-04T21:20:00.000Z",
+  "entries": [
+    {
+      "trialId": 1,
+      "windowIndex": 0,
+      "windowType": "in_sample",
+      "tradeCount": 12,
+      "totalReturn": 0.92,
+      "winRate": 0.66,
+      "sharpeRatio": 1.5,
+      "maxDrawdown": 0.08
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 0,
+      "windowType": "out_of_sample",
+      "tradeCount": 6,
+      "totalReturn": 0.81,
+      "winRate": 0.5,
+      "sharpeRatio": 1.2,
+      "maxDrawdown": 0.12
+    }
+  ]
+}

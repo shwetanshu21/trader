@@ -14,6 +14,7 @@
     "verify:upstox:bridge": "bash scripts/verify-upstox-bridge.sh",
     "test": "vitest run",
     "test:watch": "vitest",
+    "select:winner": "bash scripts/walk-forward-select-winner.sh",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

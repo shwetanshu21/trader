@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "trade-log",
+  "runId": 1,
+  "runLabel": "cli-select-winner",
+  "generatedAt": "2026-05-16T07:39:58.689Z",
+  "entries": [
+    {
+      "trialId": 1,
+      "windowIndex": 0,
+      "windowType": "in_sample",
+      "tradeCount": 122,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58221.0495,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 0,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 1,
+      "windowType": "in_sample",
+      "tradeCount": 225,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58085.4117,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 1,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 2,
+      "windowType": "in_sample",
+      "tradeCount": 178,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 57903.2795,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 2,
+      "windowType": "out_of_sample",
+      "tradeCount": 0,
+      "totalReturn": 0,
+      "winRate": null,
+      "sharpeRatio": null,
+      "maxDrawdown": null
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 3,
+      "windowType": "in_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 3,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 4,
+      "windowType": "in_sample",
+      "tradeCount": 197,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 57943.6662,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 4,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 5,
+      "windowType": "in_sample",
+      "tradeCount": 225,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58085.4117,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 5,
+      "windowType": "out_of_sample",
+      "tradeCount": 28,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 59032.3075,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 0,
+      "windowType": "in_sample",
+      "tradeCount": 122,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58221.0495,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 0,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 1,
+      "windowType": "in_sample",
+      "tradeCount": 225,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58085.4117,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 1,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 2,
+      "windowType": "in_sample",
+      "tradeCount": 178,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 57903.2795,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 2,
+      "windowType": "out_of_sample",
+      "tradeCount": 0,
+      "totalReturn": 0,
+      "winRate": null,
+      "sharpeRatio": null,
+      "maxDrawdown": null
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 3,
+      "windowType": "in_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 3,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 4,
+      "windowType": "in_sample",
+      "tradeCount": 197,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 57943.6662,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 4,
+      "windowType": "out_of_sample",
+      "tradeCount": 75,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58893.9111,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 5,
+      "windowType": "in_sample",
+      "tradeCount": 225,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 58085.4117,
+      "maxDrawdown": 0
+    },
+    {
+      "trialId": 2,
+      "windowIndex": 5,
+      "windowType": "out_of_sample",
+      "tradeCount": 28,
+      "totalReturn": 0.7637,
+      "winRate": 1,
+      "sharpeRatio": 59032.3075,
+      "maxDrawdown": 0
+    }
+  ]
+}

@@ -572,6 +572,19 @@ CREATE INDEX IF NOT EXISTS idx_wf_tw_trial ON walk_forward_trial_windows(trial_i
 CREATE INDEX IF NOT EXISTS idx_wf_tw_window ON walk_forward_trial_windows(window_id);
 CREATE INDEX IF NOT EXISTS idx_wf_tw_trial_window ON walk_forward_trial_windows(trial_id, window_id);
 
+-- M005 remediation: Walk-forward checkpoints — append-only durable progress for resume
+CREATE TABLE IF NOT EXISTS walk_forward_checkpoints (
+  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id                    INTEGER NOT NULL REFERENCES walk_forward_runs(id),
+  completed_trial_count     INTEGER NOT NULL DEFAULT 0,
+  last_completed_trial_index INTEGER,
+  metadata_json             TEXT,
+  saved_at                  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_checkpoints_run ON walk_forward_checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_wf_checkpoints_saved ON walk_forward_checkpoints(run_id, saved_at);
+
 -- M005/S03: Walk-forward winners — persisted winner-selection decisions
 CREATE TABLE IF NOT EXISTS walk_forward_winners (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,

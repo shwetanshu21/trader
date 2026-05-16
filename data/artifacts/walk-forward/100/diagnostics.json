@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "winner-diagnostics",
+  "runId": 100,
+  "runLabel": "Run 100",
+  "generatedAt": "2025-01-04T21:20:00.000Z",
+  "selection": {
+    "result": "selected",
+    "rationale": "Selected Config A (rank 1) via composite selection with merged score 0.9200 across 3 windows.",
+    "comparisonsCount": 2
+  },
+  "aggregateMetrics": {
+    "scoreStability": 0.85,
+    "topKOverlap": 0.75,
+    "llmConsultationRate": 0.5,
+    "llmDivergence": 0.12
+  },
+  "rankedCandidates": [
+    {
+      "trialId": 1,
+      "rank": 1,
+      "label": "Config A",
+      "paramsJson": "{\"momentum\":0.5,\"volatility\":0.3}",
+      "mergedScore": 0.9,
+      "deterministicScore": 0.81,
+      "llmScore": 0.88,
+      "windowCount": 3
+    }
+  ],
+  "tradeLog": [
+    {
+      "trialId": 1,
+      "windowIndex": 0,
+      "windowType": "in_sample",
+      "tradeCount": 12,
+      "totalReturn": 0.92,
+      "winRate": 0.66,
+      "sharpeRatio": 1.5,
+      "maxDrawdown": 0.08
+    },
+    {
+      "trialId": 1,
+      "windowIndex": 0,
+      "windowType": "out_of_sample",
+      "tradeCount": 6,
+      "totalReturn": 0.81,
+      "winRate": 0.5,
+      "sharpeRatio": 1.2,
+      "maxDrawdown": 0.12
+    }
+  ],
+  "evidenceFidelity": {
+    "providerLabel": "test-fixture-v1",
+    "effectiveFidelity": "synthetic",
+    "hasData": true,
+    "windowCount": 3,
+    "trialCount": 2,
+    "outOfSampleWindows": 2,
+    "screeningCadenceMinutes": null,
+    "executionResolutionMinutes": null,
+    "supportsFineGrainedExecution": false
+  }
+}

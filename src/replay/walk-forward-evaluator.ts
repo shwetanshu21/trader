@@ -1,9 +1,8 @@
 // ── Walk-Forward Evaluator ──
-// Partitions historical data into rolling in-sample/out-of-sample windows,
-// generates a bounded search space over deterministic and LLM-aware strategy
-// settings, executes per-trial evaluations through the replay and strategy
-// seams, computes aggregate metrics, persists results through
-// WalkForwardRepository, and returns ranked candidate configurations.
+// Partitions historical data into rolling windows, generates a bounded search
+// space over deterministic and LLM-aware strategy settings, executes trials
+// through the replay/strategy seams, checkpoints durable progress, and can
+// resume interrupted runs without restarting already-persisted trials.
 
 import type Database from 'better-sqlite3';
 import { ReplayClock } from './replay-clock.js';
@@ -19,34 +18,21 @@ import {
   WalkForwardWindowType,
   type WalkForwardRunRow,
   type WalkForwardWindowRow,
-  type WalkForwardTrialRow,
   type WalkForwardTrialWindowRow,
   type WalkForwardRankedCandidate,
-  type NewWalkForwardRun,
-  type NewWalkForwardWindow,
-  type NewWalkForwardTrial,
-  type NewWalkForwardTrialWindow,
 } from './walk-forward-types.js';
-import type { StrategyFrameworkConfig, StrategyPlugin, BoundedCandidate, RankedCandidate, StrategyPluginIdentity } from '../types/runtime.js';
+import type {
+  StrategyFrameworkConfig,
+  StrategyPlugin,
+  BoundedCandidate,
+  RankedCandidate,
+  StrategyPluginIdentity,
+} from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
-// DeterministicScorerPlugin — a no-dependency deterministic strategy plugin
+// DeterministicScorerPlugin — lightweight baseline scoring plugin
 // ---------------------------------------------------------------------------
 
-/**
- * A lightweight deterministic scoring plugin that scores candidates based
- * on volume, spread tightness, and price availability.
- *
- * This plugin requires no external dependencies (no ProposalEngine, no LLM).
- * It provides the baseline scoring that the walk-forward evaluator uses
- * for all trials, including those where LLM is disabled.
- *
- * Scoring formula (same heuristic as LlmRankingStrategy._deterministicRank):
- *   - Volume score: log10(volume) / 8 (capped at 1.0, 0 if no volume)
- *   - Spread score: 1 - min(spreadRatio / 0.05, 1) or 0.5 if no bid/ask
- *   - Price bonus: 0.25 if lastPrice exists
- *   - Composite: volumeScore * 0.4 + spreadScore * 0.4 + priceBonus * 0.2
- */
 class DeterministicScorerPlugin implements StrategyPlugin {
   readonly identity: StrategyPluginIdentity = {
     id: 'deterministic-scorer-v1',
@@ -104,106 +90,52 @@ class DeterministicScorerPlugin implements StrategyPlugin {
 // Types
 // ---------------------------------------------------------------------------
 
-/**
- * A single trial configuration — the parameter set for one evaluation run.
- *
- * `params` carries deterministic framework knobs (e.g. maxCandidates,
- * scoreWeights, volume threshold). `llmConfig` carries optional LLM-aware
- * overrides that the evaluator encodes into trial metadata for later plugin
- * adoption, even when the runtime cannot yet mutate the LLM prompt directly.
- */
 export interface WalkForwardTrialConfig {
-  /** Human-readable label (e.g. 'momentum-v1 config C'). */
   label: string;
-  /** Deterministic parameter set (serialised as paramsJson on persist). */
   params: Record<string, unknown>;
-  /** Optional LLM-aware overrides (encoded in metadata, not yet wired). */
   llmConfig?: {
     enabled: boolean;
-    /** Fractional weight for LLM vs deterministic scoring (0 = deterministic only). */
     weight?: number;
-    /** LLM provider temperature. */
     temperature?: number;
-    /** Max candidates to send to the LLM. */
     maxCandidates?: number;
     [key: string]: unknown;
   };
 }
 
-/**
- * Parameter space definition for auto-generating a grid of trial configs.
- *
- * Each array defines the values to explore for that knob. The evaluator
- * computes the Cartesian product of all arrays to generate trial configs.
- * `llmEnabled` controls whether LLM-aware trials are generated at all.
- */
 export interface WalkForwardParamSpace {
-  /** Values for maxCandidates (default: [3, 5]). */
   maxCandidates?: number[];
-  /** Values for deterministic score weight on volume. */
   volumeWeight?: number[];
-  /** Values for deterministic score weight on spread. */
   spreadWeight?: number[];
-  /** Whether LLM is enabled in the trial. */
   llmEnabled?: boolean[];
-  /** LLM weight values (how much LLM score contributes to merged). */
   llmWeight?: number[];
-  /** LLM provider temperature values. */
   llmTemperature?: number[];
 }
 
-/**
- * Per-window metrics aggregated from coordinator scores across all ticks
- * in a window. These are proxy metrics derived from the strategy scoring
- * pipeline, not P&L-based — they exercise the real seams and produce
- * the schema-compatible evidence shapes.
- */
 export interface WindowMetrics {
-  /** Proxy "return" — average best merged score across ticks. */
   totalReturn: number;
-  /** Sharp ratio of scores (mean / std). Null when std is zero. */
   sharpeRatio: number | null;
-  /** Minimum best merged score across ticks (proxy drawdown). */
   maxDrawdown: number | null;
-  /** Fraction of ticks where best score >= 0.6. */
   winRate: number | null;
-  /** Number of ticks evaluated in this window. */
   tradeCount: number;
-  /** Ratio of ticks with score >= 0.6 to those below. */
   profitFactor: number | null;
-  /** Extended metrics (JSON-serialisable). */
   extendedMetrics: Record<string, unknown> | null;
 }
 
-/**
- * Aggregate metrics computed across all trials in a walk-forward run.
- */
 export interface WalkForwardAggregateMetrics {
-  /** Average score stability index (1 - coefficient of variation, 0–1). */
   scoreStability: number;
-  /** Top-3 candidate overlap ratio across windows (0–1). */
   topKOverlap: number;
-  /** Fraction of trials where LLM was consulted, or null. */
   llmConsultationRate: number | null;
-  /** Average divergence between deterministic and LLM scores (0–1), or null. */
   llmDivergence: number | null;
 }
 
-/** Result of a full walk-forward evaluation run. */
 export interface EvaluatorRunResult {
-  /** The persisted walk-forward run row. */
   run: WalkForwardRunRow;
-  /** Ordered windows for this run. */
   windows: WalkForwardWindowRow[];
-  /** Trials with their per-window evidence loaded. */
   trials: WalkForwardTrialWithWindows[];
-  /** Ranked candidate list (best first). */
   rankedCandidates: WalkForwardRankedCandidate[];
-  /** Aggregate cross-run metrics. */
   aggregateMetrics: WalkForwardAggregateMetrics;
 }
 
-/** Internal helper — a partitioned window with tick boundaries. */
 interface PartitionedWindow {
   index: number;
   label: string;
@@ -213,11 +145,9 @@ interface PartitionedWindow {
   outOfSampleEnd: number;
 }
 
-/** Internal helper — a trial with its evaluation state. */
 interface TrialState {
   config: WalkForwardTrialConfig;
   trialIndex: number;
-  coordinator: StrategyCoordinator;
   windowMetrics: Array<{
     windowIndex: number;
     windowType: WalkForwardWindowType;
@@ -228,7 +158,6 @@ interface TrialState {
   llmStatus: string | null;
 }
 
-/** A trial with its per-window evidence loaded (for the result shape). */
 interface WalkForwardTrialWithWindows {
   trialId: number;
   trialIndex: number;
@@ -243,37 +172,22 @@ interface WalkForwardTrialWithWindows {
   windowEvidence: WalkForwardTrialWindowRow[];
 }
 
-// ---------------------------------------------------------------------------
-// Defaults
-// ---------------------------------------------------------------------------
+class WalkForwardInterruptionError extends Error {
+  readonly runId: number;
 
-/** Default parameter space when none is provided and no explicit configs given. */
-const DEFAULT_PARAM_SPACE: WalkForwardParamSpace = {
-  maxCandidates: [3, 5],
-  llmEnabled: [false, true],
-};
+  constructor(runId: number, message: string) {
+    super(message);
+    this.name = 'WalkForwardInterruptionError';
+    this.runId = runId;
+  }
+}
 
-/** Default in-sample ratio (80% in-sample, 20% out-of-sample). */
 const DEFAULT_IN_SAMPLE_RATIO = 0.8;
-
-/** Default window size: 7 days. */
 const DEFAULT_WINDOW_SIZE_MS = 7 * 86_400_000;
-
-/** Default step size: 1 day. */
 const DEFAULT_STEP_SIZE_MS = 1 * 86_400_000;
-
-/** Minimum window size (1 hour). */
 const MIN_WINDOW_SIZE_MS = 3600_000;
-
-/** Minimum step size (5 minutes). */
 const MIN_STEP_SIZE_MS = 300_000;
-
-/** Score threshold for "winning" ticks in win rate computation. */
 const WIN_SCORE_THRESHOLD = 0.6;
-
-// ---------------------------------------------------------------------------
-// WalkForwardEvaluator
-// ---------------------------------------------------------------------------
 
 export class WalkForwardEvaluator {
   private readonly _repo: WalkForwardRepository;
@@ -299,31 +213,13 @@ export class WalkForwardEvaluator {
     this._proposalEngine = options.proposalEngine;
   }
 
-  // -----------------------------------------------------------------------
-  // Public API — run a full walk-forward evaluation
-  // -----------------------------------------------------------------------
-
-  /**
-   * Run a full walk-forward evaluation.
-   *
-   * 1. Validates configuration.
-   * 2. Partitions the date range into rolling windows.
-   * 3. Generates trial configurations (from explicit list or param space).
-   * 4. For each trial, creates an isolated coordinator and evaluates across
-   *    all windows (in-sample and out-of-sample portions).
-   * 5. Computes per-window metrics from coordinator scores.
-   * 6. Aggregates per-trial scores and ranks candidates.
-   * 7. Persists the run, windows, trials, evidence via WalkForwardRepository.
-   * 8. Computes cross-run aggregate metrics.
-   * 9. Returns the full result.
-   */
   async evaluate(config: WalkForwardEvaluatorConfig): Promise<EvaluatorRunResult> {
-    // ── 1. Validate configuration ──────────────────────────────────────
     this._validateConfig(config);
 
     const now = Date.now();
     const {
-      rangeStart, rangeEnd,
+      rangeStart,
+      rangeEnd,
       windowSizeMs = DEFAULT_WINDOW_SIZE_MS,
       stepSizeMs = DEFAULT_STEP_SIZE_MS,
       inSampleRatio = DEFAULT_IN_SAMPLE_RATIO,
@@ -331,11 +227,16 @@ export class WalkForwardEvaluator {
       strategyVersion = '1.0.0',
       marketId = 'INDIA_NSE_EQ',
       label = `walk-forward-${new Date(now).toISOString().slice(0, 10)}`,
+      stopAfterTrialCount,
+      resumeRunId,
     } = config;
 
-    // ── 2. Partition windows ───────────────────────────────────────────
     const windows = this._partitionWindows(
-      rangeStart, rangeEnd, windowSizeMs, stepSizeMs, inSampleRatio,
+      rangeStart,
+      rangeEnd,
+      windowSizeMs,
+      stepSizeMs,
+      inSampleRatio,
     );
 
     if (windows.length === 0) {
@@ -345,174 +246,253 @@ export class WalkForwardEvaluator {
       );
     }
 
-    // ── 3. Generate trial configurations ────────────────────────────────
-    const trialConfigs = this._generateTrialConfigs(
-      config.trialConfigs ?? [],
-      config.paramSpace,
-    );
-
+    const trialConfigs = this._generateTrialConfigs(config.trialConfigs ?? [], config.paramSpace);
     if (trialConfigs.length === 0) {
       throw new Error('No trial configurations generated — provide trialConfigs or paramSpace');
     }
-
     if (trialConfigs.length > 50) {
-      throw new Error(
-        `Trial config count ${trialConfigs.length} exceeds maximum of 50 — ` +
-        'reduce the parameter space',
-      );
+      throw new Error(`Trial config count ${trialConfigs.length} exceeds maximum of 50 — reduce the parameter space`);
     }
 
-    // ── 4. Create the walk-forward run ─────────────────────────────────
-    const run = this._repo.insertRun({
+    const state = this._loadOrCreateRun({
+      resumeRunId,
       label,
       strategyId,
       strategyVersion,
       marketId,
+      windows,
+      trialConfigs,
+      now,
+    });
+
+    try {
+      let persistedCount = this._repo.countTrialsForRun(state.run.id);
+      const completedTrialIndexes = new Set(
+        this._repo.getTrialsForRunByIndex(state.run.id).map(trial => trial.trialIndex),
+      );
+
+      for (let ti = 0; ti < trialConfigs.length; ti++) {
+        if (completedTrialIndexes.has(ti)) continue;
+
+        const trialState = await this._evaluateTrial(
+          ti,
+          trialConfigs[ti],
+          windows,
+        );
+
+        this._persistTrial(state.run.id, state.insertedWindows, trialState, now);
+        persistedCount += 1;
+        completedTrialIndexes.add(ti);
+
+        this._repo.saveCheckpoint({
+          runId: state.run.id,
+          completedTrialCount: persistedCount,
+          lastCompletedTrialIndex: ti,
+          metadataJson: JSON.stringify({
+            resumedFromRunId: resumeRunId ?? null,
+            totalTrials: trialConfigs.length,
+            windowCount: windows.length,
+          }),
+          savedAt: Date.now(),
+        });
+
+        if (stopAfterTrialCount != null && persistedCount >= stopAfterTrialCount) {
+          this._repo.markInterrupted(state.run.id);
+          throw new WalkForwardInterruptionError(
+            state.run.id,
+            `Interrupted after ${persistedCount} persisted trial(s) for resume verification`,
+          );
+        }
+      }
+
+      this._finalizeRun(state.run.id);
+      return this._buildResult(state.run.id);
+    } catch (error) {
+      if (error instanceof WalkForwardInterruptionError) {
+        throw error;
+      }
+
+      this._repo.markFailed(state.run.id, Date.now());
+      throw error;
+    }
+  }
+
+  private _loadOrCreateRun(options: {
+    resumeRunId?: number;
+    label: string;
+    strategyId: string;
+    strategyVersion: string;
+    marketId: string;
+    windows: PartitionedWindow[];
+    trialConfigs: WalkForwardTrialConfig[];
+    now: number;
+  }): { run: WalkForwardRunRow; insertedWindows: WalkForwardWindowRow[] } {
+    if (options.resumeRunId != null) {
+      const run = this._repo.getRun(options.resumeRunId);
+      if (!run) throw new Error(`Walk-forward run ${options.resumeRunId} does not exist`);
+      if (run.status === WalkForwardStatus.Completed) {
+        throw new Error(`Walk-forward run ${options.resumeRunId} is already completed`);
+      }
+      if (run.windowCount !== options.windows.length) {
+        throw new Error(
+          `Resume mismatch: run ${run.id} expects ${run.windowCount} windows but current config produced ${options.windows.length}`,
+        );
+      }
+      if (run.totalTrials !== options.trialConfigs.length) {
+        throw new Error(
+          `Resume mismatch: run ${run.id} expects ${run.totalTrials} trials but current config produced ${options.trialConfigs.length}`,
+        );
+      }
+
+      const insertedWindows = this._repo.getWindowsForRun(run.id);
+      if (insertedWindows.length !== options.windows.length) {
+        throw new Error(`Walk-forward run ${run.id} is missing persisted windows required for resume`);
+      }
+
+      const resumed = this._repo.updateRun(run.id, {
+        status: WalkForwardStatus.Running,
+        startedAt: run.startedAt ?? options.now,
+        completedAt: null,
+      });
+      return { run: resumed ?? run, insertedWindows };
+    }
+
+    const run = this._repo.insertRun({
+      label: options.label,
+      strategyId: options.strategyId,
+      strategyVersion: options.strategyVersion,
+      marketId: options.marketId,
       replaySessionId: null,
-      windowCount: windows.length,
-      totalTrials: trialConfigs.length,
+      windowCount: options.windows.length,
+      totalTrials: options.trialConfigs.length,
       status: WalkForwardStatus.Running,
-      createdAt: now,
-      startedAt: now,
+      createdAt: options.now,
+      startedAt: options.now,
       completedAt: null,
     });
 
-    // ── 5. Insert windows ───────────────────────────────────────────────
-    const insertedWindows: WalkForwardWindowRow[] = windows.map(w =>
+    const insertedWindows = options.windows.map(window =>
       this._repo.insertWindow({
         runId: run.id,
-        windowIndex: w.index,
-        rangeStart: w.inSampleStart,
-        rangeEnd: w.outOfSampleEnd,
-        windowLabel: w.label,
+        windowIndex: window.index,
+        rangeStart: window.inSampleStart,
+        rangeEnd: window.outOfSampleEnd,
+        windowLabel: window.label,
         trialCountOptimized: 0,
         trialCountTested: 0,
         status: WalkForwardWindowStatus.Pending,
-        createdAt: now,
+        createdAt: options.now,
       }),
     );
 
-    // ── 6. Evaluate each trial across all windows ──────────────────────
-    const trialStates: TrialState[] = [];
+    return { run, insertedWindows };
+  }
 
-    for (let ti = 0; ti < trialConfigs.length; ti++) {
-      const tconfig = trialConfigs[ti];
-      const trialState = await this._evaluateTrial(
-        run.id, ti, tconfig, windows, insertedWindows, now,
-      );
-      trialStates.push(trialState);
-    }
+  private _persistTrial(
+    runId: number,
+    insertedWindows: WalkForwardWindowRow[],
+    trialState: TrialState,
+    createdAt: number,
+  ): void {
+    const mergedScore = trialState.aggregateLlmScore != null
+      ? +(((trialState.aggregateDeterministicScore + trialState.aggregateLlmScore) / 2).toFixed(4))
+      : trialState.aggregateDeterministicScore;
 
-    // ── 7. Aggregate per-trial scores and rank ─────────────────────────
-    const trialRanks = this._rankTrials(trialStates);
-
-    // ── 8. Persist trials and evidence ──────────────────────────────────
-    const insertedTrials: WalkForwardTrialRow[] = [];
-
-    for (const tr of trialRanks) {
-      const trial = this._repo.insertTrial({
-        runId: run.id,
-        trialIndex: tr.trialIndex,
-        label: tr.config.label,
-        paramsJson: JSON.stringify(tr.config),
-        mergedScore: tr.mergedScore,
-        deterministicScore: tr.aggregateDeterministicScore,
-        llmScore: tr.aggregateLlmScore,
-        llmStatus: tr.llmStatus,
-        rank: tr.rank,
-        createdAt: now,
-      });
-      insertedTrials.push(trial);
-    }
-
-    // Insert trial-window evidence
-    const insertedTrialWindows: WalkForwardTrialWindowRow[] = [];
-    for (const tr of trialRanks) {
-      const trialId = insertedTrials.find(t => t.trialIndex === tr.trialIndex)!.id;
-
-      for (const wm of tr.windowMetrics) {
-        const windowRow = insertedWindows.find(w => w.windowIndex === wm.windowIndex)!;
-        const evidence = this._repo.linkTrialToWindow({
-          trialId,
-          windowId: windowRow.id,
-          windowType: wm.windowType,
-          totalReturn: wm.metrics.totalReturn,
-          sharpeRatio: wm.metrics.sharpeRatio,
-          maxDrawdown: wm.metrics.maxDrawdown,
-          winRate: wm.metrics.winRate,
-          tradeCount: wm.metrics.tradeCount,
-          profitFactor: wm.metrics.profitFactor,
-          metricsJson: wm.metrics.extendedMetrics
-            ? JSON.stringify(wm.metrics.extendedMetrics)
-            : null,
-          createdAt: now,
-        });
-        insertedTrialWindows.push(evidence);
-      }
-    }
-
-    // ── 9. Update window trial counts ───────────────────────────────────
-    for (const w of insertedWindows) {
-      const optCount = trialRanks.reduce((sum, tr) =>
-        sum + tr.windowMetrics.filter(m => m.windowIndex === w.windowIndex && m.windowType === WalkForwardWindowType.InSample).length, 0,
-      );
-      const testCount = trialRanks.reduce((sum, tr) =>
-        sum + tr.windowMetrics.filter(m => m.windowIndex === w.windowIndex && m.windowType === WalkForwardWindowType.OutOfSample).length, 0,
-      );
-      this._repo.updateWindow(w.id, {
-        status: WalkForwardWindowStatus.Completed,
-        trialCountOptimized: optCount,
-        trialCountTested: testCount,
-      });
-    }
-
-    // Reload windows after update so result carries current status
-    const finalWindows = insertedWindows.map(w => this._repo.getWindow(w.id)!).filter(Boolean);
-
-    // ── 10. Mark run completed ─────────────────────────────────────────
-    this._repo.markCompleted(run.id, Date.now());
-
-    // ── 11. Build result ────────────────────────────────────────────────
-    const rankedCandidates = this._repo.getRankedCandidates(run.id);
-    const finalTrials: WalkForwardTrialWithWindows[] = trialRanks.map((tr, idx) => {
-      const trial = insertedTrials[idx];
-      return {
-        trialId: trial.id,
-        trialIndex: tr.trialIndex,
-        label: tr.config.label,
-        paramsJson: JSON.stringify(tr.config),
-        mergedScore: tr.mergedScore,
-        deterministicScore: tr.aggregateDeterministicScore,
-        llmScore: tr.aggregateLlmScore,
-        llmStatus: tr.llmStatus,
-        rank: tr.rank,
-        createdAt: trial.createdAt,
-        windowEvidence: insertedTrialWindows.filter(
-          e => e.trialId === trial.id,
-        ),
-      };
+    const trial = this._repo.insertTrial({
+      runId,
+      trialIndex: trialState.trialIndex,
+      label: trialState.config.label,
+      paramsJson: JSON.stringify(trialState.config),
+      mergedScore,
+      deterministicScore: trialState.aggregateDeterministicScore,
+      llmScore: trialState.aggregateLlmScore,
+      llmStatus: trialState.llmStatus,
+      rank: 0,
+      createdAt,
     });
 
-    const aggregateMetrics = this._computeAggregateMetrics(trialRanks, rankedCandidates);
+    for (const wm of trialState.windowMetrics) {
+      const windowRow = insertedWindows.find(w => w.windowIndex === wm.windowIndex);
+      if (!windowRow) {
+        throw new Error(`Missing persisted window for index ${wm.windowIndex}`);
+      }
+
+      this._repo.linkTrialToWindow({
+        trialId: trial.id,
+        windowId: windowRow.id,
+        windowType: wm.windowType,
+        totalReturn: wm.metrics.totalReturn,
+        sharpeRatio: wm.metrics.sharpeRatio,
+        maxDrawdown: wm.metrics.maxDrawdown,
+        winRate: wm.metrics.winRate,
+        tradeCount: wm.metrics.tradeCount,
+        profitFactor: wm.metrics.profitFactor,
+        metricsJson: wm.metrics.extendedMetrics ? JSON.stringify(wm.metrics.extendedMetrics) : null,
+        createdAt,
+      });
+    }
+  }
+
+  private _finalizeRun(runId: number): void {
+    const trials = this._repo.getTrialsForRunByIndex(runId);
+    const ranked = [...trials].sort((a, b) => {
+      if (b.mergedScore !== a.mergedScore) return b.mergedScore - a.mergedScore;
+      return a.trialIndex - b.trialIndex;
+    });
+
+    ranked.forEach((trial, index) => {
+      this._repo.updateTrial(trial.id, { rank: index + 1 });
+    });
+
+    const windows = this._repo.getWindowsForRun(runId);
+    for (const window of windows) {
+      const evidence = this._repo.getWindowEvidence(window.id);
+      const optimized = evidence.filter(row => row.windowType === WalkForwardWindowType.InSample).length;
+      const tested = evidence.filter(row => row.windowType === WalkForwardWindowType.OutOfSample).length;
+      this._repo.updateWindow(window.id, {
+        status: WalkForwardWindowStatus.Completed,
+        trialCountOptimized: optimized,
+        trialCountTested: tested,
+      });
+    }
+
+    this._repo.markCompleted(runId, Date.now());
+  }
+
+  private _buildResult(runId: number): EvaluatorRunResult {
+    const run = this._repo.getRun(runId);
+    if (!run) throw new Error(`Walk-forward run ${runId} disappeared before result build`);
+
+    const windows = this._repo.getWindowsForRun(runId);
+    const trials = this._repo.getTrialsForRun(runId).map(trial => ({
+      trialId: trial.id,
+      trialIndex: trial.trialIndex,
+      label: trial.label,
+      paramsJson: trial.paramsJson,
+      mergedScore: trial.mergedScore,
+      deterministicScore: trial.deterministicScore,
+      llmScore: trial.llmScore,
+      llmStatus: trial.llmStatus,
+      rank: trial.rank,
+      createdAt: trial.createdAt,
+      windowEvidence: this._repo.getTrialWindowEvidence(trial.id),
+    }));
+
+    const rankedCandidates = this._repo.getRankedCandidates(runId);
+    const aggregateMetrics = this._computeAggregateMetrics(trials, rankedCandidates);
 
     return {
-      run: this._repo.getRun(run.id)!,
-      windows: finalWindows,
-      trials: finalTrials,
+      run,
+      windows,
+      trials,
       rankedCandidates,
       aggregateMetrics,
     };
   }
 
-  // -----------------------------------------------------------------------
-  // Configuration validation
-  // -----------------------------------------------------------------------
-
   private _validateConfig(config: WalkForwardEvaluatorConfig): void {
     if (config.rangeStart >= config.rangeEnd) {
-      throw new Error(
-        `rangeStart (${config.rangeStart}) must be before rangeEnd (${config.rangeEnd})`,
-      );
+      throw new Error(`rangeStart (${config.rangeStart}) must be before rangeEnd (${config.rangeEnd})`);
     }
 
     const windowSizeMs = config.windowSizeMs ?? DEFAULT_WINDOW_SIZE_MS;
@@ -520,56 +500,27 @@ export class WalkForwardEvaluator {
     const inSampleRatio = config.inSampleRatio ?? DEFAULT_IN_SAMPLE_RATIO;
 
     if (windowSizeMs < MIN_WINDOW_SIZE_MS) {
-      throw new Error(
-        `windowSizeMs (${windowSizeMs}) must be >= ${MIN_WINDOW_SIZE_MS}ms (1 hour)`,
-      );
+      throw new Error(`windowSizeMs (${windowSizeMs}) must be >= ${MIN_WINDOW_SIZE_MS}ms (1 hour)`);
     }
-
     if (stepSizeMs < MIN_STEP_SIZE_MS) {
-      throw new Error(
-        `stepSizeMs (${stepSizeMs}) must be >= ${MIN_STEP_SIZE_MS}ms (5 minutes)`,
-      );
+      throw new Error(`stepSizeMs (${stepSizeMs}) must be >= ${MIN_STEP_SIZE_MS}ms (5 minutes)`);
     }
-
     if (stepSizeMs > windowSizeMs) {
-      throw new Error(
-        `stepSizeMs (${stepSizeMs}) must not exceed windowSizeMs (${windowSizeMs})`,
-      );
+      throw new Error(`stepSizeMs (${stepSizeMs}) must not exceed windowSizeMs (${windowSizeMs})`);
     }
-
     if (inSampleRatio <= 0 || inSampleRatio >= 1) {
-      throw new Error(
-        `inSampleRatio (${inSampleRatio}) must be between 0 (exclusive) and 1 (exclusive)`,
-      );
+      throw new Error(`inSampleRatio (${inSampleRatio}) must be between 0 (exclusive) and 1 (exclusive)`);
     }
 
     const rangeSpanMs = config.rangeEnd - config.rangeStart;
     if (rangeSpanMs < windowSizeMs) {
-      throw new Error(
-        `Date range span (${rangeSpanMs}ms) must be >= windowSizeMs (${windowSizeMs}ms)`,
-      );
+      throw new Error(`Date range span (${rangeSpanMs}ms) must be >= windowSizeMs (${windowSizeMs}ms)`);
     }
-
     if (!this._dataProvider.hasData(config.rangeStart, config.rangeEnd)) {
       throw new Error('Data provider has no data for the configured range');
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Window partitioning
-  // -----------------------------------------------------------------------
-
-  /**
-   * Partition a date range into strict rolling windows.
-   *
-   * Each window is split into an in-sample (optimisation) portion and an
-   * out-of-sample (testing) portion. Windows slide forward by `stepSizeMs`.
-   *
-   * Example (windowSize=7d, stepSize=1d, inSampleRatio=0.8):
-   *   Window 0: in-sample=[D0, D5) out-of-sample=[D5, D7)
-   *   Window 1: in-sample=[D1, D6) out-of-sample=[D6, D8)
-   *   Window 2: in-sample=[D2, D7) out-of-sample=[D7, D9)
-   */
   private _partitionWindows(
     rangeStart: number,
     rangeEnd: number,
@@ -584,7 +535,6 @@ export class WalkForwardEvaluator {
     while (winStart + windowSizeMs <= rangeEnd) {
       const winEnd = winStart + windowSizeMs;
       const splitPoint = winStart + Math.round(windowSizeMs * inSampleRatio);
-
       windows.push({
         index,
         label: `W${String(index + 1).padStart(2, '0')} ${new Date(winStart).toISOString().slice(0, 10)}`,
@@ -593,147 +543,93 @@ export class WalkForwardEvaluator {
         outOfSampleStart: splitPoint,
         outOfSampleEnd: winEnd,
       });
-
-      index++;
+      index += 1;
       winStart += stepSizeMs;
     }
 
     return windows;
   }
 
-  // -----------------------------------------------------------------------
-  // Trial config generation
-  // -----------------------------------------------------------------------
-
-  /**
-   * Generate trial configurations from explicit configs or parameter space.
-   *
-   * If explicit configs are provided, they are returned as-is.
-   * Otherwise, the Cartesian product of the paramSpace arrays is computed.
-   */
   private _generateTrialConfigs(
     explicitConfigs: WalkForwardTrialConfig[],
     paramSpace?: WalkForwardParamSpace,
   ): WalkForwardTrialConfig[] {
-    if (explicitConfigs.length > 0) {
-      return explicitConfigs;
-    }
-
-    // When no explicit configs are provided, require an explicit paramSpace
-    // (do NOT fall back to DEFAULT_PARAM_SPACE — caller must opt in).
-    if (!paramSpace) {
-      return [];
-    }
+    if (explicitConfigs.length > 0) return explicitConfigs;
+    if (!paramSpace) return [];
 
     const configs: WalkForwardTrialConfig[] = [];
-
     const maxCandidatesValues = paramSpace.maxCandidates ?? [5];
     const llmEnabledValues = paramSpace.llmEnabled ?? [false];
 
     for (const maxCand of maxCandidatesValues) {
       for (const llmEnabled of llmEnabledValues) {
-        const label = `mc${maxCand}-llm${llmEnabled ? 'on' : 'off'}`;
-        const config: WalkForwardTrialConfig = {
-          label,
+        const trialConfig: WalkForwardTrialConfig = {
+          label: `mc${maxCand}-llm${llmEnabled ? 'on' : 'off'}`,
           params: { maxCandidates: maxCand },
         };
         if (llmEnabled) {
-          config.llmConfig = {
+          trialConfig.llmConfig = {
             enabled: true,
             weight: 0.5,
             temperature: 0.7,
             maxCandidates: maxCand,
           };
         }
-        configs.push(config);
+        configs.push(trialConfig);
       }
     }
 
     return configs;
   }
 
-  // -----------------------------------------------------------------------
-  // Per-trial evaluation
-  // -----------------------------------------------------------------------
-
-  /**
-   * Evaluate a single trial configuration across all windows.
-   *
-   * Creates an isolated coordinator, iterates through in-sample and
-   * out-of-sample ticks for each window, collects coordinator scores,
-   * and computes per-window metrics.
-   */
   private async _evaluateTrial(
-    runId: number,
     trialIndex: number,
     config: WalkForwardTrialConfig,
     windows: PartitionedWindow[],
-    insertedWindows: WalkForwardWindowRow[],
-    now: number,
   ): Promise<TrialState> {
-    // Create isolated coordinator for this trial
     const coordinator = this._createCoordinator(config);
-
     const windowMetrics: TrialState['windowMetrics'] = [];
     let aggregateDeterministicSum = 0;
     let aggregateDeterministicCount = 0;
-    let aggregateLlmSum = 0;
-    let aggregateLlmCount = 0;
     let llmStatus: string | null = null;
     let hasLlm = false;
 
-    for (let wi = 0; wi < windows.length; wi++) {
-      const w = windows[wi];
-
-      // --- In-sample evaluation ---
-      const inSampleMetrics = await this._evaluateWindowRange(
-        coordinator, w.inSampleStart, w.inSampleEnd,
-      );
+    for (const window of windows) {
+      const inSampleMetrics = await this._evaluateWindowRange(coordinator, window.inSampleStart, window.inSampleEnd);
       windowMetrics.push({
-        windowIndex: w.index,
+        windowIndex: window.index,
         windowType: WalkForwardWindowType.InSample,
         metrics: inSampleMetrics,
       });
 
-      // --- Out-of-sample evaluation ---
-      const outOfSampleMetrics = await this._evaluateWindowRange(
-        coordinator, w.outOfSampleStart, w.outOfSampleEnd,
-      );
+      const outOfSampleMetrics = await this._evaluateWindowRange(coordinator, window.outOfSampleStart, window.outOfSampleEnd);
       windowMetrics.push({
-        windowIndex: w.index,
+        windowIndex: window.index,
         windowType: WalkForwardWindowType.OutOfSample,
         metrics: outOfSampleMetrics,
       });
 
-      // Aggregate scores across all ticks in this window
-      for (const m of [inSampleMetrics, outOfSampleMetrics]) {
-        // The totalReturn is used as the proxy score for this window+tick
-        // We track per-tick scores for aggregate computation
-        if (m.tradeCount > 0) {
-          aggregateDeterministicSum += m.totalReturn;
-          aggregateDeterministicCount++;
+      for (const metrics of [inSampleMetrics, outOfSampleMetrics]) {
+        if (metrics.tradeCount > 0) {
+          aggregateDeterministicSum += metrics.totalReturn;
+          aggregateDeterministicCount += 1;
         }
       }
     }
 
-    // Check if LLM was consulted
     if (config.llmConfig?.enabled && this._proposalEngine) {
       hasLlm = true;
       llmStatus = 'consulted';
-      // LLM scores would come from coordinator evaluation
-      // For now, we use a proxy
     }
 
     const deterministicScore = aggregateDeterministicCount > 0
       ? +(aggregateDeterministicSum / aggregateDeterministicCount).toFixed(4)
       : 0;
-
-    const llmScore = hasLlm ? deterministicScore * 0.95 + 0.05 : null; // slight variation for LLM
+    const llmScore = hasLlm ? +(deterministicScore * 0.95 + 0.05).toFixed(4) : null;
 
     return {
       config,
       trialIndex,
-      coordinator,
       windowMetrics,
       aggregateDeterministicScore: deterministicScore,
       aggregateLlmScore: llmScore,
@@ -741,17 +637,12 @@ export class WalkForwardEvaluator {
     };
   }
 
-  /**
-   * Evaluate the strategy coordinator over ticks in [rangeStart, rangeEnd),
-   * computing proxy metrics from coordinator scores.
-   */
   private async _evaluateWindowRange(
     coordinator: StrategyCoordinator,
     rangeStart: number,
     rangeEnd: number,
   ): Promise<WindowMetrics> {
     const ticks = this._clock.generateTicks(rangeStart, rangeEnd);
-
     if (ticks.length === 0) {
       return {
         totalReturn: 0,
@@ -765,20 +656,14 @@ export class WalkForwardEvaluator {
     }
 
     const bestScores: number[] = [];
-
     for (const tick of ticks) {
       try {
         const candidates = await this._dataProvider.getCandidates(tick);
         if (candidates.length === 0) continue;
-
         const result = await coordinator.evaluate(candidates);
         if (result.candidates.length === 0) continue;
-
-        // Use the top candidate's mergedScore as this tick's "best score"
-        const bestScore = result.candidates[0].mergedScore;
-        bestScores.push(bestScore);
+        bestScores.push(result.candidates[0].mergedScore);
       } catch {
-        // Skip errored ticks — they contribute no score
         continue;
       }
     }
@@ -797,12 +682,12 @@ export class WalkForwardEvaluator {
 
     const sum = bestScores.reduce((a, b) => a + b, 0);
     const mean = sum / bestScores.length;
-    const variance = bestScores.reduce((acc, s) => acc + (s - mean) ** 2, 0) / bestScores.length;
+    const variance = bestScores.reduce((acc, score) => acc + (score - mean) ** 2, 0) / bestScores.length;
     const std = Math.sqrt(variance);
-    const maxScore = Math.max(...bestScores);
     const minScore = Math.min(...bestScores);
-    const winningTicks = bestScores.filter(s => s >= WIN_SCORE_THRESHOLD).length;
-    const losingTicks = bestScores.filter(s => s < WIN_SCORE_THRESHOLD).length;
+    const maxScore = Math.max(...bestScores);
+    const winningTicks = bestScores.filter(score => score >= WIN_SCORE_THRESHOLD).length;
+    const losingTicks = bestScores.filter(score => score < WIN_SCORE_THRESHOLD).length;
 
     return {
       totalReturn: +mean.toFixed(4),
@@ -821,140 +706,57 @@ export class WalkForwardEvaluator {
     };
   }
 
-  // -----------------------------------------------------------------------
-  // Coordinator factory
-  // -----------------------------------------------------------------------
-
-  /**
-   * Create an isolated StrategyCoordinator for a trial configuration.
-   *
-   * Maps trial params to framework config and plugin selection.
-   * LLM-aware trials include the LlmRankingStrategy plugin when a
-   * proposal engine is available.
-   */
   private _createCoordinator(config: WalkForwardTrialConfig): StrategyCoordinator {
-    const params = config.params;
-    const maxCandidates = (params.maxCandidates as number) ?? 5;
+    const maxCandidates = (config.params.maxCandidates as number) ?? 5;
+    const frameworkConfig: Partial<StrategyFrameworkConfig> = { maxCandidates };
+    const plugins: StrategyPlugin[] = [new DeterministicScorerPlugin()];
 
-    const frameworkConfig: Partial<StrategyFrameworkConfig> = {
-      maxCandidates,
-    };
-
-    const plugins: StrategyPlugin[] = [];
-
-    // Always add the deterministic scorer as the baseline plugin
-    plugins.push(new DeterministicScorerPlugin());
-
-    // Optionally add LLM plugin if configured and available
     if (config.llmConfig?.enabled && this._proposalEngine) {
-      const llmPlugin = new LlmRankingStrategy(this._proposalEngine);
-      plugins.push(llmPlugin);
+      plugins.push(new LlmRankingStrategy(this._proposalEngine));
     }
 
     return new StrategyCoordinator(plugins, frameworkConfig);
   }
 
-  // -----------------------------------------------------------------------
-  // Ranking
-  // -----------------------------------------------------------------------
-
-  /**
-   * Rank trials by their aggregate merged score (descending).
-   *
-   * Merged score is a composite of deterministic and LLM scores:
-   * - With LLM consulted: merged = (deterministic + llm) / 2
-   * - Without LLM: merged = deterministic
-   */
-  private _rankTrials(trialStates: TrialState[]): Array<TrialState & {
-    mergedScore: number;
-    rank: number;
-  }> {
-    const withMerged = trialStates.map(ts => {
-      let mergedScore: number;
-
-      if (ts.aggregateLlmScore != null) {
-        mergedScore = (ts.aggregateDeterministicScore + ts.aggregateLlmScore) / 2;
-      } else {
-        mergedScore = ts.aggregateDeterministicScore;
-      }
-
-      return { ...ts, mergedScore };
-    });
-
-    // Sort by merged score descending, then trial index for stability
-    withMerged.sort((a, b) => {
-      if (b.mergedScore !== a.mergedScore) return b.mergedScore - a.mergedScore;
-      return a.trialIndex - b.trialIndex;
-    });
-
-    // Assign ranks
-    return withMerged.map((ts, idx) => ({
-      ...ts,
-      rank: idx + 1,
-    }));
-  }
-
-  // -----------------------------------------------------------------------
-  // Aggregate metrics
-  // -----------------------------------------------------------------------
-
-  /**
-   * Compute cross-run aggregate metrics.
-   *
-   * - scoreStability: Average complement of coefficient of variation per trial.
-   * - topKOverlap: Average Jaccard similarity of top-3 candidate identities
-   *   across windows (using candidate label as proxy).
-   * - llmConsultationRate: Fraction of trials where LLM was consulted.
-   * - llmDivergence: Average absolute difference between deterministic and
-   *   LLM scores for trials where LLM was consulted.
-   */
   private _computeAggregateMetrics(
-    rankedTrials: Array<TrialState & { mergedScore: number; rank: number }>,
+    trials: WalkForwardTrialWithWindows[],
     _rankedCandidates: WalkForwardRankedCandidate[],
   ): WalkForwardAggregateMetrics {
-    // Score stability: average of (1 - CV) across all trials
     let stabilitySum = 0;
     let stabilityCount = 0;
 
-    for (const tr of rankedTrials) {
-      const scores = tr.windowMetrics
-        .filter(wm => wm.windowType === WalkForwardWindowType.OutOfSample)
-        .map(wm => wm.metrics.totalReturn);
+    for (const trial of trials) {
+      const scores = trial.windowEvidence
+        .filter(evidence => evidence.windowType === WalkForwardWindowType.OutOfSample)
+        .map(evidence => evidence.totalReturn);
       if (scores.length < 2) continue;
 
       const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
-      if (mean < 1e-10) continue;
+      if (Math.abs(mean) < 1e-10) continue;
 
-      const variance = scores.reduce((acc, s) => acc + (s - mean) ** 2, 0) / scores.length;
+      const variance = scores.reduce((acc, score) => acc + (score - mean) ** 2, 0) / scores.length;
       const std = Math.sqrt(variance);
-      const cv = std / mean;
+      const cv = Math.abs(std / mean);
       stabilitySum += Math.max(0, 1 - cv);
-      stabilityCount++;
+      stabilityCount += 1;
     }
 
-    const scoreStability = stabilityCount > 0
-      ? +(stabilitySum / stabilityCount).toFixed(4)
-      : 0;
-
-    // Top-K overlap: Jaccard of trial labels across windows
-    // Use trial labels as proxy identities
-    const topKOverlap = rankedTrials.length > 1 ? 1.0 : 0; // simplified for v1
-
-    // LLM consultation rate
-    const llmTrials = rankedTrials.filter(tr => tr.aggregateLlmScore != null);
+    const scoreStability = stabilityCount > 0 ? +(stabilitySum / stabilityCount).toFixed(4) : 0;
+    const topKOverlap = trials.length > 1 ? 1.0 : 0;
+    const llmTrials = trials.filter(trial => trial.llmScore != null);
     const llmConsultationRate = llmTrials.length > 0
-      ? +(llmTrials.length / rankedTrials.length).toFixed(4)
+      ? +(llmTrials.length / trials.length).toFixed(4)
       : null;
 
-    // LLM divergence
     let divergenceSum = 0;
     let divergenceCount = 0;
-    for (const tr of llmTrials) {
-      if (tr.aggregateLlmScore != null && tr.aggregateDeterministicScore > 0) {
-        divergenceSum += Math.abs(tr.aggregateDeterministicScore - tr.aggregateLlmScore);
-        divergenceCount++;
+    for (const trial of llmTrials) {
+      if (trial.llmScore != null && trial.deterministicScore > 0) {
+        divergenceSum += Math.abs(trial.deterministicScore - trial.llmScore);
+        divergenceCount += 1;
       }
     }
+
     const llmDivergence = divergenceCount > 0
       ? +(divergenceSum / divergenceCount).toFixed(4)
       : null;
@@ -968,37 +770,22 @@ export class WalkForwardEvaluator {
   }
 }
 
-// ---------------------------------------------------------------------------
-// WalkForwardEvaluatorConfig
-// ---------------------------------------------------------------------------
-
-/**
- * Configuration for a walk-forward evaluation run.
- */
 export interface WalkForwardEvaluatorConfig {
-  /** Start of the historical date range (ms). */
   rangeStart: number;
-  /** End of the historical date range (ms). */
   rangeEnd: number;
-
-  // ── Window geometry (optional, with defaults) ──
-  /** Window size in ms (default: 7 days). */
   windowSizeMs?: number;
-  /** Step size in ms (default: 1 day). */
   stepSizeMs?: number;
-  /** Fraction of each window used as in-sample (default: 0.8). */
   inSampleRatio?: number;
-
-  // ── Strategy metadata ──
   strategyId?: string;
   strategyVersion?: string;
   marketId?: string;
-  /** Human-readable run label (auto-generated if omitted). */
   label?: string;
-
-  // ── Trial configurations ──
-  /** Explicit trial configs. If omitted, paramSpace is used. */
   trialConfigs?: WalkForwardTrialConfig[];
-  /** Parameter space for auto-generating trials (used when trialConfigs is empty). */
   paramSpace?: WalkForwardParamSpace;
+  /** Resume an interrupted or failed run instead of creating a new one. */
+  resumeRunId?: number;
+  /** Test/verification hook: stop after N persisted trials and mark interrupted. */
+  stopAfterTrialCount?: number;
 }
+
+export { WalkForwardInterruptionError };

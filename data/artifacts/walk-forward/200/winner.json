@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "winner-selection",
+  "runId": 200,
+  "runLabel": "Run 200",
+  "selectionTimestamp": "2025-01-04T21:20:00.000Z",
+  "selectionConfig": {
+    "strategy": "composite",
+    "minMergedScore": 0.7,
+    "minSharpeRatio": 1,
+    "maxDrawdown": 20
+  },
+  "result": "selected",
+  "winner": {
+    "trialId": 2,
+    "trialLabel": "Config B",
+    "paramsJson": "{\"momentum\":0.5,\"volatility\":0.3}",
+    "mergedScore": 0.85,
+    "deterministicScore": 0.765,
+    "llmScore": 0.88
+  },
+  "rationale": "Selected Config A (rank 1) via composite selection with merged score 0.9200 across 3 windows.",
+  "comparisons": [
+    {
+      "trialId": 1,
+      "rank": 1,
+      "label": "Config A",
+      "mergedScore": 0.92,
+      "outcome": "winner",
+      "reasons": [
+        "Top-ranked qualifying candidate by selection criteria"
+      ],
+      "evidenceScores": {
+        "avgSharpe": 1.5,
+        "maxDrawdown": 10,
+        "avgWinRate": 0.65,
+        "outOfSampleWindowCount": 2
+      }
+    },
+    {
+      "trialId": 2,
+      "rank": 2,
+      "label": "Config B",
+      "mergedScore": 0.78,
+      "outcome": "runner_up",
+      "reasons": [
+        "Merged score below threshold"
+      ],
+      "evidenceScores": {
+        "avgSharpe": 1.5,
+        "maxDrawdown": 10,
+        "avgWinRate": 0.65,
+        "outOfSampleWindowCount": 2
+      }
+    }
+  ]
+}

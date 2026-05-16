@@ -6,6 +6,8 @@ import type Database from 'better-sqlite3';
 import {
   type WalkForwardRunRow,
   type NewWalkForwardRun,
+  type WalkForwardCheckpointRow,
+  type NewWalkForwardCheckpoint,
   type WalkForwardWindowRow,
   type NewWalkForwardWindow,
   type WalkForwardTrialRow,
@@ -83,6 +85,15 @@ interface WalkForwardTrialWindowDbRow {
   profit_factor: number | null;
   metrics_json: string | null;
   created_at: number;
+}
+
+interface WalkForwardCheckpointDbRow {
+  id: number;
+  run_id: number;
+  completed_trial_count: number;
+  last_completed_trial_index: number | null;
+  metadata_json: string | null;
+  saved_at: number;
 }
 
 interface CountRow {
@@ -228,6 +239,16 @@ export class WalkForwardRepository {
   markFailed(id: number, completedAt: number): WalkForwardRunRow | null {
     return this.updateRun(id, {
       status: WalkForwardStatus.Failed,
+      completedAt,
+    });
+  }
+
+  /**
+   * Mark a run as interrupted.
+   */
+  markInterrupted(id: number, completedAt: number = Date.now()): WalkForwardRunRow | null {
+    return this.updateRun(id, {
+      status: WalkForwardStatus.Interrupted,
       completedAt,
     });
   }
@@ -407,6 +428,38 @@ export class WalkForwardRepository {
   }
 
   /**
+   * Get all trials for a run, ordered by trial_index ascending.
+   */
+  getTrialsForRunByIndex(runId: number): WalkForwardTrialRow[] {
+    const rows = this._db.prepare(`
+      SELECT id, run_id, trial_index, label, params_json,
+             merged_score, deterministic_score, llm_score, llm_status,
+             rank, created_at
+      FROM walk_forward_trials
+      WHERE run_id = ?
+      ORDER BY trial_index ASC
+    `).all(runId) as WalkForwardTrialDbRow[];
+
+    return rows.map(this._mapTrialRow);
+  }
+
+  /**
+   * Get a specific persisted trial by its parent run and trial index.
+   */
+  getTrialForRunByIndex(runId: number, trialIndex: number): WalkForwardTrialRow | null {
+    const row = this._db.prepare(`
+      SELECT id, run_id, trial_index, label, params_json,
+             merged_score, deterministic_score, llm_score, llm_status,
+             rank, created_at
+      FROM walk_forward_trials
+      WHERE run_id = ? AND trial_index = ?
+      LIMIT 1
+    `).get(runId, trialIndex) as WalkForwardTrialDbRow | undefined;
+
+    return row ? this._mapTrialRow(row) : null;
+  }
+
+  /**
    * Get ranked candidates for a run — a read-model view of trials with
    * their window evidence count, ordered by rank (best first).
    */
@@ -564,6 +617,69 @@ export class WalkForwardRepository {
     const row = this._db.prepare(
       'SELECT COUNT(*) AS cnt FROM walk_forward_trial_windows',
     ).get() as CountRow;
+    return row.cnt;
+  }
+
+  // -----------------------------------------------------------------------
+  // Checkpoint CRUD
+  // -----------------------------------------------------------------------
+
+  /**
+   * Save an append-only checkpoint for a walk-forward run.
+   */
+  saveCheckpoint(checkpoint: NewWalkForwardCheckpoint): WalkForwardCheckpointRow {
+    const result = this._db.prepare(`
+      INSERT INTO walk_forward_checkpoints
+        (run_id, completed_trial_count, last_completed_trial_index, metadata_json, saved_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      checkpoint.runId,
+      checkpoint.completedTrialCount,
+      checkpoint.lastCompletedTrialIndex,
+      checkpoint.metadataJson,
+      checkpoint.savedAt,
+    );
+
+    const id = Number(result.lastInsertRowid);
+    return this._getCheckpoint(id)!;
+  }
+
+  /**
+   * Get the latest checkpoint for a run.
+   */
+  getLatestCheckpoint(runId: number): WalkForwardCheckpointRow | null {
+    const row = this._db.prepare(`
+      SELECT id, run_id, completed_trial_count, last_completed_trial_index,
+             metadata_json, saved_at
+      FROM walk_forward_checkpoints
+      WHERE run_id = ?
+      ORDER BY saved_at DESC, id DESC
+      LIMIT 1
+    `).get(runId) as WalkForwardCheckpointDbRow | undefined;
+
+    return row ? this._mapCheckpointRow(row) : null;
+  }
+
+  /**
+   * Get all checkpoints for a run in chronological order.
+   */
+  getCheckpointsForRun(runId: number): WalkForwardCheckpointRow[] {
+    const rows = this._db.prepare(`
+      SELECT id, run_id, completed_trial_count, last_completed_trial_index,
+             metadata_json, saved_at
+      FROM walk_forward_checkpoints
+      WHERE run_id = ?
+      ORDER BY saved_at ASC, id ASC
+    `).all(runId) as WalkForwardCheckpointDbRow[];
+
+    return rows.map(this._mapCheckpointRow);
+  }
+
+  /** Count checkpoints for a run. */
+  countCheckpoints(runId: number): number {
+    const row = this._db.prepare(
+      'SELECT COUNT(*) AS cnt FROM walk_forward_checkpoints WHERE run_id = ?',
+    ).get(runId) as CountRow;
     return row.cnt;
   }
 
@@ -763,6 +879,17 @@ export class WalkForwardRepository {
   // Private helpers
   // -----------------------------------------------------------------------
 
+  private _getCheckpoint(id: number): WalkForwardCheckpointRow | null {
+    const row = this._db.prepare(`
+      SELECT id, run_id, completed_trial_count, last_completed_trial_index,
+             metadata_json, saved_at
+      FROM walk_forward_checkpoints
+      WHERE id = ?
+    `).get(id) as WalkForwardCheckpointDbRow | undefined;
+
+    return row ? this._mapCheckpointRow(row) : null;
+  }
+
   private _getWindow(id: number): WalkForwardWindowRow | null {
     const row = this._db.prepare(`
       SELECT id, run_id, window_index, range_start, range_end, window_label,
@@ -812,6 +939,17 @@ export class WalkForwardRepository {
       createdAt: row.created_at,
       startedAt: row.started_at,
       completedAt: row.completed_at,
+    };
+  }
+
+  private _mapCheckpointRow(row: WalkForwardCheckpointDbRow): WalkForwardCheckpointRow {
+    return {
+      id: row.id,
+      runId: row.run_id,
+      completedTrialCount: row.completed_trial_count,
+      lastCompletedTrialIndex: row.last_completed_trial_index,
+      metadataJson: row.metadata_json,
+      savedAt: row.saved_at,
     };
   }
 
