@@ -583,4 +583,534 @@ describe('UpstoxHistoricalDataProvider', () => {
       await expect(provider.getCandidates(tick)).rejects.toThrow();
     });
   });
+
+  describe('maxInstruments', () => {
+    it('limits the number of instruments loaded from config', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const configPath = writeConfigFile(dir, [
+        ...INSTRUMENTS,
+        {
+          instrument_key: 'NSE_EQ|INE090A01021',
+          exchange: 'NSE',
+          trading_symbol: 'TCS',
+          instrument_type: 'EQ',
+          lot_size: 1,
+          tick_size: 0.05,
+        },
+      ]);
+      const client = new UpstoxRestClient();
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (input: RequestInfo | URL) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+
+          if (url.includes('/v2/historical-candles/')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+
+          if (url.includes('/v2/user/profile')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ status: 'success', data: { email: 'test@test.com' } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+              ),
+            );
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        },
+      );
+
+      const provider = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+        maxInstruments: 1,
+      });
+
+      const tick: ReplayTick = {
+        index: 1,
+        timestamp: 1704067260000,
+        fidelity: ReplayFidelity.Full,
+      };
+
+      const candidates = await provider.getCandidates(tick);
+
+      // Should only have 1 candidate (limited by maxInstruments)
+      expect(candidates).toHaveLength(1);
+      expect(provider.instrumentCount).toBe(1);
+    });
+  });
+
+  describe('candle cache', () => {
+    it('writes JSON cache files after first fetch with cacheDir', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const cacheDir = path.join(dir, 'cache');
+      const configPath = writeConfigFile(dir, INSTRUMENTS);
+      const client = new UpstoxRestClient();
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (input: RequestInfo | URL) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+
+          if (url.includes('NSE_EQ|INE002A01018')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+          if (url.includes('NSE_EQ|INE009A01021')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES_B), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+          if (url.includes('/v2/user/profile')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ status: 'success', data: { email: 'test@test.com' } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+              ),
+            );
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        },
+      );
+
+      const provider = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+        cacheDir,
+      });
+
+      const tick: ReplayTick = {
+        index: 1,
+        timestamp: 1704067260000,
+        fidelity: ReplayFidelity.Full,
+      };
+
+      const candidates = await provider.getCandidates(tick);
+      expect(candidates).toHaveLength(2);
+
+      // Verify cache files exist on disk with sanitized names
+      const file1 = path.join(cacheDir, 'NSE_EQ_INE002A01018.json');
+      const file2 = path.join(cacheDir, 'NSE_EQ_INE009A01021.json');
+      expect(fs.existsSync(file1)).toBe(true);
+      expect(fs.existsSync(file2)).toBe(true);
+
+      // Verify cache file content is valid JSON and matches candles
+      const cached1 = JSON.parse(fs.readFileSync(file1, 'utf8'));
+      expect(cached1).toEqual(SAMPLE_CANDLES.data.candles);
+
+      const cached2 = JSON.parse(fs.readFileSync(file2, 'utf8'));
+      expect(cached2).toEqual(SAMPLE_CANDLES_B.data.candles);
+    });
+
+    it('reads from cache on second provider instance (no API calls for cached instruments)', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const cacheDir = path.join(dir, 'cache');
+      const configPath = writeConfigFile(dir, INSTRUMENTS);
+      const client = new UpstoxRestClient();
+
+      // First instance: fetch from API, write cache
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (input: RequestInfo | URL) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+
+          if (url.includes('/v2/historical-candles/')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+
+          if (url.includes('/v2/user/profile')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ status: 'success', data: { email: 'test@test.com' } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+              ),
+            );
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        },
+      );
+
+      const provider1 = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+        cacheDir,
+      });
+
+      const tick: ReplayTick = {
+        index: 1,
+        timestamp: 1704067260000,
+        fidelity: ReplayFidelity.Full,
+      };
+
+      await provider1.getCandidates(tick);
+
+      // Reset the spy counter for the second provider
+      const historicalCandleUrls = fetchSpy.mock.calls.filter(
+        call => String(call[0]).includes('/v2/historical-candles/'),
+      ).length;
+      expect(historicalCandleUrls).toBe(2); // 2 API calls for 2 instruments
+
+      // Second instance: should read from cache, no API calls
+      fetchSpy.mockClear();
+
+      const provider2 = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+        cacheDir,
+      });
+
+      const candidates2 = await provider2.getCandidates(tick);
+      expect(candidates2).toHaveLength(2);
+
+      // Verify NO historical-candle API calls were made
+      const historicalCallsAfterCache = fetchSpy.mock.calls.filter(
+        call => String(call[0]).includes('/v2/historical-candles/'),
+      ).length;
+      expect(historicalCallsAfterCache).toBe(0);
+    });
+
+    it('handles partial cache: cached instruments skip API, uncached ones fetch and save', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const cacheDir = path.join(dir, 'cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+
+      // Pre-write cache for RELIANCE only
+      const relianceCachePath = path.join(cacheDir, 'NSE_EQ_INE002A01018.json');
+      fs.writeFileSync(relianceCachePath, JSON.stringify(SAMPLE_CANDLES.data.candles));
+
+      const configPath = writeConfigFile(dir, INSTRUMENTS);
+      const client = new UpstoxRestClient();
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (input: RequestInfo | URL) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+
+          // Only INFY should be fetched via API
+          if (url.includes('NSE_EQ|INE009A01021')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES_B), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+          if (url.includes('NSE_EQ|INE002A01018')) {
+            return Promise.reject(new Error('Should not fetch cached instrument'));
+          }
+
+          if (url.includes('/v2/historical-candles/')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+
+          if (url.includes('/v2/user/profile')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ status: 'success', data: { email: 'test@test.com' } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+              ),
+            );
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        },
+      );
+
+      const provider = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+        cacheDir,
+      });
+
+      const tick: ReplayTick = {
+        index: 1,
+        timestamp: 1704067260000,
+        fidelity: ReplayFidelity.Full,
+      };
+
+      const candidates = await provider.getCandidates(tick);
+      expect(candidates).toHaveLength(2);
+
+      // Only INFY should have made historical-candle API calls
+      const historicalCalls = fetchSpy.mock.calls.filter(
+        call => String(call[0]).includes('/v2/historical-candles/'),
+      ).length;
+      expect(historicalCalls).toBe(1);
+
+      // Verify INFY was also cached to disk
+      const infyCachePath = path.join(cacheDir, 'NSE_EQ_INE009A01021.json');
+      expect(fs.existsSync(infyCachePath)).toBe(true);
+    });
+
+    it('falls back to API fetch when cache file is corrupt', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const cacheDir = path.join(dir, 'cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+
+      // Write corrupt cache file
+      const corruptPath = path.join(cacheDir, 'NSE_EQ_INE002A01018.json');
+      fs.writeFileSync(corruptPath, 'not valid json {{');
+
+      // Write valid cache for INFY (should work normally)
+      const infyCachePath = path.join(cacheDir, 'NSE_EQ_INE009A01021.json');
+      fs.writeFileSync(infyCachePath, JSON.stringify(SAMPLE_CANDLES_B.data.candles));
+
+      const configPath = writeConfigFile(dir, INSTRUMENTS);
+      const client = new UpstoxRestClient();
+
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (input: RequestInfo | URL) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+
+          // RELIANCE should still be fetched since its cache is corrupt
+          if (url.includes('/v2/historical-candles/')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+
+          if (url.includes('/v2/user/profile')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ status: 'success', data: { email: 'test@test.com' } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+              ),
+            );
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        },
+      );
+
+      const provider = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+        cacheDir,
+      });
+
+      const tick: ReplayTick = {
+        index: 1,
+        timestamp: 1704067260000,
+        fidelity: ReplayFidelity.Full,
+      };
+
+      const candidates = await provider.getCandidates(tick);
+      expect(candidates).toHaveLength(2);
+
+      // Should have logged a warning about corrupt cache
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Cache read failed for NSE_EQ|INE002A01018'),
+      );
+
+      // RELIANCE data should still be fetched via API (1 call for RELIANCE, INFY from cache)
+      const historicalCalls = fetchSpy.mock.calls.filter(
+        call => String(call[0]).includes('/v2/historical-candles/'),
+      ).length;
+      expect(historicalCalls).toBe(1);
+
+      // Corrupt cache file should have been overwritten with valid data
+      const overwritten = JSON.parse(fs.readFileSync(corruptPath, 'utf8'));
+      expect(overwritten).toEqual(SAMPLE_CANDLES.data.candles);
+
+      consoleWarnSpy.mockRestore();
+    });
+
+    it('does not use cache when cacheDir is not provided', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const configPath = writeConfigFile(dir, INSTRUMENTS);
+      const client = new UpstoxRestClient();
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (input: RequestInfo | URL) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+
+          if (url.includes('/v2/historical-candles/')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+
+          if (url.includes('/v2/user/profile')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ status: 'success', data: { email: 'test@test.com' } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+              ),
+            );
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        },
+      );
+
+      const provider = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+      });
+
+      const tick: ReplayTick = {
+        index: 1,
+        timestamp: 1704067260000,
+        fidelity: ReplayFidelity.Full,
+      };
+
+      const candidates = await provider.getCandidates(tick);
+      expect(candidates).toHaveLength(2);
+
+      // All fetches should be API calls (no cache)
+      const historicalCalls = fetchSpy.mock.calls.filter(
+        call => String(call[0]).includes('/v2/historical-candles/'),
+      ).length;
+      expect(historicalCalls).toBe(2);
+    });
+
+    it('sanitizes instrument keys with pipe characters in cache filenames', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const cacheDir = path.join(dir, 'cache');
+      const configPath = writeConfigFile(dir, [
+        {
+          instrument_key: 'NSE_FO|12345',
+          exchange: 'NSE',
+          trading_symbol: 'NIFTY_FUT',
+          instrument_type: 'FUT',
+          lot_size: 50,
+          tick_size: 5,
+        },
+      ]);
+      const client = new UpstoxRestClient();
+
+      vi.spyOn(globalThis, 'fetch').mockImplementation(
+        (input: RequestInfo | URL) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+
+          if (url.includes('/v2/historical-candles/')) {
+            return Promise.resolve(
+              new Response(JSON.stringify(SAMPLE_CANDLES), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              }),
+            );
+          }
+
+          if (url.includes('/v2/user/profile')) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ status: 'success', data: { email: 'test@test.com' } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+              ),
+            );
+          }
+
+          return Promise.reject(new Error(`Unexpected URL: ${url}`));
+        },
+      );
+
+      const provider = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: 1704067200000,
+        rangeEnd: 1704153600000,
+        cacheDir,
+      });
+
+      const tick: ReplayTick = {
+        index: 1,
+        timestamp: 1704067260000,
+        fidelity: ReplayFidelity.Full,
+      };
+
+      const candidates = await provider.getCandidates(tick);
+      expect(candidates).toHaveLength(1);
+
+      // Verify cache file uses sanitized name (| replaced with _)
+      const cacheFilePath = path.join(cacheDir, 'NSE_FO_12345.json');
+      expect(fs.existsSync(cacheFilePath)).toBe(true);
+    });
+  });
 });

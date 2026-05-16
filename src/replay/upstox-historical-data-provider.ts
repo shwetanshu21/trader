@@ -59,6 +59,8 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
   private readonly _rangeEnd: number;
   private readonly _screeningCadenceMinutes: number;
   private readonly _executionResolutionMinutes: number | null;
+  private readonly _cacheDir: string | undefined;
+  private readonly _maxInstruments: number | undefined;
 
   /** Lazy-loaded instrument records from the config file. */
   private _instruments: InstrumentRecord[] | null = null;
@@ -77,6 +79,10 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
     configPath: string;
     rangeStart: number;
     rangeEnd: number;
+    /** Optional directory to cache fetched candle data as JSON files. */
+    cacheDir?: string;
+    /** Optional limit on the number of instruments to load from config. */
+    maxInstruments?: number;
     options?: {
       screeningCadenceMinutes?: number;
       executionResolutionMinutes?: number | null;
@@ -89,6 +95,8 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
     this._screeningCadenceMinutes = options.options?.screeningCadenceMinutes ?? 5;
     this._executionResolutionMinutes =
       options.options?.executionResolutionMinutes ?? null;
+    this._cacheDir = options.cacheDir;
+    this._maxInstruments = options.maxInstruments;
   }
 
   // -------------------------------------------------------------------------
@@ -172,6 +180,17 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
   // Private helpers
   // -------------------------------------------------------------------------
 
+  /** Sanitize instrument key characters for use as a filename. */
+  private _sanitizeInstrumentKey(key: string): string {
+    return key.replace(/[|/]/g, '_');
+  }
+
+  /** Build the cache file path for a given instrument key. */
+  private _cachePathForKey(key: string): string | undefined {
+    if (!this._cacheDir) return undefined;
+    return `${this._cacheDir}/${this._sanitizeInstrumentKey(key)}.json`;
+  }
+
   /** Load config and pre-fetch candles on first access. */
   private async _ensureDataLoaded(): Promise<void> {
     if (this._candleCache) return;
@@ -193,7 +212,33 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
     );
 
     let completedCount = 0;
+    let cacheHitCount = 0;
+    let cacheMissCount = 0;
+
     for (const instrument of this._instruments) {
+      const cachePath = this._cachePathForKey(instrument.instrument_key);
+
+      // Try reading from cache first
+      if (cachePath) {
+        try {
+          const cachedData = fs.readFileSync(cachePath, 'utf8');
+          const cachedCandles = JSON.parse(cachedData) as UpstoxHistoricalCandle[];
+          if (Array.isArray(cachedCandles) && cachedCandles.length > 0) {
+            this._candleCache.set(instrument.instrument_key, cachedCandles);
+            cacheHitCount++;
+            completedCount++;
+            continue;
+          }
+        } catch {
+          // Corrupt or missing cache file — fall through to API fetch
+          console.warn(
+            `[UpstoxHistoricalDataProvider] Cache read failed for ${instrument.instrument_key} (${instrument.trading_symbol}), falling back to API`,
+          );
+        }
+      }
+
+      // Fall through to API fetch
+      cacheMissCount++;
       try {
         const response = await this._restClient.fetchHistoricalCandles(
           instrument.instrument_key,
@@ -210,6 +255,23 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
             instrument.instrument_key,
             response.data.candles,
           );
+
+          // Write to cache directory if configured
+          if (cachePath) {
+            try {
+              if (!fs.existsSync(this._cacheDir!)) {
+                fs.mkdirSync(this._cacheDir!, { recursive: true });
+              }
+              fs.writeFileSync(cachePath, JSON.stringify(response.data.candles), 'utf8');
+              console.log(
+                `[UpstoxHistoricalDataProvider] Cached ${instrument.instrument_key} to ${cachePath} (${response.data.candles.length} candles)`,
+              );
+            } catch (writeError) {
+              console.warn(
+                `[UpstoxHistoricalDataProvider] Failed to write cache for ${instrument.instrument_key}: ${writeError instanceof Error ? writeError.message : String(writeError)}`,
+              );
+            }
+          }
         }
       } catch (error) {
         this._fetchFailureCount++;
@@ -229,9 +291,15 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
       }
     }
 
-    console.log(
-      `[UpstoxHistoricalDataProvider] Pre-fetch complete: ${this._candleCache.size} instruments have candle data (${this._fetchFailureCount} failures)`,
-    );
+    if (this._cacheDir) {
+      console.log(
+        `[UpstoxHistoricalDataProvider] Pre-fetch complete: ${this._candleCache.size} instruments have candle data (${cacheHitCount} cache hits, ${cacheMissCount} cache misses, ${this._fetchFailureCount} failures)`,
+      );
+    } else {
+      console.log(
+        `[UpstoxHistoricalDataProvider] Pre-fetch complete: ${this._candleCache.size} instruments have candle data (${this._fetchFailureCount} failures)`,
+      );
+    }
   }
 
   /** Load instrument records from the config JSON file. */
@@ -245,11 +313,16 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
       );
     }
 
+    const sliced =
+      this._maxInstruments != null && this._maxInstruments > 0
+        ? records.slice(0, this._maxInstruments)
+        : records;
+
     console.log(
-      `[UpstoxHistoricalDataProvider] Loaded ${records.length} instrument records from ${this._configPath}`,
+      `[UpstoxHistoricalDataProvider] Loaded ${sliced.length} instrument records from ${this._configPath}${this._maxInstruments != null ? ` (maxInstruments=${this._maxInstruments})` : ''}`,
     );
 
-    return records;
+    return sliced;
   }
 
   /**
