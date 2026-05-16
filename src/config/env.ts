@@ -1,5 +1,5 @@
-import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig, StrategyFrameworkConfig, GovernanceThresholdConfig } from '../types/runtime.js';
-import { ExecutionMode, DEFAULT_GOVERNANCE_THRESHOLDS } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig, StrategyFrameworkConfig, GovernanceThresholdConfig, DemotionThresholdConfig } from '../types/runtime.js';
+import { ExecutionMode, DEFAULT_GOVERNANCE_THRESHOLDS, DEFAULT_DEMOTION_THRESHOLDS } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Parsed env accessor — reads `process.env` once at startup.
@@ -568,10 +568,14 @@ function parseStrategyFrameworkConfig(
   // ── Promotion governance thresholds ─────────────────────────────────────
   const promotion = parseGovernanceThresholds(env, errors);
 
+  // ── Demotion governance thresholds ──────────────────────────────────────
+  const demotion = parseDemotionThresholds(env, errors);
+
   return {
     maxCandidates: resolvedMax,
     parallelPlugins,
     promotion,
+    demotion,
   };
 }
 
@@ -658,6 +662,101 @@ function parseGovernanceThresholds(
       });
     } else {
       thresholds.minOutOfSampleWindows = val;
+    }
+  }
+
+  return thresholds;
+}
+
+/**
+ * Parse demotion governance threshold configuration from environment variables.
+ *
+ * All thresholds are optional and fall back to DEFAULT_DEMOTION_THRESHOLDS.
+ */
+function parseDemotionThresholds(
+  env: Record<string, string | undefined>,
+  errors: ConfigValidationError[],
+): DemotionThresholdConfig {
+  const thresholds: DemotionThresholdConfig = { ...DEFAULT_DEMOTION_THRESHOLDS };
+
+  // ── Min Sharpe ratio (demotion) ─────────────────────────────────────────
+  const sharpeRaw = env.TRADER_STRATEGY_DEMOTION_MIN_SHARPE_RATIO;
+  if (sharpeRaw !== undefined) {
+    const val = Number(sharpeRaw);
+    if (!Number.isFinite(val) || val < -10 || val > 10) {
+      errors.push({
+        field: 'TRADER_STRATEGY_DEMOTION_MIN_SHARPE_RATIO',
+        message: `Must be between -10 and 10, got "${sharpeRaw}". Defaulting to ${thresholds.minSharpeRatio}.`,
+        provided: sharpeRaw,
+      });
+    } else {
+      thresholds.minSharpeRatio = val;
+    }
+  }
+
+  // ── Max drawdown (demotion) ─────────────────────────────────────────────
+  const ddRaw = env.TRADER_STRATEGY_DEMOTION_MAX_DRAWDOWN;
+  if (ddRaw !== undefined) {
+    const val = Number(ddRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 100) {
+      errors.push({
+        field: 'TRADER_STRATEGY_DEMOTION_MAX_DRAWDOWN',
+        message: `Must be between 0 and 100, got "${ddRaw}". Defaulting to ${thresholds.maxDrawdown}.`,
+        provided: ddRaw,
+      });
+    } else {
+      thresholds.maxDrawdown = val;
+    }
+  }
+
+  // ── Min trade count ─────────────────────────────────────────────────────
+  const tradeRaw = env.TRADER_STRATEGY_DEMOTION_MIN_TRADE_COUNT;
+  if (tradeRaw !== undefined) {
+    const val = Number(tradeRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 100000) {
+      errors.push({
+        field: 'TRADER_STRATEGY_DEMOTION_MIN_TRADE_COUNT',
+        message: `Must be between 0 and 100000, got "${tradeRaw}". Defaulting to ${thresholds.minTradeCount}.`,
+        provided: tradeRaw,
+      });
+    } else {
+      thresholds.minTradeCount = val;
+    }
+  }
+
+  // ── Halt triggers demotion ──────────────────────────────────────────────
+  const haltRaw = env.TRADER_STRATEGY_DEMOTION_HALT_TRIGGERS_DEMOTION;
+  if (haltRaw !== undefined) {
+    thresholds.haltTriggersDemotion = haltRaw.toLowerCase() !== 'false';
+  }
+
+  // ── Min critical risk events ────────────────────────────────────────────
+  const eventsRaw = env.TRADER_STRATEGY_DEMOTION_MIN_CRITICAL_RISK_EVENTS;
+  if (eventsRaw !== undefined) {
+    const val = Number(eventsRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 1000) {
+      errors.push({
+        field: 'TRADER_STRATEGY_DEMOTION_MIN_CRITICAL_RISK_EVENTS',
+        message: `Must be between 0 and 1000, got "${eventsRaw}". Defaulting to ${thresholds.minCriticalRiskEvents}.`,
+        provided: eventsRaw,
+      });
+    } else {
+      thresholds.minCriticalRiskEvents = val;
+    }
+  }
+
+  // ── Risk event lookback ms ──────────────────────────────────────────────
+  const lookbackRaw = env.TRADER_STRATEGY_DEMOTION_RISK_EVENT_LOOKBACK_MS;
+  if (lookbackRaw !== undefined) {
+    const val = Number(lookbackRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 365 * 24 * 60 * 60 * 1000) {
+      errors.push({
+        field: 'TRADER_STRATEGY_DEMOTION_RISK_EVENT_LOOKBACK_MS',
+        message: `Must be between 0 and 31536000000, got "${lookbackRaw}". Defaulting to ${thresholds.riskEventLookbackMs}.`,
+        provided: lookbackRaw,
+      });
+    } else {
+      thresholds.riskEventLookbackMs = val;
     }
   }
 

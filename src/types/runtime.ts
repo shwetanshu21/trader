@@ -1115,6 +1115,8 @@ export enum ExecutionRefusalCode {
   MissingInstrumentData = 'missing_instrument_data',
   /** Notional or risk check failed at execution time. */
   RiskCheckFailed = 'risk_check_failed',
+  /** Candidate was held by lifecycle governance (strategy phase caps global mode). */
+  LifecycleHold = 'lifecycle_hold',
 }
 
 /** A single refusal reason attached to an execution attempt. */
@@ -2149,16 +2151,19 @@ export enum StrategyLifecyclePhase {
 }
 
 /**
- * Governance verdict for a strategy promotion evaluation.
+ * Governance verdict for a strategy lifecycle evaluation.
  *
- * - `hold`: Do not promote — keep the current lifecycle phase.
+ * - `hold`: Do not change the current lifecycle phase.
  * - `promote`: Advance the strategy to the next lifecycle phase.
+ * - `demote`: Regress the strategy to a lower lifecycle phase.
  */
 export enum GovernanceVerdict {
-  /** Keep the current lifecycle phase — promotion criteria not met. */
+  /** Keep the current lifecycle phase — evaluation criteria not met. */
   Hold = 'hold',
   /** Advance to the next lifecycle phase — promotion criteria met. */
   Promote = 'promote',
+  /** Regress to a lower lifecycle phase — demotion criteria triggered. */
+  Demote = 'demote',
 }
 
 /**
@@ -2268,6 +2273,171 @@ export const DEFAULT_GOVERNANCE_THRESHOLDS: GovernanceThresholdConfig = {
   minOutOfSampleWindows: 1,
 };
 
+// ---------------------------------------------------------------------------
+// Strategy lifecycle demotion — DTOs for M006/S02 demotion governance
+// ---------------------------------------------------------------------------
+
+/**
+ * Trigger type for a demotion evaluation.
+ *
+ * - `performance_drift`: Degraded paper/live performance evidence (Sharpe, drawdown, returns).
+ * - `risk_breach`: Persisted risk-breach evidence (halt state, risk events).
+ */
+export type DemotionTriggerEdge = 'performance_drift' | 'risk_breach';
+
+/**
+ * Threshold configuration for demotion evaluation.
+ *
+ * Defines the boundaries beyond which a strategy is demoted to a lower
+ * lifecycle phase. Each threshold is independently evaluated — if any
+ * trigger condition is met, the strategy is considered for demotion.
+ */
+export interface DemotionThresholdConfig {
+  /**
+   * Minimum Sharpe ratio sustained before performance-drift demotion.
+   * When the actual Sharpe is below this value, performance drift is triggered.
+   * Default: 0.5.
+   */
+  minSharpeRatio: number;
+  /**
+   * Maximum drawdown percentage (0–100) before performance-drift demotion.
+   * When actual drawdown exceeds this percentage, performance drift is triggered.
+   * Default: 40.
+   */
+  maxDrawdown: number;
+  /**
+   * Minimum number of trade observations required to consider performance-drift evidence
+   * meaningful. When trade count is below this, the evaluator holds rather than demotes
+   * on sparse evidence.
+   * Default: 5.
+   */
+  minTradeCount: number;
+  /**
+   * Whether a persisted active halt (HaltState.ActiveHalt) automatically triggers
+   * a risk-breach demotion. When false, risk-breach evaluation requires explicit
+   * risk events rather than halt state alone.
+   * Default: true.
+   */
+  haltTriggersDemotion: boolean;
+  /**
+   * Minimum number of critical-severity risk events within the lookback window
+   * to trigger a risk-breach demotion.
+   * Default: 1.
+   */
+  minCriticalRiskEvents: number;
+  /**
+   * Lookback window in milliseconds for risk events. Events older than this
+   * are not considered for demotion.
+   * Default: 7 days (604800000 ms).
+   */
+  riskEventLookbackMs: number;
+}
+
+/**
+ * Default demotion threshold configuration.
+ */
+export const DEFAULT_DEMOTION_THRESHOLDS: DemotionThresholdConfig = {
+  minSharpeRatio: 0.5,
+  maxDrawdown: 40,
+  minTradeCount: 5,
+  haltTriggersDemotion: true,
+  minCriticalRiskEvents: 1,
+  riskEventLookbackMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+};
+
+/**
+ * Performance summary for a strategy over a recent window.
+ *
+ * Captures the evidence needed to evaluate performance-drift demotion.
+ * This is a pure DTO — the evaluator does not compute these values,
+ * it only reads them.
+ */
+export interface LifecyclePerformanceSummary {
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Market ID. */
+  marketId: string;
+  /** Average Sharpe ratio over the evaluation window, or null if not computable. */
+  sharpeRatio: number | null;
+  /** Maximum drawdown percentage (0–100) over the evaluation window, or null. */
+  maxDrawdown: number | null;
+  /** Total return over the evaluation window. */
+  totalReturn: number;
+  /** Number of trades in the evaluation window. */
+  tradeCount: number;
+  /** Start of the evaluation window (epoch ms). */
+  windowStartMs: number;
+  /** End of the evaluation window (epoch ms). */
+  windowEndMs: number;
+}
+
+/**
+ * Evidence snapshot persisted with each demotion governance decision.
+ *
+ * Captures the trigger edge(s), threshold config, actual metrics, and
+ * supporting evidence so the decision can be audited without replay.
+ */
+export interface DemotionEvidenceSnapshot {
+  /** Threshold configuration used for this evaluation. */
+  thresholds: DemotionThresholdConfig;
+  /** Which trigger(s) caused the demotion, or hold_rationale if no demotion. */
+  trigger: DemotionTriggerEdge | 'hold' | 'multiple';
+  /** Human-readable detail on what triggered the demotion. */
+  triggerDetail: string;
+  /** Performance summary inputs, if provided. Null when not applicable. */
+  performanceSummary: LifecyclePerformanceSummary | null;
+  /** Risk state at evaluation time, serialized for audit. Null when not applicable. */
+  riskState: Record<string, unknown> | null;
+  /** Count of critical risk events within the lookback window. */
+  criticalRiskEventCount: number;
+  /** Current lifecycle phase before evaluation. */
+  previousPhase: string;
+  /** Proposed/new lifecycle phase after evaluation. */
+  newPhase: string;
+}
+
+/**
+ * Input to a demotion evaluation.
+ */
+export interface DemotionEvaluationInput {
+  /** Strategy identity (e.g. 'india-nse-eq-v1'). */
+  strategyId: string;
+  /** Strategy version (e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** Market profile ID (e.g. 'INDIA_NSE_EQ'). */
+  marketId: string;
+  /** Optional performance summary for drift evaluation. When null, only risk breach is checked. */
+  performanceSummary?: LifecyclePerformanceSummary | null;
+  /** Threshold config to use. Falls back to DEFAULT_DEMOTION_THRESHOLDS when not provided. */
+  thresholds?: DemotionThresholdConfig;
+  /** Timestamp for the evaluation. Default: Date.now(). */
+  evaluatedAt?: number;
+}
+
+/**
+ * Structured output of a demotion evaluation.
+ */
+export interface DemotionEvaluationResult {
+  /** Governance verdict: hold or demote. */
+  verdict: GovernanceVerdict;
+  /** Strategy lifecycle phase before this evaluation. */
+  previousPhase: StrategyLifecyclePhase;
+  /** Strategy lifecycle phase after this evaluation (same as previous on HOLD). */
+  newPhase: StrategyLifecyclePhase;
+  /** Human-readable rationale explaining the verdict. */
+  rationale: string;
+  /** Evidence snapshot persisted with the decision. */
+  evidenceSnapshot: DemotionEvidenceSnapshot;
+  /** Whether the lifecycle state was updated (only true on DEMOTE). */
+  stateUpdated: boolean;
+  /** The governance decision row that was persisted. */
+  decision: GovernanceDecisionRow;
+  /** Current state of the strategy after this evaluation. */
+  currentState: StrategyLifecycleStateRow;
+}
+
 /** Extended strategy framework config with promotion governance settings. */
 export interface StrategyFrameworkConfig {
   /** Maximum number of ranked candidates to include in the result. */
@@ -2276,4 +2446,6 @@ export interface StrategyFrameworkConfig {
   parallelPlugins: boolean;
   /** Promotion governance threshold configuration. */
   promotion: GovernanceThresholdConfig;
+  /** Demotion governance threshold configuration. */
+  demotion: DemotionThresholdConfig;
 }

@@ -18,6 +18,7 @@ import { StrategyDecisionRepository } from '../persistence/strategy-decision-rep
 import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
+import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-repo.js';
 import { LifecycleManager } from './lifecycle.js';
 import { HealthService } from './health-service.js';
 import { MarketClock } from './market-clock.js';
@@ -97,6 +98,8 @@ export interface RuntimeAppHandles {
   positionRepo: PaperPositionRepository | null;
   /** Execution risk repository (available when proposal engine is configured). */
   riskRepo: ExecutionRiskRepository | null;
+  /** Strategy lifecycle repository (available when proposal engine is configured). */
+  lifecycleRepo: StrategyLifecycleRepository | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +269,7 @@ export class RuntimeApp {
     let executionService: ModeAwareExecutionService | null = null;
     let riskRepo: ExecutionRiskRepository | null = null;
     let riskGuard: ExecutionRiskGuard | null = null;
+    let lifecycleRepo: StrategyLifecycleRepository | null = null;
     // Paper trading repos (available when proposal engine is configured)
     let orderRepo: PaperOrderRepository | null = null;
     let fillRepo: PaperFillRepository | null = null;
@@ -341,12 +345,16 @@ export class RuntimeApp {
         brokerRepo,
       });
 
+      // Strategy lifecycle repository for lifecycle gating (M006)
+      lifecycleRepo = new StrategyLifecycleRepository(dbManager.db);
+
       executionGateSupervisor = new ExecutionGateSupervisor({
         strategyDecisionRepo,
         executionService,
         attemptRepo: executionAttemptRepo,
         brokerRepo,
         riskGuard,
+        lifecycleRepo,
       });
 
       // StrategyRiskSupervisor — evaluates accepted proposals via the
@@ -444,6 +452,7 @@ export class RuntimeApp {
       fillRepo: fillRepo ?? null,
       positionRepo: positionRepo ?? null,
       riskRepo,
+      lifecycleRepo: lifecycleRepo ?? null,
     };
 
     return this._handles;

@@ -505,4 +505,254 @@ describe('StrategyLifecycleRepository — lifecycle phase ordering invariants', 
   it('GovernanceVerdict.Promote has correct value', () => {
     expect(GovernanceVerdict.Promote).toBe('promote');
   });
+
+  it('GovernanceVerdict.Demote has correct value', () => {
+    expect(GovernanceVerdict.Demote).toBe('demote');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DEMOTE verdict persistence
+// ---------------------------------------------------------------------------
+
+describe('StrategyLifecycleRepository — demote verdict behavior', () => {
+  it('persists a DEMOTE governance decision with phase transition', () => {
+    const { repo } = createContext();
+
+    // Seed state at live
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Live,
+      updatedAt: 1000000,
+    });
+
+    // Demote from live to paper
+    const decision = repo.insertDecision({
+      strategyId: STRATEGY_A.strategyId,
+      strategyVersion: STRATEGY_A.strategyVersion,
+      marketId: STRATEGY_A.marketId,
+      verdict: GovernanceVerdict.Demote,
+      previousPhase: StrategyLifecyclePhase.Live,
+      newPhase: StrategyLifecyclePhase.Paper,
+      rationale: 'Risk breach triggered demotion from live to paper.',
+      evidenceJson: JSON.stringify({
+        trigger: 'risk_breach',
+        haltSource: 'daily_loss',
+      }),
+      winnerId: null,
+      recordedAt: 2000000,
+    });
+
+    expect(decision.verdict).toBe(GovernanceVerdict.Demote);
+    expect(decision.previousPhase).toBe(StrategyLifecyclePhase.Live);
+    expect(decision.newPhase).toBe(StrategyLifecyclePhase.Paper);
+    expect(decision.rationale).toContain('Risk breach');
+    expect(decision.evidenceJson).toContain('risk_breach');
+
+    // Verify via read-back
+    const decisions = repo.getDecisionsForStrategy(
+      STRATEGY_A.strategyId,
+      STRATEGY_A.strategyVersion,
+      STRATEGY_A.marketId,
+    );
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].verdict).toBe(GovernanceVerdict.Demote);
+  });
+
+  it('persists a DEMOTE from paper to backtest', () => {
+    const { repo } = createContext();
+
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Paper,
+      updatedAt: 1000000,
+    });
+
+    const decision = repo.insertDecision({
+      strategyId: STRATEGY_A.strategyId,
+      strategyVersion: STRATEGY_A.strategyVersion,
+      marketId: STRATEGY_A.marketId,
+      verdict: GovernanceVerdict.Demote,
+      previousPhase: StrategyLifecyclePhase.Paper,
+      newPhase: StrategyLifecyclePhase.Backtest,
+      rationale: 'Performance drift triggered demotion from paper to backtest.',
+      evidenceJson: null,
+      winnerId: null,
+      recordedAt: 2000000,
+    });
+
+    expect(decision.previousPhase).toBe(StrategyLifecyclePhase.Paper);
+    expect(decision.newPhase).toBe(StrategyLifecyclePhase.Backtest);
+  });
+
+  it('DEMOTE decisions are append-only and do not overwrite prior decisions', () => {
+    const { repo } = createContext();
+
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Live,
+      updatedAt: 1000000,
+    });
+
+    // Two demote decisions
+    repo.insertDecision({
+      strategyId: STRATEGY_A.strategyId,
+      strategyVersion: STRATEGY_A.strategyVersion,
+      marketId: STRATEGY_A.marketId,
+      verdict: GovernanceVerdict.Demote,
+      previousPhase: StrategyLifecyclePhase.Live,
+      newPhase: StrategyLifecyclePhase.Paper,
+      rationale: 'First demotion',
+      evidenceJson: null,
+      winnerId: null,
+      recordedAt: 2000000,
+    });
+
+    repo.insertDecision({
+      strategyId: STRATEGY_A.strategyId,
+      strategyVersion: STRATEGY_A.strategyVersion,
+      marketId: STRATEGY_A.marketId,
+      verdict: GovernanceVerdict.Demote,
+      previousPhase: StrategyLifecyclePhase.Paper,
+      newPhase: StrategyLifecyclePhase.Backtest,
+      rationale: 'Second demotion',
+      evidenceJson: null,
+      winnerId: null,
+      recordedAt: 3000000,
+    });
+
+    const decisions = repo.getDecisionsForStrategy(
+      STRATEGY_A.strategyId,
+      STRATEGY_A.strategyVersion,
+      STRATEGY_A.marketId,
+      10,
+    );
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0].verdict).toBe(GovernanceVerdict.Demote);
+    expect(decisions[0].newPhase).toBe(StrategyLifecyclePhase.Backtest);
+    expect(decisions[1].verdict).toBe(GovernanceVerdict.Demote);
+    expect(decisions[1].newPhase).toBe(StrategyLifecyclePhase.Paper);
+  });
+
+  it('DEMOTE decisions respect identity isolation — different strategies have independent demotion history', () => {
+    const { repo } = createContext();
+
+    // Seed both strategies
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Live,
+      updatedAt: 1000000,
+    });
+    repo.upsertCurrentState({
+      ...STRATEGY_B,
+      phase: StrategyLifecyclePhase.Paper,
+      updatedAt: 1000000,
+    });
+
+    // Demote A: live → paper
+    repo.insertDecision({
+      strategyId: STRATEGY_A.strategyId,
+      strategyVersion: STRATEGY_A.strategyVersion,
+      marketId: STRATEGY_A.marketId,
+      verdict: GovernanceVerdict.Demote,
+      previousPhase: StrategyLifecyclePhase.Live,
+      newPhase: StrategyLifecyclePhase.Paper,
+      rationale: 'A demoted',
+      evidenceJson: null,
+      winnerId: null,
+      recordedAt: 2000000,
+    });
+
+    // B stays at paper — no demotion decision for B
+    const decisionsA = repo.getDecisionsForStrategy(
+      STRATEGY_A.strategyId,
+      STRATEGY_A.strategyVersion,
+      STRATEGY_A.marketId,
+    );
+    expect(decisionsA).toHaveLength(1);
+    expect(decisionsA[0].verdict).toBe(GovernanceVerdict.Demote);
+
+    const decisionsB = repo.getDecisionsForStrategy(
+      STRATEGY_B.strategyId,
+      STRATEGY_B.strategyVersion,
+      STRATEGY_B.marketId,
+    );
+    expect(decisionsB).toHaveLength(0);
+  });
+
+  it('updates lifecycle state on demotion via upsertCurrentState', () => {
+    const { repo } = createContext();
+
+    // Seed at live
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Live,
+      updatedAt: 1000000,
+    });
+
+    // Demote: live → paper
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Paper,
+      updatedAt: 2000000,
+    });
+
+    const state = repo.getCurrentState(
+      STRATEGY_A.strategyId,
+      STRATEGY_A.strategyVersion,
+      STRATEGY_A.marketId,
+    );
+    expect(state.phase).toBe(StrategyLifecyclePhase.Paper);
+    expect(state.updatedAt).toBe(2000000);
+  });
+
+  it('repeated demotion correctly steps down through phases', () => {
+    const { repo } = createContext();
+
+    // Start at live
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Live,
+      updatedAt: 1000000,
+    });
+
+    // Demote 1: live → paper
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Paper,
+      updatedAt: 2000000,
+    });
+    let state = repo.getCurrentState(
+      STRATEGY_A.strategyId,
+      STRATEGY_A.strategyVersion,
+      STRATEGY_A.marketId,
+    );
+    expect(state.phase).toBe(StrategyLifecyclePhase.Paper);
+
+    // Demote 2: paper → backtest
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Backtest,
+      updatedAt: 3000000,
+    });
+    state = repo.getCurrentState(
+      STRATEGY_A.strategyId,
+      STRATEGY_A.strategyVersion,
+      STRATEGY_A.marketId,
+    );
+    expect(state.phase).toBe(StrategyLifecyclePhase.Backtest);
+
+    // Cannot demote below backtest — stays at backtest
+    repo.upsertCurrentState({
+      ...STRATEGY_A,
+      phase: StrategyLifecyclePhase.Backtest,
+      updatedAt: 4000000,
+    });
+    state = repo.getCurrentState(
+      STRATEGY_A.strategyId,
+      STRATEGY_A.strategyVersion,
+      STRATEGY_A.marketId,
+    );
+    expect(state.phase).toBe(StrategyLifecyclePhase.Backtest);
+  });
 });

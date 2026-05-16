@@ -25,6 +25,7 @@ import {
   LLMStatus,
   MergePolicy,
   DEFAULT_GOVERNANCE_THRESHOLDS,
+  DEFAULT_DEMOTION_THRESHOLDS,
   type BoundedCandidate,
   type RankedCandidate,
   type CoordinatorResult,
@@ -45,6 +46,7 @@ export const DEFAULT_FRAMEWORK_CONFIG: StrategyFrameworkConfig = {
   maxCandidates: 5,
   parallelPlugins: true,
   promotion: { ...DEFAULT_GOVERNANCE_THRESHOLDS },
+  demotion: { ...DEFAULT_DEMOTION_THRESHOLDS },
 };
 
 // ---------------------------------------------------------------------------
