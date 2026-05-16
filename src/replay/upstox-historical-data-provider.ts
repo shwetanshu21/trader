@@ -1,0 +1,291 @@
+// ── Upstox-backed historical data provider ──
+// Provides BoundedCandidate arrays for any tick range using real Upstox
+// historical 1-minute candle data, pre-fetched on first access.
+
+import fs from 'node:fs';
+
+import { UpstoxRestClient } from '../upstox/upstox-rest-client.js';
+import type { UpstoxHistoricalCandle } from '../upstox/upstox-rest-client.js';
+import type { BoundedCandidate } from '../types/runtime.js';
+import { ReplayFidelity, type ReplayTick } from './types.js';
+import type { HistoricalDataProvider } from './historical-data-provider.js';
+
+// ---------------------------------------------------------------------------
+// Instrument record subset used by the provider
+// ---------------------------------------------------------------------------
+
+/** Fields extracted from the config JSON for each instrument. */
+interface InstrumentRecord {
+  instrument_key: string;
+  exchange: string;
+  trading_symbol: string;
+  instrument_type: string;
+  lot_size: number;
+  tick_size: number;
+}
+
+// ---------------------------------------------------------------------------
+// UpstoxHistoricalDataProvider
+// ---------------------------------------------------------------------------
+
+/**
+ * Upstox-backed historical data provider.
+ *
+ * Loads the instrument universe from a local JSON config file (e.g.
+ * data/nifty-500.json), then pre-fetches historical 1-minute candles
+ * from the Upstox API for each instrument on first access.
+ *
+ * On each tick, the provider maps the closest candle (<= tick timestamp)
+ * to a BoundedCandidate. If no candle exists for an instrument at that
+ * tick, the instrument is skipped.
+ *
+ * ## Bid/Ask Approximation
+ *
+ * Historical candle data only provides OHLCV, not real bid/ask quotes.
+ * The provider approximates:
+ *   - bid as candle[3] (low of the minute)
+ *   - ask as candle[2] (high of the minute)
+ *
+ * Actual bid/ask spread data is not available via the Upstox historical
+ * candles API. Downstream consumers (strategy, risk) should interpret
+ * these as wide approximations — the true bid/ask may differ.
+ */
+export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
+  readonly label = 'upstox-v1';
+
+  private readonly _restClient: UpstoxRestClient;
+  private readonly _configPath: string;
+  private readonly _rangeStart: number;
+  private readonly _rangeEnd: number;
+  private readonly _screeningCadenceMinutes: number;
+  private readonly _executionResolutionMinutes: number | null;
+
+  /** Lazy-loaded instrument records from the config file. */
+  private _instruments: InstrumentRecord[] | null = null;
+
+  /** Lazy-loaded candle cache: instrumentKey -> sorted candle array. */
+  private _candleCache: Map<string, UpstoxHistoricalCandle[]> | null = null;
+
+  /** Whether the bulk fetch has been attempted. */
+  private _bulkFetchAttempted = false;
+
+  /** Count of instruments that failed during bulk fetch. */
+  private _fetchFailureCount = 0;
+
+  constructor(options: {
+    restClient: UpstoxRestClient;
+    configPath: string;
+    rangeStart: number;
+    rangeEnd: number;
+    options?: {
+      screeningCadenceMinutes?: number;
+      executionResolutionMinutes?: number | null;
+    };
+  }) {
+    this._restClient = options.restClient;
+    this._configPath = options.configPath;
+    this._rangeStart = options.rangeStart;
+    this._rangeEnd = options.rangeEnd;
+    this._screeningCadenceMinutes = options.options?.screeningCadenceMinutes ?? 5;
+    this._executionResolutionMinutes =
+      options.options?.executionResolutionMinutes ?? null;
+  }
+
+  // -------------------------------------------------------------------------
+  // HistoricalDataProvider contract
+  // -------------------------------------------------------------------------
+
+  getEffectiveFidelity(_tick: ReplayTick): ReplayFidelity {
+    return ReplayFidelity.Full;
+  }
+
+  hasData(_rangeStart: number, _rangeEnd: number): boolean {
+    return true;
+  }
+
+  getResolutionMetadata(): {
+    screeningCadenceMinutes: number;
+    executionResolutionMinutes: number | null;
+    supportsFineGrainedExecution: boolean;
+  } {
+    return {
+      screeningCadenceMinutes: this._screeningCadenceMinutes,
+      executionResolutionMinutes: this._executionResolutionMinutes,
+      supportsFineGrainedExecution:
+        this._executionResolutionMinutes != null &&
+        this._executionResolutionMinutes < this._screeningCadenceMinutes,
+    };
+  }
+
+  async getCandidates(tick: ReplayTick): Promise<BoundedCandidate[]> {
+    await this._ensureDataLoaded();
+
+    const candidates: BoundedCandidate[] = [];
+
+    for (const instrument of this._instruments!) {
+      const candles = this._candleCache!.get(instrument.instrument_key);
+      if (!candles || candles.length === 0) continue;
+
+      // Binary search for the candle with timestamp closest to (<=) tick.timestamp
+      const candle = this._findClosestCandle(candles, tick.timestamp);
+      if (!candle) continue;
+
+      // candle: [timestamp_ms, open, high, low, close, volume, open_interest]
+      candidates.push({
+        exchange: instrument.exchange,
+        tradingsymbol: instrument.trading_symbol,
+        instrumentToken: null,
+        side: 'buy', // fixed default; strategy layer determines side
+        lastPrice: candle[4], // close
+        bid: candle[3],       // low — historical bid unavailable; low is approximation
+        ask: candle[2],       // high — historical ask unavailable; high is approximation
+        volume: candle[5],
+        instrumentType: instrument.instrument_type,
+        lotSize: instrument.lot_size,
+        tickSize: instrument.tick_size,
+      });
+    }
+
+    return candidates;
+  }
+
+  // -------------------------------------------------------------------------
+  // Diagnostic accessors
+  // -------------------------------------------------------------------------
+
+  /** Total number of instruments loaded from the config file (0 until loaded). */
+  get instrumentCount(): number {
+    return this._instruments?.length ?? 0;
+  }
+
+  /** Number of instruments whose candle fetch failed during bulk pre-fetch. */
+  get fetchFailureCount(): number {
+    return this._fetchFailureCount;
+  }
+
+  /** Whether the bulk candle fetch has been completed (or attempted). */
+  get hasCompletedBulkFetch(): boolean {
+    return this._bulkFetchAttempted;
+  }
+
+  // -------------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------------
+
+  /** Load config and pre-fetch candles on first access. */
+  private async _ensureDataLoaded(): Promise<void> {
+    if (this._candleCache) return;
+
+    // Load config if not yet loaded
+    if (!this._instruments) {
+      this._instruments = this._loadConfig();
+    }
+
+    // Pre-fetch candles for all instruments
+    this._candleCache = new Map();
+    this._bulkFetchAttempted = true;
+
+    const fromDate = this._epochMsToDateStr(this._rangeStart);
+    const toDate = this._epochMsToDateStr(this._rangeEnd);
+
+    console.log(
+      `[UpstoxHistoricalDataProvider] Pre-fetching candles for ${this._instruments.length} instruments from ${fromDate} to ${toDate}...`,
+    );
+
+    let completedCount = 0;
+    for (const instrument of this._instruments) {
+      try {
+        const response = await this._restClient.fetchHistoricalCandles(
+          instrument.instrument_key,
+          '1minute',
+          fromDate,
+          toDate,
+        );
+
+        if (
+          response.status === 'success' &&
+          response.data.candles.length > 0
+        ) {
+          this._candleCache.set(
+            instrument.instrument_key,
+            response.data.candles,
+          );
+        }
+      } catch (error) {
+        this._fetchFailureCount++;
+        console.warn(
+          `[UpstoxHistoricalDataProvider] Failed to fetch candles for ${instrument.instrument_key} (${instrument.trading_symbol}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      completedCount++;
+      if (
+        completedCount % 500 === 0 ||
+        completedCount === this._instruments.length
+      ) {
+        console.log(
+          `[UpstoxHistoricalDataProvider] Candle fetch progress: ${completedCount}/${this._instruments.length} instruments processed (${this._fetchFailureCount} failures)`,
+        );
+      }
+    }
+
+    console.log(
+      `[UpstoxHistoricalDataProvider] Pre-fetch complete: ${this._candleCache.size} instruments have candle data (${this._fetchFailureCount} failures)`,
+    );
+  }
+
+  /** Load instrument records from the config JSON file. */
+  private _loadConfig(): InstrumentRecord[] {
+    const raw = fs.readFileSync(this._configPath, 'utf8');
+    const records = JSON.parse(raw) as InstrumentRecord[];
+
+    if (!Array.isArray(records)) {
+      throw new Error(
+        `Config file ${this._configPath} did not contain a JSON array`,
+      );
+    }
+
+    console.log(
+      `[UpstoxHistoricalDataProvider] Loaded ${records.length} instrument records from ${this._configPath}`,
+    );
+
+    return records;
+  }
+
+  /**
+   * Find the candle whose timestamp is closest to (<=) the given tick
+   * timestamp using binary search. Candles are sorted chronologically
+   * ascending by candle[0] (timestamp_ms).
+   */
+  private _findClosestCandle(
+    candles: UpstoxHistoricalCandle[],
+    tickTimestamp: number,
+  ): UpstoxHistoricalCandle | undefined {
+    let left = 0;
+    let right = candles.length - 1;
+    let result: UpstoxHistoricalCandle | undefined;
+
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const candleTs = candles[mid][0];
+
+      if (candleTs <= tickTimestamp) {
+        result = candles[mid];
+        left = mid + 1;
+      } else {
+        right = mid - 1;
+      }
+    }
+
+    return result;
+  }
+
+  /** Convert epoch ms to YYYY-MM-DD format. */
+  private _epochMsToDateStr(epochMs: number): string {
+    const date = new Date(epochMs);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+}
