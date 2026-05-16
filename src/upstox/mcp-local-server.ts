@@ -59,6 +59,13 @@ const instrumentsInputSchema = z.object({
   maxRecords: z.number().int().positive().max(15000).optional(),
 }).passthrough();
 
+const historicalCandlesInputSchema = z.object({
+  instrumentKey: z.string().min(1, 'instrumentKey is required'),
+  interval: z.enum(['1minute', '5minute', '15minute', '30minute', '60minute', '1day', '1week', '1month']),
+  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fromDate must be YYYY-MM-DD'),
+  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'toDate must be YYYY-MM-DD'),
+}).passthrough();
+
 export function createUpstoxMcpLocalServer(options: UpstoxMcpLocalServerOptions = {}): UpstoxMcpLocalServer {
   const port = options.port ?? Number(process.env.TRADER_UPSTOX_MCP_LOCAL_PORT ?? DEFAULT_PORT);
   const host = process.env.TRADER_UPSTOX_MCP_LOCAL_HOST?.trim() || '127.0.0.1';
@@ -151,6 +158,33 @@ export function createUpstoxMcpLocalServer(options: UpstoxMcpLocalServerOptions 
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           recordCall('get-full-market-quote', Date.now() - started, null, message);
+          return {
+            isError: true,
+            content: [{ type: 'text', text: message }],
+          };
+        }
+      },
+    );
+
+    mcpServer.registerTool(
+      'get-historical-candles',
+      {
+        description: 'Return 1-minute OHLCV candles for any Upstox instrument key over a given date range.',
+        inputSchema: historicalCandlesInputSchema,
+      },
+      async (args) => {
+        const started = Date.now();
+        try {
+          const { instrumentKey, interval, fromDate, toDate } = args;
+          const candles = await restClient.fetchHistoricalCandles(instrumentKey, interval, fromDate, toDate);
+          const count = candles.data?.candles?.length ?? 0;
+          recordCall('get-historical-candles', Date.now() - started, count, null);
+          return {
+            content: [{ type: 'text', text: JSON.stringify(candles) }],
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          recordCall('get-historical-candles', Date.now() - started, null, message);
           return {
             isError: true,
             content: [{ type: 'text', text: message }],

@@ -5,6 +5,9 @@ import zlib from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
 import { createUpstoxMcpLocalServer, type UpstoxMcpLocalServer } from '../src/upstox/mcp-local-server.js';
 import { KiteMcpClient } from '../src/integrations/broker/mcp/kite-mcp-client.js';
 
@@ -139,6 +142,22 @@ function installFetchMock(): void {
       });
     }
 
+    if (url.startsWith('https://api.upstox.com/v2/historical-candles/')) {
+      return new Response(JSON.stringify({
+        status: 'success',
+        data: {
+          candles: [
+            [1700000000000, 150.5, 152.0, 149.8, 151.2, 10000, 0],
+            [1700000060000, 151.2, 153.5, 150.9, 152.8, 15000, 0],
+            [1700000120000, 152.8, 154.0, 152.0, 153.5, 12000, 0],
+          ],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     throw new Error(`Unexpected fetch URL in test: ${url}`);
   }) as typeof globalThis.fetch;
 }
@@ -185,5 +204,50 @@ describe('upstox local MCP bridge', () => {
     expect(status.lastFailure).toBeNull();
     expect(status.lastSuccess?.tool).toBe('get-full-market-quote');
     expect(status.recentCalls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('exposes get-historical-candles via MCP protocol', async () => {
+    const dir = makeTempDir();
+    const tokenPath = writeTokenFile(dir);
+    process.env.TRADER_UPSTOX_TOKEN_PATH = tokenPath;
+    installFetchMock();
+
+    server = createUpstoxMcpLocalServer({
+      port: 0,
+      statusPath: path.join(dir, 'status.json'),
+      logger: { log() {}, warn() {}, error() {} },
+    });
+    await server.start();
+
+    const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${server.port}/mcp`));
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await client.connect(transport, { timeout: 10_000 });
+
+    const result = await client.callTool({
+      name: 'get-historical-candles',
+      arguments: {
+        instrumentKey: 'NSE_EQ|INE002A01018',
+        interval: '1minute',
+        fromDate: '2024-01-01',
+        toDate: '2024-01-02',
+      },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe('text');
+
+    const data = JSON.parse(result.content[0].text as string);
+    expect(data.status).toBe('success');
+    expect(data.data.candles).toHaveLength(3);
+    expect(data.data.candles[0]).toEqual([1700000000000, 150.5, 152.0, 149.8, 151.2, 10000, 0]);
+    expect(data.data.candles[1]).toEqual([1700000060000, 151.2, 153.5, 150.9, 152.8, 15000, 0]);
+    expect(data.data.candles[2]).toEqual([1700000120000, 152.8, 154.0, 152.0, 153.5, 12000, 0]);
+
+    await client.close();
+
+    const status = server.getStatus();
+    expect(status.lastFailure).toBeNull();
+    expect(status.recentCalls.some(c => c.tool === 'get-historical-candles' && c.error === null)).toBe(true);
   });
 });
