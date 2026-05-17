@@ -19,6 +19,7 @@ import {
 } from './walk-forward-types.js';
 import { ReplayFidelity } from './types.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
+import { createOptionalProposalEngine } from './proposal-engine-factory.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -178,6 +179,7 @@ async function main(): Promise<void> {
     db: dbManager.db,
     marketProfile: INDIA_NSE_EQ_MARKET,
     dataProvider,
+    proposalEngine: createOptionalProposalEngine(),
   });
 
   // ── Run walk-forward evaluation ──

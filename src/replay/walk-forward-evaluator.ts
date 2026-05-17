@@ -9,6 +9,7 @@ import { ReplayClock } from './replay-clock.js';
 import { StrategyCoordinator } from '../strategy/framework.js';
 import { LlmRankingStrategy } from '../strategy/llm-ranking-strategy.js';
 import { ProposalEngine } from '../proposals/proposal-engine.js';
+import { LLMStatus } from '../types/runtime.js';
 import type { HistoricalDataProvider } from './historical-data-provider.js';
 import type { MarketProfile } from '../market/market-profile.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
@@ -591,8 +592,11 @@ export class WalkForwardEvaluator {
     const windowMetrics: TrialState['windowMetrics'] = [];
     let aggregateDeterministicSum = 0;
     let aggregateDeterministicCount = 0;
-    let llmStatus: string | null = null;
+    let aggregateLlmSum = 0;
+    let aggregateLlmCount = 0;
+    const llmStatuses = new Set<string>();
     let hasLlm = false;
+    let llmStatus: string | null = null;
 
     for (const window of windows) {
       const inSampleMetrics = await this._evaluateWindowRange(coordinator, window.inSampleStart, window.inSampleEnd);

@@ -4,6 +4,7 @@ import { FixtureHistoricalDataProvider } from './historical-data-provider.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
 import type { BoundedCandidate } from '../types/runtime.js';
+import { createOptionalProposalEngine } from './proposal-engine-factory.js';
 
 interface RunnerOptions {
   days: number;
@@ -110,6 +111,7 @@ async function main(): Promise<void> {
     db: dbManager.db,
     marketProfile: INDIA_NSE_EQ_MARKET,
     dataProvider,
+    proposalEngine: createOptionalProposalEngine(),
   });
 
   const trialConfigs = buildTrialConfigs(options.trials);

@@ -8,6 +8,9 @@
     "build": "tsc",
     "dev": "tsx watch src/main.ts",
     "start": "node --experimental-specifier-resolution=node dist/main.js",
+    "witness:capture": "node --import tsx src/deployment/witness-main.ts",
+    "witness:capture:sh": "bash scripts/capture-cax11-witness.sh",
+    "witness:verify": "bash scripts/verify-m007-s01-witness.sh",
     "start:upstox:notifier": "tsx src/upstox/notifier-main.ts",
     "start:upstox:mcp-local": "tsx src/upstox/mcp-local-main.ts",
     "start:upstox:stack": "bash scripts/start-upstox-stack.sh",
@@ -15,6 +18,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "select:winner": "bash scripts/walk-forward-select-winner.sh",
+    "run:upstox": "bash scripts/walk-forward-run-upstox.sh",
+    "select:winner:upstox": "bash scripts/walk-forward-select-winner-upstox.sh",
+    "promote": "bash scripts/walk-forward-promote-upstox.sh",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

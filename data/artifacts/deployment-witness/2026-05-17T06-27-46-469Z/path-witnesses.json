@@ -1,0 +1,112 @@
+[
+  {
+    "label": "SQLite database",
+    "path": "./data/trader.db",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "SQLite WAL",
+    "path": "./data/trader.db-wal",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "SQLite SHM",
+    "path": "./data/trader.db-shm",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "Log directory: ./tmp/upstox/logs",
+    "path": "./tmp/upstox/logs",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1778582246306.5945,
+    "children": [
+      {
+        "name": "bridge.log",
+        "isDirectory": false,
+        "sizeBytes": 249
+      },
+      {
+        "name": "notifier.log",
+        "isDirectory": false,
+        "sizeBytes": 248
+      },
+      {
+        "name": "runtime.log",
+        "isDirectory": false,
+        "sizeBytes": 3645
+      },
+      {
+        "name": "tunnel.log",
+        "isDirectory": false,
+        "sizeBytes": 47
+      }
+    ]
+  },
+  {
+    "label": "Log directory: ./logs",
+    "path": "./logs",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "Artifact directory: ./data/artifacts",
+    "path": "./data/artifacts",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1778969250817.325,
+    "children": [
+      {
+        "name": "deployment-witness",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "walk-forward",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      }
+    ]
+  },
+  {
+    "label": "Deployment witness artifacts root",
+    "path": "data/artifacts/deployment-witness",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1778999266466.994,
+    "children": [
+      {
+        "name": "2026-05-17T06-27-46-439Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-448Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-454Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-461Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-469Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      }
+    ]
+  }
+]

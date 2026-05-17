@@ -9,6 +9,7 @@ import { UpstoxRestClient } from '../upstox/upstox-rest-client.js';
 import { UpstoxHistoricalDataProvider } from './upstox-historical-data-provider.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
+import { createOptionalProposalEngine } from './proposal-engine-factory.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -142,6 +143,7 @@ async function main(): Promise<void> {
     db: dbManager.db,
     marketProfile: INDIA_NSE_EQ_MARKET,
     dataProvider,
+    proposalEngine: createOptionalProposalEngine(),
   });
 
   const trialConfigs = buildTrialConfigs(options.trials);

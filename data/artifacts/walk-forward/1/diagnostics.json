@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "artifactType": "winner-diagnostics",
   "runId": 1,
-  "runLabel": "cli-select-winner",
-  "generatedAt": "2026-05-16T07:39:58.689Z",
+  "runLabel": "int-test-winner",
+  "generatedAt": "2026-05-16T20:48:37.671Z",
   "selection": {
     "result": "selected",
-    "rationale": "Selected Config A (3 cands) (rank 1) via composite selection with merged score 0.7637 across 12 windows. Out-of-sample evidence: avg OOS Sharpe=58921.59, avg OOS win rate=100%, OOS windows=6. Runner-ups: Config B (5 cands) (score=0.7637, rank=2). Selection thresholds: minMergedScore=0.7, minWindowCount=1, minSharpeRatio=0.8, maxDrawdown=25%.",
+    "rationale": "Selected Config A (3 candidates) (rank 1) via composite selection with merged score 0.7190 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=236190.44, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (5 candidates) (score=0.7190, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
     "comparisonsCount": 2
   },
   "aggregateMetrics": {
-    "scoreStability": 0.5528,
+    "scoreStability": 0.9999,
     "topKOverlap": 1,
     "llmConsultationRate": null,
     "llmDivergence": null
@@ -19,22 +19,22 @@
     {
       "trialId": 1,
       "rank": 1,
-      "label": "Config A (3 cands)",
-      "paramsJson": "{\"label\":\"Config A (3 cands)\",\"params\":{\"maxCandidates\":3}}",
-      "mergedScore": 0.7637,
-      "deterministicScore": 0.7637,
+      "label": "Config A (3 candidates)",
+      "paramsJson": "{\"label\":\"Config A (3 candidates)\",\"params\":{\"maxCandidates\":3}}",
+      "mergedScore": 0.719,
+      "deterministicScore": 0.719,
       "llmScore": null,
-      "windowCount": 12
+      "windowCount": 4
     },
     {
       "trialId": 2,
       "rank": 2,
-      "label": "Config B (5 cands)",
-      "paramsJson": "{\"label\":\"Config B (5 cands)\",\"params\":{\"maxCandidates\":5}}",
-      "mergedScore": 0.7637,
-      "deterministicScore": 0.7637,
+      "label": "Config B (5 candidates)",
+      "paramsJson": "{\"label\":\"Config B (5 candidates)\",\"params\":{\"maxCandidates\":5}}",
+      "mergedScore": 0.719,
+      "deterministicScore": 0.719,
       "llmScore": null,
-      "windowCount": 12
+      "windowCount": 4
     }
   ],
   "tradeLog": [
@@ -42,252 +42,92 @@
       "trialId": 1,
       "windowIndex": 0,
       "windowType": "in_sample",
-      "tradeCount": 122,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 58221.0495,
+      "sharpeRatio": 69487.4419,
       "maxDrawdown": 0
     },
     {
       "trialId": 1,
       "windowIndex": 0,
       "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.7189,
       "winRate": 1,
-      "sharpeRatio": 58893.9111,
+      "sharpeRatio": 409619.4939,
       "maxDrawdown": 0
     },
     {
       "trialId": 1,
       "windowIndex": 1,
       "windowType": "in_sample",
-      "tradeCount": 225,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 58085.4117,
+      "sharpeRatio": 27037.3421,
       "maxDrawdown": 0
     },
     {
       "trialId": 1,
       "windowIndex": 1,
       "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 2,
-      "windowType": "in_sample",
-      "tradeCount": 178,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 57903.2795,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 2,
-      "windowType": "out_of_sample",
-      "tradeCount": 0,
-      "totalReturn": 0,
-      "winRate": null,
-      "sharpeRatio": null,
-      "maxDrawdown": null
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 3,
-      "windowType": "in_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 3,
-      "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 4,
-      "windowType": "in_sample",
-      "tradeCount": 197,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 57943.6662,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 4,
-      "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 5,
-      "windowType": "in_sample",
-      "tradeCount": 225,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58085.4117,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 1,
-      "windowIndex": 5,
-      "windowType": "out_of_sample",
-      "tradeCount": 28,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 59032.3075,
+      "sharpeRatio": 62761.3798,
       "maxDrawdown": 0
     },
     {
       "trialId": 2,
       "windowIndex": 0,
       "windowType": "in_sample",
-      "tradeCount": 122,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 58221.0495,
+      "sharpeRatio": 69487.4419,
       "maxDrawdown": 0
     },
     {
       "trialId": 2,
       "windowIndex": 0,
       "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.7189,
       "winRate": 1,
-      "sharpeRatio": 58893.9111,
+      "sharpeRatio": 409619.4939,
       "maxDrawdown": 0
     },
     {
       "trialId": 2,
       "windowIndex": 1,
       "windowType": "in_sample",
-      "tradeCount": 225,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 58085.4117,
+      "sharpeRatio": 27037.3421,
       "maxDrawdown": 0
     },
     {
       "trialId": 2,
       "windowIndex": 1,
       "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
+      "tradeCount": 2,
+      "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 2,
-      "windowType": "in_sample",
-      "tradeCount": 178,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 57903.2795,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 2,
-      "windowType": "out_of_sample",
-      "tradeCount": 0,
-      "totalReturn": 0,
-      "winRate": null,
-      "sharpeRatio": null,
-      "maxDrawdown": null
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 3,
-      "windowType": "in_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 3,
-      "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 4,
-      "windowType": "in_sample",
-      "tradeCount": 197,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 57943.6662,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 4,
-      "windowType": "out_of_sample",
-      "tradeCount": 75,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58893.9111,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 5,
-      "windowType": "in_sample",
-      "tradeCount": 225,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 58085.4117,
-      "maxDrawdown": 0
-    },
-    {
-      "trialId": 2,
-      "windowIndex": 5,
-      "windowType": "out_of_sample",
-      "tradeCount": 28,
-      "totalReturn": 0.7637,
-      "winRate": 1,
-      "sharpeRatio": 59032.3075,
+      "sharpeRatio": 62761.3798,
       "maxDrawdown": 0
     }
   ],
   "evidenceFidelity": {
-    "providerLabel": "fixture-v1",
+    "providerLabel": "upstox-v1",
     "effectiveFidelity": "full",
     "hasData": true,
-    "windowCount": 6,
+    "windowCount": 2,
     "trialCount": 2,
-    "outOfSampleWindows": 6,
+    "outOfSampleWindows": 2,
     "screeningCadenceMinutes": 5,
-    "executionResolutionMinutes": 1,
-    "supportsFineGrainedExecution": true
+    "executionResolutionMinutes": null,
+    "supportsFineGrainedExecution": false
   }
 }
