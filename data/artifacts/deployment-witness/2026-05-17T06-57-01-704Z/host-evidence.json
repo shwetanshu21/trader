@@ -1,0 +1,12 @@
+{
+  "hostname": "rspi-358ffa",
+  "platform": "linux",
+  "release": "6.12.75+rpt-rpi-2712",
+  "arch": "arm64",
+  "totalMemoryBytes": 8454619136,
+  "freeMemoryBytes": 4961583104,
+  "cpuModel": "Cortex-A76",
+  "cpuCores": 4,
+  "loadAverage1m": 1.03,
+  "hostUptimeSec": 4089
+}

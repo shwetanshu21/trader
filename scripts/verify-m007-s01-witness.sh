@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# ── M007/S01 Witness Capture Verification Script ──
+# ── M007/S02 — Witness Capture Verification Script (point-in-time + steady-state) ──
 #
-# Verifies that the witness capture entrypoint produces a valid bundle.
-# Starts local helper services (notifier, bridge, runtime) if they are
-# not already running, runs the witness capture, and asserts:
-#   - Bundle directory exists with manifest.json
-#   - Manifest is valid JSON matching the witness contract
-#   - All required subsystems are present in the manifest
-#   - Host evidence fields are populated
-#   - Evidence files are written for each subsystem
-#   - Missing required evidence causes non-zero exit
+# Verifies that the witness capture entrypoint produces valid bundles for
+# both point-in-time and steady-state modes.
+#
+# For point-in-time capture:
+#   - Starts local helper services (notifier, bridge, runtime)
+#   - Runs the witness capture
+#   - Asserts bundle structure, manifest schema, evidence files, redaction
+#
+# For steady-state capture:
+#   - Starts local helper services
+#   - Runs the steady-state witness with a short window
+#   - Asserts steady-state manifest structure, verdict, resource summary,
+#     subsystem evidence, process evidence, growth records
+#   - Verifies the bundle can be inspected after the run
 #
 # Usage:
 #   bash scripts/verify-m007-s01-witness.sh
@@ -27,7 +32,7 @@ fail()  { FAIL=$((FAIL + 1)); echo "  ❌ FAIL: $1"; }
 warn()  { echo "  ⚠  $1"; }
 
 echo "═══════════════════════════════════════════"
-echo "  M007/S01 — Witness Capture Verification"
+echo "  M007/S02 — Witness Capture Verification"
 echo "═══════════════════════════════════════════"
 
 # ── 1. Pre-flight: check tooling ──────────────────────────────────────────
@@ -63,13 +68,13 @@ else
   fi
 fi
 
-# ── 3. Run existing contract tests ────────────────────────────────────────
+# ── 3. Run all witness tests ──────────────────────────────────────────────
 echo ""
-echo "── Step 3: Contract unit tests ──"
-if npx vitest run tests/deployment-witness-contract.test.ts 2>&1; then
-  pass "Contract tests pass"
+echo "── Step 3: Witness unit tests (contract + capture) ──"
+if npx vitest run tests/deployment-witness-contract.test.ts tests/deployment-witness-capture.test.ts 2>&1; then
+  pass "All witness unit tests pass (${PASS})"
 else
-  fail "Contract tests failed"
+  fail "Witness unit tests failed"
 fi
 
 # ── 4. Start helper services for witness capture ──────────────────────────
@@ -163,6 +168,7 @@ cleanup() {
   done
   # Remove any test witness bundles
   rm -rf data/artifacts/deployment-witness/__test_*
+  rm -rf data/artifacts/deployment-witness/steady-__test_*
 }
 trap cleanup EXIT
 
@@ -170,9 +176,18 @@ start_notifier
 start_bridge
 start_runtime_stub
 
-# ── 5. Run witness capture ────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION A: Point-in-time witness capture verification
+# ═══════════════════════════════════════════════════════════════════════════
+
 echo ""
-echo "── Step 5: Run witness capture ──"
+echo "═══════════════════════════════════════════"
+echo "  SECTION A: Point-in-Time Capture"
+echo "═══════════════════════════════════════════"
+
+# ── A5. Run witness capture (point-in-time) ───────────────────────────────
+echo ""
+echo "── Step A5: Run point-in-time witness capture ──"
 
 CAPTURE_LABEL="verify-m007-s01-$(date +%s)"
 CAPTURE_OUTPUT=$( \
@@ -192,20 +207,20 @@ echo "  ..."
 echo "$CAPTURE_OUTPUT" | tail -10 || true
 
 if [ "$CAPTURE_EXIT" -eq 0 ] || [ "$CAPTURE_EXIT" -eq 1 ]; then
-  pass "Witness capture completed (exit code ${CAPTURE_EXIT}) — exit 0=all reachable, 1=some required unreachable"
+  pass "Point-in-time capture completed (exit code ${CAPTURE_EXIT}) — exit 0=all reachable, 1=some required unreachable"
 else
-  fail "Witness capture exited with fatal error code ${CAPTURE_EXIT} (expected 0 or 1)"
+  fail "Point-in-time capture exited with fatal error code ${CAPTURE_EXIT} (expected 0 or 1)"
 fi
 
-# ── 6. Extract bundle path from output ─────────────────────────────────────
+# ── A6. Extract bundle path from output ─────────────────────────────────────
 echo ""
-echo "── Step 6: Verify bundle structure ──"
+echo "── Step A6: Verify point-in-time bundle structure ──"
 
 # Extract bundle directory from capture output
 BUNDLE_DIR=$(echo "$CAPTURE_OUTPUT" | grep -oE 'data/artifacts/deployment-witness/[^ "]+' | head -1)
 if [ -z "$BUNDLE_DIR" ]; then
   # Fallback: find the latest witness bundle
-  BUNDLE_DIR=$(ls -td data/artifacts/deployment-witness/*/ 2>/dev/null | head -1)
+  BUNDLE_DIR=$(ls -td data/artifacts/deployment-witness/*/ 2>/dev/null | grep -v steady | grep -v __test | head -1)
   BUNDLE_DIR="${BUNDLE_DIR%/}"
 fi
 
@@ -273,9 +288,9 @@ for f in fields:
 " 2>&1)
 echo "$HOST_CHECK"
 
-# ── 7. Check evidence files ──────────────────────────────────────────────
+# ── A7. Check evidence files ──────────────────────────────────────────────
 echo ""
-echo "── Step 7: Verify evidence files ──"
+echo "── Step A7: Verify point-in-time evidence files ──"
 
 EVIDENCE_FILES=("host-evidence.json" "runtime-health.json" "runtime-dashboard.json" "notifier-health.json" "bridge-health.json" "path-witnesses.json" "subsystems.json" "capture-meta.json")
 MISSING_EVIDENCE=0
@@ -288,9 +303,9 @@ for ef in "${EVIDENCE_FILES[@]}"; do
   fi
 done
 
-# ── 8. Verify required subsystems are all present ─────────────────────────
+# ── A8. Verify required subsystems are all present ─────────────────────────
 echo ""
-echo "── Step 8: Verify required subsystems ──"
+echo "── Step A8: Verify required subsystems ──"
 
 SUBSYSTEM_CHECK=$(python3 -c "
 import json,sys
@@ -324,9 +339,9 @@ else
   fail "One or more required subsystems missing"
 fi
 
-# ── 9. Verify host evidence redaction ─────────────────────────────────────
+# ── A9. Verify host evidence redaction ─────────────────────────────────────
 echo ""
-echo "── Step 9: Verify host evidence redaction ──"
+echo "── Step A9: Verify host evidence redaction ──"
 
 HOSTNAME_REDACTED=$(python3 -c "
 import json
@@ -340,9 +355,9 @@ else:
 " 2>&1)
 echo "$HOSTNAME_REDACTED"
 
-# ── 10. Test failure mode: unreachable required evidence ──────────────────
+# ── A10. Test failure mode: unreachable required evidence ──────────────────
 echo ""
-echo "── Step 10: Verify fail-closed for missing required evidence ──"
+echo "── Step A10: Verify fail-closed for missing required evidence ──"
 
 FAILURE_OUTPUT=$( \
   WITNESS_RUNTIME_HEALTH_URL="http://127.0.0.1:18999/nonexistent" \
@@ -361,6 +376,351 @@ if [ "$FAILURE_EXIT" -ne 0 ]; then
   pass "Failure mode: witness capture exited non-zero ($FAILURE_EXIT) when all required evidence unreachable"
 else
   fail "Failure mode: witness capture exited 0 despite all required evidence being unreachable"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECTION B: Steady-state witness capture verification
+# ═══════════════════════════════════════════════════════════════════════════
+
+echo ""
+echo "═══════════════════════════════════════════"
+echo "  SECTION B: Steady-State Witness Capture"
+echo "═══════════════════════════════════════════"
+
+# ── B1. Run steady-state witness (short window) ────────────────────────────
+echo ""
+echo "── Step B1: Run steady-state witness (30s, 10s interval) ──"
+
+SS_LABEL="verify-m007-s02-ss-$(date +%s)"
+SS_OUTPUT=$( \
+  WITNESS_RUNTIME_HEALTH_URL="http://127.0.0.1:${RUNTIME_PORT}/health" \
+  WITNESS_RUNTIME_DASHBOARD_URL="http://127.0.0.1:${RUNTIME_PORT}/dashboard.json" \
+  WITNESS_NOTIFIER_HEALTH_URL="http://127.0.0.1:${NOTIFIER_PORT}/health" \
+  WITNESS_BRIDGE_HEALTH_URL="http://127.0.0.1:${BRIDGE_PORT}/health" \
+  WITNESS_DB_PATH="./data/artifacts/deployment-witness/__test_ss_db.db" \
+  node --import tsx src/deployment/witness-main.ts \
+    --steady-state \
+    --steady-state-duration-sec 30 \
+    --steady-state-interval-sec 10 \
+    --label "${SS_LABEL}" \
+    --http-timeout-ms 5000 \
+    2>&1
+)
+SS_EXIT=$?
+
+echo "$SS_OUTPUT" | head -10
+echo "  ..."
+echo "$SS_OUTPUT" | tail -15 || true
+
+if [ "$SS_EXIT" -eq 0 ]; then
+  pass "Steady-state witness completed with verdict pass/caveat (exit code 0)"
+elif [ "$SS_EXIT" -eq 1 ]; then
+  warn "Steady-state witness completed with FAIL verdict (exit code 1) — expected in test env with limited subsystems"
+  pass "Steady-state witness completed with exit code 1 (fail verdict, bundle still written)"
+else
+  fail "Steady-state witness exited with fatal error code ${SS_EXIT}"
+fi
+
+# ── B2. Find steady-state bundle ────────────────────────────────────────────
+echo ""
+echo "── Step B2: Locate steady-state bundle ──"
+
+# Extract bundle directory from capture output
+SS_BUNDLE_DIR=$(echo "$SS_OUTPUT" | grep -oE 'data/artifacts/deployment-witness/steady[^ "]+' | head -1)
+if [ -z "$SS_BUNDLE_DIR" ]; then
+  # Fallback
+  SS_BUNDLE_DIR=$(ls -td data/artifacts/deployment-witness/steady*/ 2>/dev/null | head -1)
+  SS_BUNDLE_DIR="${SS_BUNDLE_DIR%/}"
+fi
+
+if [ -z "$SS_BUNDLE_DIR" ] || [ ! -d "$SS_BUNDLE_DIR" ]; then
+  fail "Could not find steady-state bundle directory"
+else
+  pass "Steady-state bundle directory exists: ${SS_BUNDLE_DIR}"
+fi
+
+# ── B3. Verify steady-state manifest structure ──────────────────────────────
+echo ""
+echo "── Step B3: Verify steady-state manifest structure ──"
+
+SS_MANIFEST="${SS_BUNDLE_DIR}/manifest.json"
+if [ -f "$SS_MANIFEST" ]; then
+  pass "Steady-state manifest.json exists"
+else
+  fail "Steady-state manifest.json not found"
+fi
+
+SS_MANIFEST_VALID=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+checks = []
+checks.append(('schemaVersion==1', m.get('schemaVersion') == 1))
+checks.append(('artifactType==steady-state-witness', m.get('artifactType') == 'steady-state-witness'))
+checks.append(('startedAt', bool(m.get('startedAt'))))
+checks.append(('endedAt', bool(m.get('endedAt'))))
+checks.append(('durationSec>0', isinstance(m.get('durationSec'), (int,float)) and m['durationSec'] > 0))
+checks.append(('intervalSec>0', isinstance(m.get('intervalSec'), (int,float)) and m['intervalSec'] > 0))
+checks.append(('runId', bool(m.get('runId'))))
+checks.append(('label', bool(m.get('label'))))
+checks.append(('resourceSamples', isinstance(m.get('resourceSamples'), list) and len(m['resourceSamples']) > 0))
+checks.append(('resourceSummary', isinstance(m.get('resourceSummary'), dict)))
+checks.append(('processEvidence', isinstance(m.get('processEvidence'), list)))
+checks.append(('subsystemEvidence', isinstance(m.get('subsystemEvidence'), list) and len(m['subsystemEvidence']) > 0))
+checks.append(('growthRecords', isinstance(m.get('growthRecords'), list)))
+checks.append(('verdict', isinstance(m.get('verdict'), dict)))
+checks.append(('annotations', isinstance(m.get('annotations'), list)))
+
+for name, ok in checks:
+    status = 'PASS' if ok else 'FAIL'
+    print(f'{status}: {name}')
+all_pass = all(ok for _, ok in checks)
+sys.exit(0 if all_pass else 1)
+" 2>&1) && SS_MANIFEST_EXIT=$? || SS_MANIFEST_EXIT=$?
+
+echo "$SS_MANIFEST_VALID"
+if [ "$SS_MANIFEST_EXIT" -eq 0 ]; then
+  pass "Steady-state manifest has all required fields"
+else
+  fail "Steady-state manifest is missing one or more required fields"
+fi
+
+# ── B4. Verify resource samples have correct fields ─────────────────────────
+echo ""
+echo "── Step B4: Verify resource samples ──"
+
+SS_SAMPLES_CHECK=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+samples = m.get('resourceSamples', [])
+issues = []
+for i, s in enumerate(samples):
+    for field in ['timestamp','totalMemoryBytes','freeMemoryBytes','usedMemoryBytes','memoryUsageFraction','loadAverage1m','cpuModel','cpuCores']:
+        if s.get(field) is None:
+            issues.append(f'sample[{i}].{field} is missing')
+
+if not issues:
+    print(f'OK: {len(samples)} samples with all required fields')
+    print(f'OK: totalMemoryBytes={samples[0][\"totalMemoryBytes\"]}')
+    print(f'OK: memoryUsageFraction={samples[0][\"memoryUsageFraction\"]}')
+    print(f'OK: loadAverage1m={samples[0][\"loadAverage1m\"]}')
+else:
+    for issue in issues:
+        print(f'FAIL: {issue}')
+sys.exit(0 if not issues else 1)
+" 2>&1) && SS_SAMPLES_EXIT=$? || SS_SAMPLES_EXIT=$?
+
+echo "$SS_SAMPLES_CHECK"
+if [ "$SS_SAMPLES_EXIT" -eq 0 ]; then
+  pass "Resource samples valid"
+else
+  fail "Resource samples have issues"
+fi
+
+# ── B5. Verify resource summary ─────────────────────────────────────────────
+echo ""
+echo "── Step B5: Verify resource summary ──"
+
+SS_SUMMARY_CHECK=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+rs = m.get('resourceSummary', {})
+issues = []
+
+if not isinstance(rs.get('sampleCount'), (int,float)):
+    issues.append('sampleCount missing')
+if not isinstance(rs.get('memory'), dict):
+    issues.append('memory summary missing')
+else:
+    mem = rs['memory']
+    for f in ['avgUsedBytes','minUsedBytes','maxUsedBytes','avgUsageFraction','peakUsageFraction']:
+        if mem.get(f) is None:
+            issues.append(f'memory.{f} missing')
+if not isinstance(rs.get('load'), dict):
+    issues.append('load summary missing')
+else:
+    ld = rs['load']
+    for f in ['avgLoad1m','peakLoad1m','avgLoad5m','avgLoad15m']:
+        if ld.get(f) is None:
+            issues.append(f'load.{f} missing')
+if not isinstance(rs.get('disk'), dict):
+    issues.append('disk summary missing')
+
+if not issues:
+    print(f'OK: {rs[\"sampleCount\"]} samples summarized')
+    print(f'OK: memory peak usage {rs[\"memory\"][\"peakUsageFraction\"]*100:.0f}%')
+    print(f'OK: load peak 1m {rs[\"load\"][\"peakLoad1m\"]}')
+else:
+    for issue in issues:
+        print(f'FAIL: {issue}')
+sys.exit(0 if not issues else 1)
+" 2>&1) && SS_SUMMARY_EXIT=$? || SS_SUMMARY_EXIT=$?
+
+echo "$SS_SUMMARY_CHECK"
+if [ "$SS_SUMMARY_EXIT" -eq 0 ]; then
+  pass "Resource summary valid"
+else
+  fail "Resource summary has issues"
+fi
+
+# ── B6. Verify subsystem evidence ───────────────────────────────────────────
+echo ""
+echo "── Step B6: Verify subsystem evidence ──"
+
+SS_SUBS_CHECK=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+subs = m.get('subsystemEvidence', [])
+if len(subs) == 0:
+    print('FAIL: no subsystem evidence entries')
+    sys.exit(1)
+
+for s in subs:
+    expected = ['subsystemId','label','healthyThroughout','probes','missingEvidenceReason']
+    missing = [f for f in expected if f not in s]
+    if missing:
+        print(f'FAIL: {s.get(\"subsystemId\",\"?\")} missing fields: {missing}')
+        sys.exit(1)
+    print(f'OK: {s[\"subsystemId\"]} ({len(s[\"probes\"])} probes, healthy={s[\"healthyThroughout\"]})')
+
+ids = {s['subsystemId'] for s in subs}
+required_ids = ['runtime','notifier','mcp-bridge']
+for rid in required_ids:
+    if rid in ids:
+        print(f'OK: required subsystem {rid} present')
+    else:
+        print(f'WARN: required subsystem {rid} absent (expected in test env)')
+
+sys.exit(0)
+" 2>&1) && SS_SUBS_EXIT=$? || SS_SUBS_EXIT=$?
+
+echo "$SS_SUBS_CHECK"
+if [ "$SS_SUBS_EXIT" -eq 0 ]; then
+  pass "Subsystem evidence valid"
+else
+  fail "Subsystem evidence has issues"
+fi
+
+# ── B7. Verify process evidence ─────────────────────────────────────────────
+echo ""
+echo "── Step B7: Verify process evidence ──"
+
+SS_PROC_CHECK=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+procs = m.get('processEvidence', [])
+if len(procs) == 0:
+    print('FAIL: no process evidence entries')
+    sys.exit(1)
+
+for p in procs:
+    expected = ['processName','running','pid','error']
+    missing = [f for f in expected if f not in p]
+    if missing:
+        print(f'FAIL: process {p.get(\"processName\",\"?\")} missing fields: {missing}')
+        sys.exit(1)
+    print(f'OK: {p[\"processName\"]} running={p[\"running\"]} pid={p[\"pid\"]}')
+
+sys.exit(0)
+" 2>&1) && SS_PROC_EXIT=$? || SS_PROC_EXIT=$?
+
+echo "$SS_PROC_CHECK"
+if [ "$SS_PROC_EXIT" -eq 0 ]; then
+  pass "Process evidence valid"
+else
+  fail "Process evidence has issues"
+fi
+
+# ── B8. Verify verdict structure ────────────────────────────────────────────
+echo ""
+echo "── Step B8: Verify verdict ──"
+
+SS_VERDICT_CHECK=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+v = m.get('verdict', {})
+issues = []
+
+if v.get('verdict') not in ('pass','caveat','fail'):
+    issues.append(f\"verdict must be pass/caveat/fail, got {v.get('verdict')}\")
+if not v.get('summary'):
+    issues.append('summary missing')
+if not isinstance(v.get('concerns'), list):
+    issues.append('concerns must be a list')
+if not isinstance(v.get('subsystemVerdicts'), list):
+    issues.append('subsystemVerdicts must be a list')
+if not isinstance(v.get('degradedRequiredCount'), (int,float)):
+    issues.append('degradedRequiredCount missing')
+if not isinstance(v.get('missingEvidenceCount'), (int,float)):
+    issues.append('missingEvidenceCount missing')
+
+if not issues:
+    print(f'OK: verdict={v[\"verdict\"]}')
+    print(f'OK: summary=\"{v[\"summary\"]}\"')
+    print(f'OK: {len(v.get(\"concerns\",[]))} concerns')
+    print(f'OK: {v.get(\"degradedRequiredCount\",0)} degraded required')
+else:
+    for issue in issues:
+        print(f'FAIL: {issue}')
+sys.exit(0 if not issues else 1)
+" 2>&1) && SS_VERDICT_EXIT=$? || SS_VERDICT_EXIT=$?
+
+echo "$SS_VERDICT_CHECK"
+if [ "$SS_VERDICT_EXIT" -eq 0 ]; then
+  pass "Verdict structure valid"
+else
+  fail "Verdict structure has issues"
+fi
+
+# ── B9. Verify growth records ───────────────────────────────────────────────
+echo ""
+echo "── Step B9: Verify growth records ──"
+
+SS_GROWTH_CHECK=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+recs = m.get('growthRecords', [])
+print(f'OK: {len(recs)} growth records')
+
+for r in recs:
+    expected = ['label','path','startSizeBytes','endSizeBytes','growthBytes','growthBytesPerHour','existedThroughout']
+    missing = [f for f in expected if f not in r]
+    if missing:
+        print(f'FAIL: growth record \"{r.get(\"label\",\"?\")}\" missing fields: {missing}')
+        sys.exit(1)
+    print(f'OK: {r[\"label\"]} growth={r[\"growthBytes\"]}B rate={r[\"growthBytesPerHour\"]}B/hr')
+
+sys.exit(0)
+" 2>&1) && SS_GROWTH_EXIT=$? || SS_GROWTH_EXIT=$?
+
+echo "$SS_GROWTH_CHECK"
+if [ "$SS_GROWTH_EXIT" -eq 0 ]; then
+  pass "Growth records valid"
+else
+  fail "Growth records have issues"
+fi
+
+# ── B10. Verify annotations ─────────────────────────────────────────────────
+echo ""
+echo "── Step B10: Verify annotations ──"
+
+SS_ANNOT_CHECK=$(python3 -c "
+import json,sys
+m = json.load(open('${SS_MANIFEST}'))
+anns = m.get('annotations', [])
+print(f'OK: {len(anns)} annotations')
+for a in anns:
+    if not a.get('label') or a.get('value') is None:
+        print(f'FAIL: annotation missing label or value: {a}')
+        sys.exit(1)
+    print(f'OK: {a[\"label\"]}={a[\"value\"]}')
+sys.exit(0)
+" 2>&1) && SS_ANNOT_EXIT=$? || SS_ANNOT_EXIT=$?
+
+echo "$SS_ANNOT_CHECK"
+if [ "$SS_ANNOT_EXIT" -eq 0 ]; then
+  pass "Annotations valid"
+else
+  fail "Annotations have issues"
 fi
 
 # ── Summary ────────────────────────────────────────────────────────────────

@@ -1,0 +1,428 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "steady-state-witness",
+  "startedAt": "2026-05-17T07:30:26.444Z",
+  "endedAt": "2026-05-17T07:30:56.470Z",
+  "durationSec": 30,
+  "intervalSec": 10,
+  "runId": "steady-2026-05-17T07-30-26-444Z",
+  "label": "verify-m007-s02-ss-1779003026",
+  "resourceSamples": [
+    {
+      "timestamp": "2026-05-17T07:30:26.445Z",
+      "totalMemoryBytes": 8454619136,
+      "freeMemoryBytes": 4793745408,
+      "usedMemoryBytes": 3660873728,
+      "memoryUsageFraction": 0.4330027963544685,
+      "loadAverage1m": 3,
+      "loadAverage5m": 1.79,
+      "loadAverage15m": 1.47,
+      "cpuModel": "Cortex-A76",
+      "cpuCores": 4,
+      "diskUsage": {
+        "SQLite database": {
+          "path": "./data/artifacts/deployment-witness/__test_ss_db.db",
+          "sizeBytes": 0,
+          "exists": false
+        },
+        "Deployment artifacts": {
+          "path": "data/artifacts/deployment-witness",
+          "sizeBytes": 568101,
+          "exists": true
+        },
+        "Application logs": {
+          "path": "./tmp/upstox/logs",
+          "sizeBytes": 4189,
+          "exists": true
+        }
+      },
+      "hostUptimeSec": 6094
+    },
+    {
+      "timestamp": "2026-05-17T07:30:26.449Z",
+      "totalMemoryBytes": 8454619136,
+      "freeMemoryBytes": 4793745408,
+      "usedMemoryBytes": 3660873728,
+      "memoryUsageFraction": 0.4330027963544685,
+      "loadAverage1m": 3,
+      "loadAverage5m": 1.79,
+      "loadAverage15m": 1.47,
+      "cpuModel": "Cortex-A76",
+      "cpuCores": 4,
+      "diskUsage": {
+        "SQLite database": {
+          "path": "./data/artifacts/deployment-witness/__test_ss_db.db",
+          "sizeBytes": 0,
+          "exists": false
+        },
+        "Deployment artifacts": {
+          "path": "data/artifacts/deployment-witness",
+          "sizeBytes": 568101,
+          "exists": true
+        },
+        "Application logs": {
+          "path": "./tmp/upstox/logs",
+          "sizeBytes": 4189,
+          "exists": true
+        }
+      },
+      "hostUptimeSec": 6094
+    },
+    {
+      "timestamp": "2026-05-17T07:30:36.470Z",
+      "totalMemoryBytes": 8454619136,
+      "freeMemoryBytes": 4874059776,
+      "usedMemoryBytes": 3580559360,
+      "memoryUsageFraction": 0.423503330239192,
+      "loadAverage1m": 2.69,
+      "loadAverage5m": 1.77,
+      "loadAverage15m": 1.46,
+      "cpuModel": "Cortex-A76",
+      "cpuCores": 4,
+      "diskUsage": {
+        "SQLite database": {
+          "path": "./data/artifacts/deployment-witness/__test_ss_db.db",
+          "sizeBytes": 0,
+          "exists": false
+        },
+        "Deployment artifacts": {
+          "path": "data/artifacts/deployment-witness",
+          "sizeBytes": 568101,
+          "exists": true
+        },
+        "Application logs": {
+          "path": "./tmp/upstox/logs",
+          "sizeBytes": 4189,
+          "exists": true
+        }
+      },
+      "hostUptimeSec": 6104
+    },
+    {
+      "timestamp": "2026-05-17T07:30:46.488Z",
+      "totalMemoryBytes": 8454619136,
+      "freeMemoryBytes": 4901584896,
+      "usedMemoryBytes": 3553034240,
+      "memoryUsageFraction": 0.4202476992572123,
+      "loadAverage1m": 2.57,
+      "loadAverage5m": 1.77,
+      "loadAverage15m": 1.47,
+      "cpuModel": "Cortex-A76",
+      "cpuCores": 4,
+      "diskUsage": {
+        "SQLite database": {
+          "path": "./data/artifacts/deployment-witness/__test_ss_db.db",
+          "sizeBytes": 0,
+          "exists": false
+        },
+        "Deployment artifacts": {
+          "path": "data/artifacts/deployment-witness",
+          "sizeBytes": 568101,
+          "exists": true
+        },
+        "Application logs": {
+          "path": "./tmp/upstox/logs",
+          "sizeBytes": 4189,
+          "exists": true
+        }
+      },
+      "hostUptimeSec": 6114
+    },
+    {
+      "timestamp": "2026-05-17T07:30:56.466Z",
+      "totalMemoryBytes": 8454619136,
+      "freeMemoryBytes": 4898881536,
+      "usedMemoryBytes": 3555737600,
+      "memoryUsageFraction": 0.4205674487286567,
+      "loadAverage1m": 2.25,
+      "loadAverage5m": 1.73,
+      "loadAverage15m": 1.46,
+      "cpuModel": "Cortex-A76",
+      "cpuCores": 4,
+      "diskUsage": {
+        "SQLite database": {
+          "path": "./data/artifacts/deployment-witness/__test_ss_db.db",
+          "sizeBytes": 0,
+          "exists": false
+        },
+        "Deployment artifacts": {
+          "path": "data/artifacts/deployment-witness",
+          "sizeBytes": 568101,
+          "exists": true
+        },
+        "Application logs": {
+          "path": "./tmp/upstox/logs",
+          "sizeBytes": 4189,
+          "exists": true
+        }
+      },
+      "hostUptimeSec": 6124
+    }
+  ],
+  "resourceSummary": {
+    "sampleCount": 5,
+    "memory": {
+      "avgUsedBytes": 3602215731,
+      "minUsedBytes": 3553034240,
+      "maxUsedBytes": 3660873728,
+      "avgUsageFraction": 0.426,
+      "peakUsageFraction": 0.433
+    },
+    "load": {
+      "avgLoad1m": 2.7,
+      "peakLoad1m": 3,
+      "avgLoad5m": 1.77,
+      "avgLoad15m": 1.47
+    },
+    "disk": {
+      "totalGrowthBytes": 0,
+      "highestGrowthPaths": [
+        {
+          "label": "Deployment artifacts",
+          "growthBytesPerHour": 0
+        },
+        {
+          "label": "Application logs",
+          "growthBytesPerHour": 0
+        }
+      ]
+    }
+  },
+  "processEvidence": [
+    {
+      "processName": "trader",
+      "running": false,
+      "pid": null,
+      "error": null
+    },
+    {
+      "processName": "node",
+      "running": true,
+      "pid": 1666,
+      "error": null
+    },
+    {
+      "processName": "caddy",
+      "running": false,
+      "pid": null,
+      "error": null
+    }
+  ],
+  "subsystemEvidence": [
+    {
+      "subsystemId": "runtime",
+      "label": "Trader Runtime",
+      "healthyThroughout": true,
+      "probes": [
+        {
+          "url": "http://127.0.0.1:13001/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 12,
+          "timestamp": "2026-05-17T07:30:26.454Z",
+          "error": null
+        },
+        {
+          "url": "http://127.0.0.1:13001/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 7,
+          "timestamp": "2026-05-17T07:30:36.475Z",
+          "error": null
+        },
+        {
+          "url": "http://127.0.0.1:13001/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 4,
+          "timestamp": "2026-05-17T07:30:46.493Z",
+          "error": null
+        }
+      ],
+      "missingEvidenceReason": null
+    },
+    {
+      "subsystemId": "notifier",
+      "label": "Upstox Notifier",
+      "healthyThroughout": true,
+      "probes": [
+        {
+          "url": "http://127.0.0.1:18788/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 9,
+          "timestamp": "2026-05-17T07:30:26.458Z",
+          "error": null
+        },
+        {
+          "url": "http://127.0.0.1:18788/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 7,
+          "timestamp": "2026-05-17T07:30:36.476Z",
+          "error": null
+        },
+        {
+          "url": "http://127.0.0.1:18788/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 4,
+          "timestamp": "2026-05-17T07:30:46.494Z",
+          "error": null
+        }
+      ],
+      "missingEvidenceReason": null
+    },
+    {
+      "subsystemId": "mcp-bridge",
+      "label": "Local MCP Bridge",
+      "healthyThroughout": true,
+      "probes": [
+        {
+          "url": "http://127.0.0.1:18787/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 10,
+          "timestamp": "2026-05-17T07:30:26.458Z",
+          "error": null
+        },
+        {
+          "url": "http://127.0.0.1:18787/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 7,
+          "timestamp": "2026-05-17T07:30:36.476Z",
+          "error": null
+        },
+        {
+          "url": "http://127.0.0.1:18787/health",
+          "success": true,
+          "statusCode": 200,
+          "responseTimeMs": 5,
+          "timestamp": "2026-05-17T07:30:46.494Z",
+          "error": null
+        }
+      ],
+      "missingEvidenceReason": null
+    },
+    {
+      "subsystemId": "caddy",
+      "label": "Caddy / Basic-Auth Proxy",
+      "healthyThroughout": false,
+      "probes": [
+        {
+          "url": "http://127.0.0.1:80/health",
+          "success": false,
+          "statusCode": 0,
+          "responseTimeMs": 4,
+          "timestamp": "2026-05-17T07:30:26.459Z",
+          "error": "connect ECONNREFUSED 127.0.0.1:80"
+        },
+        {
+          "url": "http://127.0.0.1:80/health",
+          "success": false,
+          "statusCode": 0,
+          "responseTimeMs": 6,
+          "timestamp": "2026-05-17T07:30:36.476Z",
+          "error": "connect ECONNREFUSED 127.0.0.1:80"
+        },
+        {
+          "url": "http://127.0.0.1:80/health",
+          "success": false,
+          "statusCode": 0,
+          "responseTimeMs": 2,
+          "timestamp": "2026-05-17T07:30:46.495Z",
+          "error": "connect ECONNREFUSED 127.0.0.1:80"
+        }
+      ],
+      "missingEvidenceReason": null
+    }
+  ],
+  "growthRecords": [
+    {
+      "label": "SQLite database",
+      "path": "./data/artifacts/deployment-witness/__test_ss_db.db",
+      "startSizeBytes": 0,
+      "endSizeBytes": 0,
+      "growthBytes": 0,
+      "growthBytesPerHour": 0,
+      "existedThroughout": false
+    },
+    {
+      "label": "Deployment artifacts",
+      "path": "data/artifacts/deployment-witness",
+      "startSizeBytes": 568101,
+      "endSizeBytes": 568101,
+      "growthBytes": 0,
+      "growthBytesPerHour": 0,
+      "existedThroughout": true
+    },
+    {
+      "label": "Application logs",
+      "path": "./tmp/upstox/logs",
+      "startSizeBytes": 4189,
+      "endSizeBytes": 4189,
+      "growthBytes": 0,
+      "growthBytesPerHour": 0,
+      "existedThroughout": true
+    }
+  ],
+  "verdict": {
+    "verdict": "caveat",
+    "summary": "All required subsystems have evidence but 1 concern(s) require operator review",
+    "reasoning": "Required subsystem 'caddy' was not healthy throughout the window",
+    "subsystemVerdicts": [
+      {
+        "subsystemId": "runtime",
+        "healthy": true,
+        "note": "healthy throughout",
+        "missingEvidenceReason": null
+      },
+      {
+        "subsystemId": "notifier",
+        "healthy": true,
+        "note": "healthy throughout",
+        "missingEvidenceReason": null
+      },
+      {
+        "subsystemId": "mcp-bridge",
+        "healthy": true,
+        "note": "healthy throughout",
+        "missingEvidenceReason": null
+      },
+      {
+        "subsystemId": "caddy",
+        "healthy": false,
+        "note": "not healthy throughout",
+        "missingEvidenceReason": null
+      }
+    ],
+    "concerns": [
+      "Required subsystem 'caddy' was not healthy throughout the window"
+    ],
+    "degradedRequiredCount": 1,
+    "missingEvidenceCount": 0
+  },
+  "annotations": [
+    {
+      "label": "capture-node-version",
+      "value": "v22.22.2"
+    },
+    {
+      "label": "capture-platform",
+      "value": "linux arm64"
+    },
+    {
+      "label": "http-timeout-ms",
+      "value": 5000
+    },
+    {
+      "label": "process-count-total",
+      "value": 1
+    },
+    {
+      "label": "iterations",
+      "value": 3
+    }
+  ]
+}

@@ -124,9 +124,12 @@ WITNESS_RUNTIME_HEALTH_URL=http://192.168.1.100:3001/health \
 ### NPM script aliases
 
 ```bash
-npm run witness:capture     # node --import tsx src/deployment/witness-main.ts
-npm run witness:capture:sh  # bash scripts/capture-cax11-witness.sh
+npm run witness:capture     # node --import tsx src/deployment/witness-main.ts (point-in-time)
+npm run witness:capture:sh  # bash scripts/capture-cax11-witness.sh (point-in-time)
 npm run witness:verify      # bash scripts/verify-m007-s01-witness.sh (CI / dev verification)
+npm run witness:steady      # node --import tsx src/deployment/witness-main.ts --steady-state
+npm run witness:steady:long # node --import tsx src/deployment/witness-main.ts --steady-state --steady-state-duration-sec 300
+npm run witness:all         # Run all witness unit tests + verification script
 ```
 
 ### Exit codes
@@ -479,17 +482,282 @@ Start the runtime at least once before running the witness, or use
 
 ---
 
-## S01 vs S02: contract capture vs steady-state sizing
+## Steady-state witness (S02)
 
-| Concern | S01 (this runbook) | S02 (planned) |
-|---------|--------------------|---------------|
+The steady-state witness observes the deployed stack over a bounded time window,
+collecting time-series host/process/HTTP/disk evidence and producing a structured
+**pass / caveat / fail** verdict bundle. Operators run this after the point-in-time
+witness confirms the stack is enumerable, to validate sustained budget sufficiency.
+
+### One command
+
+```bash
+# Default: 120s window, 30s sampling interval
+bash scripts/capture-cax11-witness.sh --steady-state
+
+# Custom window and interval
+bash scripts/capture-cax11-witness.sh --steady-state --duration-sec=300 --interval-sec=15
+
+# With label for identification
+bash scripts/capture-cax11-witness.sh --steady-state --label="post-deploy-check-2026-05-17"
+```
+
+Direct Node.js invocation:
+
+```bash
+node --import tsx src/deployment/witness-main.ts --steady-state
+```
+
+With overrides:
+
+```bash
+WITNESS_STEADY_STATE_DURATION_SEC=300 \
+WITNESS_STEADY_STATE_INTERVAL_SEC=15 \
+  node --import tsx src/deployment/witness-main.ts --steady-state --label="extended-check"
+```
+
+### NPM script aliases
+
+```bash
+npm run witness:steady          # Steady-state witness (default window)
+npm run witness:steady:long     # Steady-state witness, 5 min window
+npm run witness:all             # All unit tests + steady-state verification
+```
+
+### What it captures
+
+Over the configured window (default 120s at 30s intervals), the witness records:
+
+| Evidence type | Detail | Frequency |
+|---------------|--------|-----------|
+| **Host resources** | Memory (total/free/used/%), load averages (1/5/15m), CPU model/cores, uptime | Every interval |
+| **HTTP health probes** | Runtime `/health`, runtime `/dashboard.json`, notifier `/health`, bridge `/health`, Caddy port 80 | Every interval |
+| **Process presence** | Trader runtime, node processes, Caddy process | Every 2nd interval |
+| **Disk growth** | SQLite DB+WAL+SHM sizes, artifact directory totals, log directory totals | Every interval (start + end used for deltas) |
+
+### Bundle layout
+
+Steady-state bundles use the same artifact root with a `steady-` prefix on the runId:
+
+```
+data/artifacts/deployment-witness/steady-2026-05-17T06-30-00-000Z/
+└── manifest.json              # ✅ Required — steady-state witness contract
+```
+
+Unlike point-in-time bundles, all evidence lives inside the single `manifest.json`
+document rather than separate files, because every probe adds rows to in-memory
+arrays rather than overwriting a file.
+
+### manifest.json key structure
+
+```json
+{
+  "schemaVersion": 1,
+  "artifactType": "steady-state-witness",
+  "startedAt": "2026-05-17T06:28:00.000Z",
+  "endedAt": "2026-05-17T06:30:00.000Z",
+  "durationSec": 120,
+  "intervalSec": 30,
+  "runId": "steady-2026-05-17T06-30-00-000Z",
+  "label": "post-deploy-check-2026-05-17",
+  "resourceSamples": [
+    {
+      "timestamp": "2026-05-17T06:28:00.000Z",
+      "totalMemoryBytes": 8368705536,
+      "freeMemoryBytes": 3156787200,
+      "usedMemoryBytes": 5211918336,
+      "memoryUsageFraction": 0.623,
+      "loadAverage1m": 0.45,
+      "loadAverage5m": 0.52,
+      "loadAverage15m": 0.48,
+      "cpuModel": "AMD EPYC-Milan",
+      "cpuCores": 4,
+      "hostUptimeSec": 1234567,
+      "diskUsage": {
+        "SQLite database": { "path": "./data/production.db", "sizeBytes": 4194304, "exists": true },
+        "Deployment artifacts": { "path": "data/artifacts", "sizeBytes": 10485760, "exists": true },
+        "Application logs": { "path": "./tmp/upstox/logs", "sizeBytes": 2097152, "exists": true }
+      }
+    }
+  ],
+  "resourceSummary": {
+    "sampleCount": 6,
+    "memory": { "avgUsedBytes": 5200000000, "minUsedBytes": 5180000000, "maxUsedBytes": 5220000000, "avgUsageFraction": 0.621, "peakUsageFraction": 0.624 },
+    "load": { "avgLoad1m": 0.46, "peakLoad1m": 0.55, "avgLoad5m": 0.52, "avgLoad15m": 0.48 },
+    "disk": { "totalGrowthBytes": 0, "highestGrowthPaths": [] }
+  },
+  "processEvidence": [
+    { "processName": "trader", "running": true, "pid": 1234, "error": null },
+    { "processName": "node", "running": true, "pid": 5678, "error": null },
+    { "processName": "caddy", "running": false, "pid": null, "error": null }
+  ],
+  "subsystemEvidence": [
+    {
+      "subsystemId": "runtime",
+      "label": "Trader Runtime",
+      "healthyThroughout": true,
+      "probes": [ /* 4-6 HttpProbe entries */ ],
+      "missingEvidenceReason": null
+    }
+  ],
+  "growthRecords": [
+    {
+      "label": "SQLite database",
+      "path": "./data/production.db",
+      "startSizeBytes": 4194304,
+      "endSizeBytes": 4194304,
+      "growthBytes": 0,
+      "growthBytesPerHour": 0,
+      "existedThroughout": true
+    }
+  ],
+  "verdict": {
+    "verdict": "pass",
+    "summary": "All required subsystems healthy throughout, resource usage within bounds",
+    "reasoning": "No concerns detected during the witness window",
+    "subsystemVerdicts": [ /* per-subsystem healthy/not-healthy with reasons */ ],
+    "concerns": [],
+    "degradedRequiredCount": 0,
+    "missingEvidenceCount": 0
+  },
+  "annotations": [ /* capture metadata, node version, platform */ ]
+}
+```
+
+### Verdict semantics
+
+| Verdict | Meaning | Exit code | Operator action |
+|---------|---------|-----------|-----------------|
+| **pass** | All required subsystems healthy throughout. Resource usage within bounds (memory <80%, load < core count, growth < 50 MB/hr). | 0 | Bundle is archival-quality for compliance / baseline. |
+| **caveat** | All required subsystems have evidence, but one or more concerns were flagged (subsystem had unhealthy periods, memory spiked, load exceeded cores, or a path grew rapidly). | 0 | Inspect the concerns list and decide whether to re-run or escalate. The bundle is still written. |
+| **fail** | One or more required subsystems have **zero successful probes** throughout the entire window (missing evidence). The system was not observable for a required component. | 1 | Investigate the missing-evidence subsystems before proceeding. The bundle is written for post-mortem. |
+
+### Reading a steady-state bundle
+
+```bash
+# Quick verdict
+python3 -c "
+import json
+m = json.load(open('data/artifacts/deployment-witness/steady-*/manifest.json'))
+print('Verdict:', m['verdict']['verdict'])
+print('Summary:', m['verdict']['summary'])
+for c in m['verdict']['concerns']:
+    print(f'  ⚠  {c}')
+"
+
+# Resource summary
+python3 -c "
+import json
+m = json.load(open('data/artifacts/deployment-witness/steady-*/manifest.json'))
+s = m['resourceSummary']
+print(f'Samples: {s[\"sampleCount\"]}')
+print(f'Memory avg: {s[\"memory\"][\"avgUsedBytes\"]/1024**2:.0f} MB (peak {s[\"memory\"][\"peakUsageFraction\"]*100:.0f}%)')
+print(f'Load avg: {s[\"load\"][\"avgLoad1m\"]} (peak {s[\"load\"][\"peakLoad1m\"]})')
+print(f'Disk growth: {s[\"disk\"][\"totalGrowthBytes\"]/1024**2:.1f} MB total')
+"
+
+# Subsystem health throughout
+python3 -c "
+import json
+m = json.load(open('data/artifacts/deployment-witness/steady-*/manifest.json'))
+for se in m['subsystemEvidence']:
+    icon = '✅' if se['healthyThroughout'] else '❌'
+    print(f'{icon} {se[\"subsystemId\"]}: {se[\"probes\"]} probes, healthy={se[\"healthyThroughout\"]}')
+    if se['missingEvidenceReason']:
+        print(f'   missing: {se[\"missingEvidenceReason\"]}')
+"
+
+# Process evidence
+python3 -c "
+import json
+m = json.load(open('data/artifacts/deployment-witness/steady-*/manifest.json'))
+for p in m['processEvidence']:
+    icon = '✅' if p['running'] else '❌'
+    print(f'{icon} {p[\"processName\"]} (PID {p[\"pid\"]})')
+"
+
+# Growth records
+python3 -c "
+import json
+m = json.load(open('data/artifacts/deployment-witness/steady-*/manifest.json'))
+for gr in m['growthRecords']:
+    print(f'{gr[\"label\"]}: {gr[\"growthBytes\"]/1024**2:.2f} MB growth ({gr[\"growthBytesPerHour\"]/1024**2:.2f} MB/hr)')
+"
+```
+
+### Expected steady-state envelope (CAX11)
+
+Based on the systemd unit constraints (`MemoryLimit=256M`, `CPUQuota=50%`):
+
+| Metric | Expected range | Alert threshold |
+|--------|----------------|-----------------|
+| Memory usage (total host) | 4-6 GB (CAX11 ≈ 8 GB total) | 80% of total = 6.4 GB |
+| Load average (1m) | 0.3 - 2.0 (4 cores) | > 4.0 (above core count) |
+| SQLite DB growth | < 1 MB/hr under blocked mode | > 50 MB/hr |
+| Log growth | < 5 MB/hr steady-state | > 50 MB/hr |
+| Artifact growth | < 1 MB/hr (witness bundles are small) | > 50 MB/hr |
+| HTTP probe success | 100% for runtime, notifier, bridge | Any failure in a required subsystem |
+
+### Known caveats
+
+#### 1. Systemd vs runtime DB path
+
+The systemd unit at `config/systemd/trader.service` sets `TRADER_DB_PATH=./data/production.db`,
+while some development workflows use `./data/trader.db`. The witness defaults to
+`./data/production.db` to match production. If running against a dev stack:
+
+```bash
+WITNESS_DB_PATH=./data/trader.db bash scripts/capture-cax11-witness.sh --steady-state
+```
+
+#### 2. Caddy detection is best-effort
+
+The steady-state witness probes Caddy via HTTP on port 80 (`http://127.0.0.1:80/health`).
+If Caddy is configured on a different port, uses HTTPS-only, or is containerized,
+it will appear as unreachable. This does not cause a `fail` verdict (Caddy probes
+are tracked as subsystem evidence, not hard-required for the steady-state contract),
+but it will produce a `caveat` with a concern about missing Caddy evidence.
+
+To make Caddy observable, configure a health endpoint on its internal port
+(e.g. `http://127.0.0.1:80/health` forwarding to a health handler) or adjust
+the witness configuration (future work).
+
+#### 3. Process detection requires /proc or ps
+
+The witness uses `/proc` (Linux) or `ps aux` (fallback) to detect running processes.
+On minimal containers or systems without `ps`, process detection will return
+`running: false` for all process names. The bundle still passes as long as HTTP
+health endpoints respond — the `processEvidence` array is informative, not
+required for the pass/caveat/fail verdict.
+
+#### 4. Growth records require two or more samples
+
+If the witness window is so short (< interval) that only one sample is taken,
+growth records will be empty because there's no delta to compute. Ensure
+`duration-sec` ≥ `interval-sec * 2`.
+
+#### 5. Forced re-run after a failed steady-state run
+
+Steady-state bundles use `runId` prefix `steady-`. A failed run (exit 1) still
+writes a bundle. Subsequent runs produce separate bundles — the operator should
+inspect the most recent one:
+
+```bash
+# Find the latest steady-state bundle
+ls -td data/artifacts/deployment-witness/steady-*/ | head -1
+```
+
+### S01 vs S02: recap
+
+| Concern | S01 (point-in-time) | S02 (steady-state) |
+|---------|---------------------|--------------------|
 | **What it proves** | The deployment boundary is enumerable and photographable at a point in time | Subsystems stay within budget over sustained operation |
 | **Evidence** | Single HTTP snapshot per subsystem + filesystem stat | Time-series metrics, resource usage trends |
-| **Duration** | Instant (< 30 seconds) | Minutes to hours |
-| **Caddy** | Binary/config existence check | HTTP-level probe, certificate expiry, request latency |
-| **SQLite** | File exists, size, mtime | WAL growth rate, query latency, disk IOPS |
-| **Failure semantics** | Fail-closed: any missing required evidence → degraded | Fail-closed: budget exceeded → alert |
-| **Bundle** | `data/artifacts/deployment-witness/<runId>/` | Same layout but with time-series evidence files |
+| **Duration** | Instant (< 30 seconds) | Minutes to hours (default 120s) |
+| **Caddy** | Binary/config existence check | HTTP-level health probe |
+| **SQLite** | File exists, size, mtime | Size growth rate over window |
+| **Failure semantics** | Fail-closed: any missing required evidence → exit 1 (degraded) | Fail/caveat/pass with structured reasoning |
+| **Bundle** | `data/artifacts/deployment-witness/<runId>/` | `data/artifacts/deployment-witness/steady-<runId>/` |
 
 In short: **S01 proves you can see the whole stack. S02 proves the stack can stay up.**
 
@@ -524,7 +792,7 @@ Assumptions to be aware of:
 - Logs go to journald (`journalctl -u trader.service -f`)
 - If the systemd unit uses `trader.db` vs `production.db`, set `WITNESS_DB_PATH` accordingly
 
-### Verification script
+### Verification script (S01 + S02)
 
 Mechanical end-to-end verification of the witness capture pipeline
 (for CI or dev environment):
@@ -532,13 +800,26 @@ Mechanical end-to-end verification of the witness capture pipeline
 📄 `scripts/verify-m007-s01-witness.sh`
 
 This script starts helper services (notifier, MCP bridge, runtime stub),
-runs the witness capture, and validates:
+runs both point-in-time and steady-state witness captures, and validates:
+
+**Point-in-time (Section A):**
 - Bundle directory and manifest existence
 - Valid JSON manifest matching the contract schema
 - All 7 required subsystem records present
 - All 8 evidence files written
 - Hostname redaction
 - Fail-closed behavior when all evidence is unreachable
+
+**Steady-state (Section B):**
+- Steady-state bundle directory and manifest existence
+- Manifest fields: schemaVersion, artifactType, startedAt/endedAt, durationSec, intervalSec
+- Resource samples with all required fields (memory, load, CPU, uptime)
+- Resource summary with memory, load, and disk aggregates
+- Subsystem evidence for each tracked system with probe history
+- Process evidence for trader/node/caddy detection
+- Growth records for SQLite, artifacts, and logs
+- Verdict structure (pass/caveat/fail with reasoning, concerns, subsystem verdicts)
+- Annotations with capture metadata
 
 ### Witness contract (source of truth)
 

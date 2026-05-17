@@ -1153,6 +1153,19 @@ export function writeWitnessBundle(result: CaptureResult): { manifestPath: strin
   return { manifestPath, evidencePaths };
 }
 
+/**
+ * Write a steady-state witness manifest to the bundle directory.
+ * The steady-state manifest is self-contained (all evidence in one document).
+ */
+export function writeSteadyStateBundle(
+  bundleDir: string,
+  manifest: SteadyStateWitnessManifest,
+): { manifestPath: string } {
+  const manifestPath = path.join(bundleDir, 'manifest.json');
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  return { manifestPath };
+}
+
 export {
   DEFAULT_HTTP_TIMEOUT_MS,
   DEFAULT_STEADY_STATE_INTERVAL_SEC,

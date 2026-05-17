@@ -1,0 +1,44 @@
+[
+  {
+    "id": "runtime",
+    "label": "Trader Runtime",
+    "reachable": false,
+    "required": true
+  },
+  {
+    "id": "notifier",
+    "label": "Upstox Notifier",
+    "reachable": false,
+    "required": true
+  },
+  {
+    "id": "mcp-bridge",
+    "label": "Local MCP Bridge",
+    "reachable": false,
+    "required": true
+  },
+  {
+    "id": "caddy",
+    "label": "Caddy / Basic-Auth Proxy",
+    "reachable": false,
+    "required": true
+  },
+  {
+    "id": "sqlite",
+    "label": "SQLite Database",
+    "reachable": false,
+    "required": true
+  },
+  {
+    "id": "logs",
+    "label": "Application Logs",
+    "reachable": true,
+    "required": true
+  },
+  {
+    "id": "artifacts",
+    "label": "Deployment Artifacts",
+    "reachable": true,
+    "required": true
+  }
+]

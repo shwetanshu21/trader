@@ -1,0 +1,34 @@
+{
+  "status": "ok",
+  "bridge": {
+    "startedAt": "2026-05-17T06:50:48.700Z",
+    "uptimeMs": 1295,
+    "port": 18787,
+    "statusPath": "/home/shwetanshu/trader/tmp/upstox/mcp-local/status.json",
+    "token": {
+      "tokenPath": "./tmp/upstox/notifier/latest-token.json",
+      "absolutePath": "/home/shwetanshu/trader/tmp/upstox/notifier/latest-token.json",
+      "exists": true,
+      "clientId": "a6f92565-7c46-41f2-ba9c-ebc637e5e40d",
+      "userId": "3WC3RT",
+      "expiresAt": "2026-05-12T22:00:00.000Z",
+      "issuedAt": "2026-05-12T09:48:15.170Z",
+      "persistedAt": "2026-05-12T09:48:16.072Z",
+      "messageType": "access_token",
+      "tokenType": "Bearer",
+      "accessTokenMasked": "eyJ0***FIQQ",
+      "isExpired": true,
+      "checkedAt": "2026-05-17T06:50:49.996Z"
+    },
+    "rest": {
+      "lastProfileAt": null,
+      "lastInstrumentFetchAt": null,
+      "lastQuoteFetchAt": null,
+      "lastInstrumentCount": null,
+      "instrumentCacheAgeMs": null
+    },
+    "recentCalls": [],
+    "lastSuccess": null,
+    "lastFailure": null
+  }
+}

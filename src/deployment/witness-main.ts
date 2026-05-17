@@ -14,6 +14,7 @@ import {
   captureWitness,
   runSteadyStateWitness,
   writeWitnessBundle,
+  writeSteadyStateBundle,
   type CaptureOptions,
 } from './witness-capture.js';
 import { validateManifest, validateSteadyStateManifest } from './witness-contract.js';
@@ -267,8 +268,20 @@ async function runSteadyState(options: CaptureOptions): Promise<void> {
 
   const m = result.manifest;
 
+  // Write bundle to disk
+  let manifestPath: string;
+  try {
+    const written = writeSteadyStateBundle(result.bundleDir, m);
+    manifestPath = written.manifestPath;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[witness] FATAL: failed to write steady-state bundle: ${message}`);
+    process.exit(2);
+  }
+
   console.log(`\n[witness] Steady-state witness complete.`);
   console.log(`[witness] Bundle: ${result.bundleDir}`);
+  console.log(`[witness] Manifest: ${manifestPath}`);
   console.log(`[witness] Window: ${m.durationSec}s (${m.resourceSamples.length} samples, ${m.intervalSec}s interval)`);
 
   // Validate manifest against contract
@@ -336,6 +349,7 @@ async function runSteadyState(options: CaptureOptions): Promise<void> {
   }
 
   console.log(`\n✅ Steady-state witness complete. Bundle: ${result.bundleDir}`);
+  console.log(`Manifest: ${manifestPath}`);
   process.exit(0);
 }
 

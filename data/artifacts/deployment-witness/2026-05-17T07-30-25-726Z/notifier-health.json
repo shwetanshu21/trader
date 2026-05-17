@@ -1,0 +1,7 @@
+{
+  "status": "ok",
+  "uptimeMs": 2134,
+  "notifierPath": "/upstox/notifier",
+  "tokenPath": "./tmp/upstox/notifier/latest-token.json",
+  "lastDelivery": null
+}

@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-05-17T06:46:51.442Z",
+  "runId": "2026-05-17T06-46-51-442Z",
+  "label": "fail-closed-test",
+  "schemaVersion": 1,
+  "hostname": "rspi-358ffa",
+  "httpTimeoutMs": 2000,
+  "endpoints": {
+    "runtimeHealth": "http://127.0.0.1:18999/nonexistent",
+    "runtimeDashboard": "http://127.0.0.1:18999/nonexistent",
+    "notifierHealth": "http://127.0.0.1:18999/nonexistent",
+    "bridgeHealth": "http://127.0.0.1:18999/nonexistent"
+  }
+}

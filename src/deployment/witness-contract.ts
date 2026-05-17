@@ -768,13 +768,10 @@ export function deriveSteadyStateVerdict(
     );
   }
 
-  if (resourceSummary.load.peakLoad1m > (resourceSummary.sampleCount > 0 ? 4 : 4)) {
-    const cpuCores = 4; // CAX11 has 4 cores
-    if (resourceSummary.load.peakLoad1m > cpuCores) {
-      concerns.push(
-        `Load average peaked at ${resourceSummary.load.peakLoad1m}, exceeding CPU core count (${cpuCores})`,
-      );
-    }
+  if (resourceSummary.load.peakLoad1m > 4) {
+    concerns.push(
+      `Load average peaked at ${resourceSummary.load.peakLoad1m}, exceeding the current witness core count threshold (4)`,
+    );
   }
 
   // Check growth rates

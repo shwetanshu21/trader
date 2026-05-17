@@ -1,0 +1,202 @@
+[
+  {
+    "label": "SQLite database",
+    "path": "./data/trader.db",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "SQLite WAL",
+    "path": "./data/trader.db-wal",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "SQLite SHM",
+    "path": "./data/trader.db-shm",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "Log directory: ./tmp/upstox/logs",
+    "path": "./tmp/upstox/logs",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1778582246306.5945,
+    "children": [
+      {
+        "name": "bridge.log",
+        "isDirectory": false,
+        "sizeBytes": 249
+      },
+      {
+        "name": "notifier.log",
+        "isDirectory": false,
+        "sizeBytes": 248
+      },
+      {
+        "name": "runtime.log",
+        "isDirectory": false,
+        "sizeBytes": 3645
+      },
+      {
+        "name": "tunnel.log",
+        "isDirectory": false,
+        "sizeBytes": 47
+      }
+    ]
+  },
+  {
+    "label": "Log directory: ./logs",
+    "path": "./logs",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "Artifact directory: ./data/artifacts",
+    "path": "./data/artifacts",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1778969250817.325,
+    "children": [
+      {
+        "name": "deployment-witness",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "walk-forward",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      }
+    ]
+  },
+  {
+    "label": "Deployment witness artifacts root",
+    "path": "data/artifacts/deployment-witness",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1779000610216.4736,
+    "children": [
+      {
+        "name": "2026-05-17T06-27-46-439Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-448Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-454Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-461Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-469Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-479Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-43-17-110Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-43-17-640Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-43-48-166Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-44-15-011Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-54-983Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-54-997Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-55-003Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-55-010Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-55-018Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-55-028Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-46-50-985Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-46-51-442Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-10-186Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-10-196Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-10-203Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-10-210Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-10-218Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      }
+    ]
+  }
+]

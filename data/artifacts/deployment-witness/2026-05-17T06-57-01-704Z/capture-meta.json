@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-05-17T06:57:01.704Z",
+  "runId": "2026-05-17T06-57-01-704Z",
+  "label": "verify-m007-s01-1779001021",
+  "schemaVersion": 1,
+  "hostname": "rspi-358ffa",
+  "httpTimeoutMs": 10000,
+  "endpoints": {
+    "runtimeHealth": "http://127.0.0.1:13001/health",
+    "runtimeDashboard": "http://127.0.0.1:13001/dashboard.json",
+    "notifierHealth": "http://127.0.0.1:18788/health",
+    "bridgeHealth": "http://127.0.0.1:18787/health"
+  }
+}

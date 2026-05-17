@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "deployment-witness",
+  "capturedAt": "2026-05-17T06:43:17.640Z",
+  "runId": "2026-05-17T06-43-17-640Z",
+  "label": "fail-closed-test",
+  "subsystems": [
+    {
+      "id": "runtime",
+      "label": "Trader Runtime",
+      "reachable": false,
+      "required": true,
+      "metadata": {
+        "healthEndpoint": "http://127.0.0.1:18999/nonexistent",
+        "dashboardEndpoint": "http://127.0.0.1:18999/nonexistent",
+        "healthReachable": false,
+        "dashboardReachable": false,
+        "healthError": "connect ECONNREFUSED 127.0.0.1:18999",
+        "dashboardError": "connect ECONNREFUSED 127.0.0.1:18999"
+      }
+    },
+    {
+      "id": "notifier",
+      "label": "Upstox Notifier",
+      "reachable": false,
+      "required": true,
+      "metadata": {
+        "healthEndpoint": "http://127.0.0.1:18999/nonexistent",
+        "reachable": false,
+        "error": "connect ECONNREFUSED 127.0.0.1:18999"
+      }
+    },
+    {
+      "id": "mcp-bridge",
+      "label": "Local MCP Bridge",
+      "reachable": false,
+      "required": true,
+      "metadata": {
+        "healthEndpoint": "http://127.0.0.1:18999/nonexistent",
+        "reachable": false,
+        "error": "connect ECONNREFUSED 127.0.0.1:18999"
+      }
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy / Basic-Auth Proxy",
+      "reachable": false,
+      "required": true,
+      "metadata": {
+        "caddyInstalled": false,
+        "caddyRunning": false,
+        "configExists": false,
+        "dataExists": false
+      }
+    },
+    {
+      "id": "sqlite",
+      "label": "SQLite Database",
+      "reachable": false,
+      "required": true,
+      "metadata": {
+        "dbPath": "./data/artifacts/deployment-witness/__test_fail_db.db",
+        "dbExists": false,
+        "walExists": false
+      }
+    },
+    {
+      "id": "logs",
+      "label": "Application Logs",
+      "reachable": true,
+      "required": true,
+      "metadata": {
+        "logPaths": [
+          "./tmp/upstox/logs",
+          "./logs"
+        ],
+        "anyLogDirExists": true
+      }
+    },
+    {
+      "id": "artifacts",
+      "label": "Deployment Artifacts",
+      "reachable": true,
+      "required": true,
+      "metadata": {
+        "artifactRoots": [
+          "./data/artifacts"
+        ],
+        "anyArtifactDirExists": true
+      }
+    }
+  ],
+  "pathWitnesses": [
+    {
+      "label": "SQLite database",
+      "path": "./data/artifacts/deployment-witness/__test_fail_db.db",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "SQLite WAL",
+      "path": "./data/artifacts/deployment-witness/__test_fail_db.db-wal",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "SQLite SHM",
+      "path": "./data/artifacts/deployment-witness/__test_fail_db.db-shm",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "Log directory: ./tmp/upstox/logs",
+      "path": "./tmp/upstox/logs",
+      "exists": true,
+      "sizeBytes": 4096,
+      "mtimeMs": 1778582246306.5945,
+      "children": [
+        {
+          "name": "bridge.log",
+          "isDirectory": false,
+          "sizeBytes": 249
+        },
+        {
+          "name": "notifier.log",
+          "isDirectory": false,
+          "sizeBytes": 248
+        },
+        {
+          "name": "runtime.log",
+          "isDirectory": false,
+          "sizeBytes": 3645
+        },
+        {
+          "name": "tunnel.log",
+          "isDirectory": false,
+          "sizeBytes": 47
+        }
+      ]
+    },
+    {
+      "label": "Log directory: ./logs",
+      "path": "./logs",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "Artifact directory: ./data/artifacts",
+      "path": "./data/artifacts",
+      "exists": true,
+      "sizeBytes": 4096,
+      "mtimeMs": 1778969250817.325,
+      "children": [
+        {
+          "name": "deployment-witness",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "walk-forward",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        }
+      ]
+    },
+    {
+      "label": "Deployment witness artifacts root",
+      "path": "data/artifacts/deployment-witness",
+      "exists": true,
+      "sizeBytes": 4096,
+      "mtimeMs": 1779000197640.1968,
+      "children": [
+        {
+          "name": "2026-05-17T06-27-46-439Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-27-46-448Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-27-46-454Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-27-46-461Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-27-46-469Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-27-46-479Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-43-17-110Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-43-17-640Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        }
+      ]
+    }
+  ],
+  "hostEvidence": {
+    "hostname": "rspi-358-2aa6d2",
+    "platform": "linux",
+    "release": "6.12.75+rpt-rpi-2712",
+    "arch": "arm64",
+    "totalMemoryBytes": 8454619136,
+    "freeMemoryBytes": 5175001088,
+    "cpuModel": "Cortex-A76",
+    "cpuCores": 4,
+    "loadAverage1m": 1.59,
+    "hostUptimeSec": 3265
+  },
+  "appEvidence": {
+    "capturedAt": "2026-05-17T06:43:17.640Z",
+    "verdict": "degraded",
+    "subsystemCount": 7,
+    "unreachableSubsystems": [
+      "runtime",
+      "notifier",
+      "mcp-bridge",
+      "caddy",
+      "sqlite"
+    ]
+  },
+  "annotations": [
+    {
+      "label": "capture-node-version",
+      "value": "v22.22.2"
+    },
+    {
+      "label": "capture-platform",
+      "value": "linux arm64"
+    },
+    {
+      "label": "http-timeout-ms",
+      "value": 2000
+    }
+  ]
+}
