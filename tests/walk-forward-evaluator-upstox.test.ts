@@ -209,11 +209,12 @@ function buildMockFetch(candlesPerInstrument: Map<string, Array<[number, number,
       }
 
       // Historical candles endpoint
-      if (url.includes('/v2/historical-candles/')) {
-        // Extract instrument key from URL
-        // URL pattern: /v2/historical-candles/{instrument_key}/{interval}/{from}/{to}
-        const match = url.match(/\/v2\/historical-candles\/([^/]+)/);
-        const instrumentKey = match ? decodeURIComponent(match[1]) : '';
+      if (url.includes('/v2/historical-candle/')) {
+        // Resolve the requested instrument key by matching any seeded key
+        // against the URL. This is more robust to encoding differences.
+        const instrumentKey = [...candlesPerInstrument.keys()].find(
+          key => url.includes(key) || url.includes(encodeURIComponent(key)),
+        ) ?? '';
 
         const candles = candlesPerInstrument.get(instrumentKey);
 
@@ -345,7 +346,7 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
 
       // Verify API calls were made for candle data
       const historicalCalls = mockFetch.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCalls).toBe(3); // 3 instruments
 
@@ -686,14 +687,8 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
       // The LLM trial should have deterministic-only scores since no ProposalEngine
       const llmTrial = result.trials.find(t => t.trialIndex === 1);
       expect(llmTrial).toBeDefined();
-      // Without ProposalEngine, LLM scores MAY be null (graceful degradation)
-      // The evaluator sets llmScore only when ProposalEngine is present
-      // Since we didn't provide one, there's no LLM score
-      if (llmTrial!.llmScore != null) {
-        // If evaluator sets a synthetic LLM score, it should be reasonable
-        expect(llmTrial!.llmScore).toBeGreaterThanOrEqual(0);
-        expect(llmTrial!.llmScore).toBeLessThanOrEqual(1);
-      }
+      expect(llmTrial!.llmStatus).toBe('skipped');
+      expect(llmTrial!.llmScore).toBeNull();
 
       // All candidates should have valid deterministic scores
       for (const candidate of result.rankedCandidates) {
@@ -760,7 +755,7 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
       });
 
       const historicalCallsRun1 = mockFetch.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCallsRun1).toBe(3); // 3 instruments fetched
 
@@ -799,7 +794,7 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
 
       // Verify no historical-candle API calls were made
       const historicalCallsRun2 = mockFetch.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCallsRun2).toBe(0);
 

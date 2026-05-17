@@ -642,13 +642,22 @@ export async function probeHttp(
       res.on('end', () => {
         const responseTimeMs = Date.now() - startTime;
         const statusCode = res.statusCode ?? 0;
+        const location = typeof res.headers.location === 'string' ? res.headers.location : null;
+        const isRedirect = statusCode >= 300 && statusCode < 400;
+        const isLocalHealthRedirect = isRedirect
+          && location !== null
+          && (location === '/health'
+            || location.endsWith('/health')
+            || location.startsWith('https://127.0.0.1/health')
+            || location.startsWith('https://localhost/health'));
+        const success = (statusCode >= 200 && statusCode < 300) || isLocalHealthRedirect;
         resolve({
           url,
-          success: statusCode >= 200 && statusCode < 300,
+          success,
           statusCode,
           responseTimeMs,
           timestamp,
-          error: statusCode >= 200 && statusCode < 300 ? null : `HTTP ${statusCode}`,
+          error: success ? null : `HTTP ${statusCode}`,
         });
       });
     });

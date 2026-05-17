@@ -20,6 +20,7 @@ import {
 import { ReplayFidelity } from './types.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
 import { createOptionalProposalEngine } from './proposal-engine-factory.js';
+import { parseCliDateEnd, parseCliDateStart } from './upstox-date-range.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -133,19 +134,14 @@ function toSelectionStrategy(value: string): WalkForwardSelectionStrategy {
 // Date helpers
 // ---------------------------------------------------------------------------
 
-/** Parse an ISO date string (YYYY-MM-DD) to epoch ms (start of day UTC). */
-function dateStrToEpochMs(dateStr: string): number {
-  return new Date(`${dateStr}T00:00:00Z`).getTime();
-}
-
 /** Compute range start/end from CLI options. */
 function computeDateRange(options: SelectOptions): { rangeStart: number; rangeEnd: number } {
   const now = Date.now();
   const rangeEnd = options.toDate
-    ? dateStrToEpochMs(options.toDate)
+    ? parseCliDateEnd(options.toDate)
     : now;
   const rangeStart = options.fromDate
-    ? dateStrToEpochMs(options.fromDate)
+    ? parseCliDateStart(options.fromDate)
     : now - options.days * 86_400_000;
   return { rangeStart, rangeEnd };
 }

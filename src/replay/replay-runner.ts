@@ -8,8 +8,7 @@ import { ReplayClock } from './replay-clock.js';
 import { ReplayEngine, type ReplayEngineResult } from './replay-engine.js';
 import { ReplaySessionRepository } from '../persistence/replay-session-repo.js';
 import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
-import { StrategyCoordinator } from '../strategy/framework.js';
-import { LlmRankingStrategy } from '../strategy/llm-ranking-strategy.js';
+import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
 import { ProposalEngine } from '../proposals/proposal-engine.js';
 import {
   ReplaySessionStatus,
@@ -44,6 +43,10 @@ export interface ReplayRunnerOptions {
   strategyVersion?: string;
   /** Market ID (default: 'INDIA_NSE_EQ'). */
   marketId?: string;
+  /** Explicit replay range start (epoch ms). Defaults to 7 days before now. */
+  rangeStart?: number;
+  /** Explicit replay range end (epoch ms). Defaults to now. */
+  rangeEnd?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,9 +89,9 @@ export async function runReplay(options: ReplayRunnerOptions): Promise<ReplayRun
     marketId = 'INDIA_NSE_EQ',
   } = options;
 
-  // Determine date range from data provider
-  const rangeStart = startedAt - 7 * 86_400_000; // default: past week
-  const rangeEnd = startedAt;
+  // Determine date range: prefer explicit options, fall back to past week
+  const rangeStart = options.rangeStart ?? (startedAt - 7 * 86_400_000);
+  const rangeEnd = options.rangeEnd ?? startedAt;
 
   // ── Step 1: Create clock and count ticks ──────────────────────────────
   const clock = new ReplayClock(marketProfile, cadenceMinutes);
@@ -98,18 +101,16 @@ export async function runReplay(options: ReplayRunnerOptions): Promise<ReplayRun
   const sessionRepo = new ReplaySessionRepository(db);
   const strategyRunRepo = new StrategyRunRepository(db);
 
-  // ── Step 3: Create the strategy coordinator ────────────────────────────
-  // If a proposal engine is provided, use it for the LLM ranking plugin;
-  // otherwise, create a coordinator with no plugins (empty result).
-  let coordinator: StrategyCoordinator;
-
-  if (proposalEngine) {
-    const llmPlugin = new LlmRankingStrategy(proposalEngine);
-    coordinator = new StrategyCoordinator([llmPlugin], { maxCandidates });
-  } else {
-    // No LLM — coordinator with no plugins will return empty results
-    coordinator = new StrategyCoordinator([], { maxCandidates });
-  }
+  // ── Step 3: Create the strategy coordinator via the shared factory ─────
+  // The factory always includes the deterministic screener plugin for
+  // truthful fallback behavior (non-empty deterministic scores even when
+  // no LLM provider is configured), and optionally adds the LLM ranking
+  // plugin when a proposal engine is available.
+  const coordinator = createStrategyCoordinator({
+    proposalEngine,
+    maxCandidates,
+    parallelPlugins: true,
+  });
 
   // ── Step 4: Create a new replay session ────────────────────────────────
   const sessionId = Date.now(); // Use timestamp for rough ordering

@@ -142,7 +142,7 @@ function installFetchMock(): void {
       });
     }
 
-    if (url.startsWith('https://api.upstox.com/v2/historical-candles/')) {
+    if (url.startsWith('https://api.upstox.com/v2/historical-candle/')) {
       return new Response(JSON.stringify({
         status: 'success',
         data: {

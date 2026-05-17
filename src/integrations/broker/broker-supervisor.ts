@@ -83,6 +83,16 @@ export class BrokerSupervisor implements TickWork {
       error: e.error,
     }));
 
+    if (this._mcpDriver?.getCachedInstrumentKeyCount) {
+      recentEvents.unshift({
+        eventType: 'mcp_instrument_key_cache',
+        recordedAt: Date.now(),
+        durationMs: null,
+        itemCount: this._mcpDriver.getCachedInstrumentKeyCount(),
+        error: null,
+      });
+    }
+
     return {
       session: sessionHealth,
       instruments: {
@@ -142,11 +152,7 @@ export class BrokerSupervisor implements TickWork {
   private _ensureQuoteSubscriptions(): void {
     if (!this._stream) return;
 
-    const diagnostics = this._stream.getDiagnostics();
-    if (diagnostics.subscribedCount > 0) return;
-
     const symbols = getEligibleSymbols('NSE');
-    // Sort for deterministic ordering
     const sortedSymbols = [...symbols].sort();
     const tokens = sortedSymbols
       .map(symbol => this._instruments.getInstrument('NSE', symbol))
@@ -164,6 +170,10 @@ export class BrokerSupervisor implements TickWork {
       }
       return;
     }
+
+    const diagnostics = this._stream.getDiagnostics();
+    const expectedCount = new Set(tokens).size;
+    if (diagnostics.subscribedCount === expectedCount) return;
 
     this._stream.subscribe(tokens);
   }

@@ -33,16 +33,70 @@ const POLICY_VERSION = '1.0.0';
 // are eligible. The UniverseService resolves this to the full instrument set
 // at snapshot computation time.
 
-const NSE_EQ_ALLOWLIST: string[] = ['*'];
+const FALLBACK_NSE_CORE_ALLOWLIST: string[] = [
+  'RELIANCE',
+  'TCS',
+  'INFY',
+  'HDFCBANK',
+  'ICICIBANK',
+  'SBIN',
+  'LT',
+  'ITC',
+  'BHARTIARTL',
+  'AXISBANK',
+  'KOTAKBANK',
+  'HINDUNILVR',
+  'BAJFINANCE',
+  'ASIANPAINT',
+  'MARUTI',
+  'HCLTECH',
+  'SUNPHARMA',
+  'ULTRACEMCO',
+  'TITAN',
+  'WIPRO',
+  'NESTLEIND',
+  'POWERGRID',
+  'NTPC',
+  'ONGC',
+  'TECHM',
+  'M&M',
+  'TMCV',
+  'BAJAJFINSV',
+  'ADANIPORTS',
+  'JSWSTEEL',
+  'TATASTEEL',
+  'COALINDIA',
+  'GRASIM',
+  'HINDALCO',
+  'ADANIENT',
+  'EICHERMOT',
+  'HEROMOTOCO',
+  'INDUSINDBK',
+  'BAJAJ-AUTO',
+  'BRITANNIA',
+  'CIPLA',
+  'DRREDDY',
+  'APOLLOHOSP',
+  'DIVISLAB',
+  'SHRIRAMFIN',
+  'BPCL',
+  'UPL',
+  'PIDILITIND',
+  'HDFCLIFE',
+  'SBILIFE',
+];
+
+function loadBoundedNseAllowlist(): string[] {
+  return FALLBACK_NSE_CORE_ALLOWLIST;
+}
+
+const NSE_EQ_ALLOWLIST: string[] = loadBoundedNseAllowlist();
 
 // ---------------------------------------------------------------------------
-// NFO FUT Allowlist — all F&O futures
+// NFO FUT Allowlist — disabled by default for bounded live universe
 // ---------------------------------------------------------------------------
-// Sentinel value '*' means all NFO FUT instruments synced from the broker
-// are eligible. Futures symbols follow the pattern <STOCK><YYYYMMDFUT>
-// and are resolved from the instrument master at runtime.
 
-const NFO_FUT_ALLOWLIST: string[] = ['*'];
+const NFO_FUT_ALLOWLIST: string[] = [];
 
 // ---------------------------------------------------------------------------
 // Thresholds
@@ -69,7 +123,7 @@ const MAX_QUOTE_STALENESS_MS = 120_000;
 /** The single India tradable universe policy instance. */
 export const INDIA_UNIVERSE_POLICY: UniversePolicyConfig = {
   version: POLICY_VERSION,
-  label: 'India All-Equity + F&O Futures Universe v1',
+  label: `India Bounded Equity Universe v${POLICY_VERSION}`,
   allowlist: {
     NSE: NSE_EQ_ALLOWLIST,
     NFO: NFO_FUT_ALLOWLIST,

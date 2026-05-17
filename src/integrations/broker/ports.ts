@@ -59,6 +59,7 @@ export interface BrokerMcpDriver {
   refreshSession(): Promise<BrokerSessionMaterial | null>;
   fetchInstrumentCatalog(): Promise<InstrumentRecord[]>;
   hasCachedInstrumentKeys?(): boolean;
+  getCachedInstrumentKeyCount?(): number;
 }
 
 export type ZerodhaMcpDriver = BrokerMcpDriver;

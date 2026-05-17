@@ -1,73 +1,53 @@
 # ── trader.service ──
-# Systemd unit for the autonomous trading runtime.
-# Designed for Raspberry Pi OS (Bookworm) / Debian-based systems.
+# Systemd unit for the Hetzner-hosted autonomous trading runtime.
+# Uses source entrypoints via tsx because the current repo-wide TypeScript
+# build is not globally clean yet.
 #
 # Installation:
-#   sudo cp config/systemd/trader.service /etc/systemd/system/
+#   sudo cp config/systemd/trader*.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable trader.service
-#   sudo systemctl start trader.service
+#   sudo systemctl enable --now trader-upstox-notifier.service trader-upstox-mcp-local.service trader.service
 #
 # Logs:
 #   journalctl -u trader.service -f
 #
 # Health check:
-#   curl http://localhost:3000/health
+#   curl http://127.0.0.1:3001/health
 
 [Unit]
 Description=trader — Autonomous India Trading Runtime
 Documentation=https://github.com/shwetanshu/trader
-After=network-online.target
+After=network-online.target trader-upstox-notifier.service trader-upstox-mcp-local.service
 Wants=network-online.target
-
-[Service]
-Type=simple
-
-# Run as a non-root service user
-User=pi
-Group=pi
-
-# Working directory — change this to your install path
-WorkingDirectory=/home/pi/trader
-
-# Node.js binary path (adjust for your NodeJS version)
-ExecStart=/usr/bin/node --experimental-specifier-resolution=node dist/main.js
-
-# Restart behaviour
-Restart=on-failure
-RestartSec=10
+Requires=trader-upstox-notifier.service trader-upstox-mcp-local.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
-# Environment variables
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/trader
+EnvironmentFile=-/root/trader/.env
 Environment=NODE_ENV=production
-Environment=TRADER_PORT=3000
-Environment=TRADER_DB_PATH=./data/production.db
+Environment=TRADER_PORT=3001
+Environment=TRADER_DB_PATH=./data/trader-upstox.db
 Environment=TRADER_SCHEDULER_INTERVAL_MS=60000
 Environment=TRADER_LOG_LEVEL=info
 Environment=TRADER_MARKET_TIMEZONE=Asia/Kolkata
-
-# Security hardening
+Environment=TRADER_EXECUTION_OPERATOR_BIND_HOST=127.0.0.1
+ExecStart=/usr/bin/node --env-file=/root/trader/.env --import tsx src/main.ts
+Restart=always
+RestartSec=5
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/home/pi/trader/data
-CapabilityBoundingSet=
-AmbientCapabilities=
-
-# Resource limits
-MemoryMax=256M
-CPUQuota=50%
-
-# Process lifecycle
+ReadWritePaths=/root/trader/data /root/trader/tmp
 KillMode=process
 KillSignal=SIGTERM
-TimeoutStopSec=15
-
-# Standard output goes to journald
+TimeoutStopSec=20
 StandardOutput=journal
 StandardError=journal
+MemoryMax=1G
+CPUQuota=150%
 
 [Install]
 WantedBy=multi-user.target

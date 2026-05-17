@@ -52,8 +52,7 @@ import {
   type StrategyEvaluationInput,
   type StrategyEvaluationResult,
 } from '../strategy-risk/strategy-risk-supervisor.js';
-import { StrategyCoordinator } from '../strategy/framework.js';
-import { LlmRankingStrategy } from '../strategy/llm-ranking-strategy.js';
+import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
 import { UniverseService } from '../universe/universe-service.js';
 import { UniverseSupervisor } from '../universe/universe-supervisor.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
@@ -286,13 +285,16 @@ export class RuntimeApp {
       const engine = new ProposalEngine(this.config.proposalEngine);
       const validator = new IndiaProposalValidator();
 
-      // Construct the pluggable strategy coordinator with the LLM ranking plugin
-      const llmPlugin = new LlmRankingStrategy(engine);
+      // Construct the strategy coordinator via the shared factory seam.
+      // The factory always includes the deterministic screener plugin
+      // for truthful fallback behavior, and optionally adds the LLM
+      // ranking plugin when a proposal engine is provided.
       const strategyCfg = this.config.strategy ?? { maxCandidates: 5, parallelPlugins: true };
-      const strategyCoordinator = new StrategyCoordinator(
-        [llmPlugin],
-        { maxCandidates: strategyCfg.maxCandidates },
-      );
+      const strategyCoordinator = createStrategyCoordinator({
+        proposalEngine: engine,
+        maxCandidates: strategyCfg.maxCandidates,
+        parallelPlugins: strategyCfg.parallelPlugins,
+      });
 
       proposalSupervisor = new ProposalSupervisor({
         engine,

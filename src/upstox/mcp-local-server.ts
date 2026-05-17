@@ -151,6 +151,11 @@ export function createUpstoxMcpLocalServer(options: UpstoxMcpLocalServerOptions 
             throw new Error('No instrument keys provided');
           }
           const quotes = await restClient.fetchFullMarketQuotes(instrumentKeys);
+          if (process.env.TRADER_UPSTOX_DEBUG_QUOTES_PATH?.trim()) {
+            const debugPath = process.env.TRADER_UPSTOX_DEBUG_QUOTES_PATH.trim();
+            fs.mkdirSync(path.dirname(debugPath), { recursive: true });
+            fs.writeFileSync(debugPath, JSON.stringify({ instrumentKeys, quotes }, null, 2));
+          }
           recordCall('get-full-market-quote', Date.now() - started, Object.keys(quotes.data ?? {}).length, null);
           return {
             content: [{ type: 'text', text: JSON.stringify(quotes) }],

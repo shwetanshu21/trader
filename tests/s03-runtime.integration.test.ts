@@ -331,8 +331,9 @@ describe('S03 Runtime — Proposal composition', () => {
       const { supervisor } = createSupervisor();
       const d = supervisor.getDiagnostics();
       expect(d.inFlight).toBe(false);
-      expect(d.coordinatorPlugins).toHaveLength(1);
-      expect(d.coordinatorPlugins[0].id).toBe('llm-ranking-v1');
+      expect(d.coordinatorPlugins).toHaveLength(2);
+      expect(d.coordinatorPlugins[0].id).toBe('deterministic-screener-v1');
+      expect(d.coordinatorPlugins[1].id).toBe('llm-ranking-v1');
     });
   });
 

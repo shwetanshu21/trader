@@ -813,6 +813,35 @@ describe('probeHttpBatch', () => {
       server.close();
     }
   });
+
+  it('treats local health redirects as healthy evidence', async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url === '/redirect-health') {
+        res.writeHead(308, { location: '/health' });
+        res.end();
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('expected test server address');
+    const port = address.port;
+
+    try {
+      const [result] = await probeHttpBatch(
+        [`http://127.0.0.1:${port}/redirect-health`],
+        500,
+      );
+      expect(result.statusCode).toBe(308);
+      expect(result.success).toBe(true);
+      expect(result.error).toBeNull();
+    } finally {
+      server.close();
+    }
+  });
 });
 
 describe('computeGrowthRecords', () => {

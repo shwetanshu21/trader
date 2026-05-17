@@ -1,0 +1,25 @@
+[Unit]
+Description=trader — Upstox local MCP bridge
+After=network-online.target trader-upstox-notifier.service
+Wants=network-online.target
+Requires=trader-upstox-notifier.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/trader
+EnvironmentFile=-/root/trader/.env
+ExecStart=/usr/bin/node --env-file=/root/trader/.env --import tsx src/upstox/mcp-local-main.ts
+Restart=always
+RestartSec=5
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ReadWritePaths=/root/trader/tmp /root/trader/data
+
+[Install]
+WantedBy=multi-user.target

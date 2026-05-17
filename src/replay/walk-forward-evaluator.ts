@@ -6,8 +6,8 @@
 
 import type Database from 'better-sqlite3';
 import { ReplayClock } from './replay-clock.js';
+import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
 import { StrategyCoordinator } from '../strategy/framework.js';
-import { LlmRankingStrategy } from '../strategy/llm-ranking-strategy.js';
 import { ProposalEngine } from '../proposals/proposal-engine.js';
 import { LLMStatus } from '../types/runtime.js';
 import type { HistoricalDataProvider } from './historical-data-provider.js';
@@ -22,70 +22,6 @@ import {
   type WalkForwardTrialWindowRow,
   type WalkForwardRankedCandidate,
 } from './walk-forward-types.js';
-import type {
-  StrategyFrameworkConfig,
-  StrategyPlugin,
-  BoundedCandidate,
-  RankedCandidate,
-  StrategyPluginIdentity,
-} from '../types/runtime.js';
-
-// ---------------------------------------------------------------------------
-// DeterministicScorerPlugin — lightweight baseline scoring plugin
-// ---------------------------------------------------------------------------
-
-class DeterministicScorerPlugin implements StrategyPlugin {
-  readonly identity: StrategyPluginIdentity = {
-    id: 'deterministic-scorer-v1',
-    name: 'Deterministic Scorer',
-    version: '1.0.0',
-  };
-
-  evaluate(candidates: BoundedCandidate[]): RankedCandidate[] {
-    const ranked: RankedCandidate[] = candidates.map(candidate => {
-      const score = this._computeScore(candidate);
-      const rationale = this._buildRationale(candidate, score);
-      return { candidate, plugin: { ...this.identity }, score, rationale };
-    });
-
-    ranked.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      const exchCmp = a.candidate.exchange.localeCompare(b.candidate.exchange);
-      if (exchCmp !== 0) return exchCmp;
-      return a.candidate.tradingsymbol.localeCompare(b.candidate.tradingsymbol);
-    });
-
-    return ranked;
-  }
-
-  private _computeScore(candidate: BoundedCandidate): number {
-    let volumeScore = 0;
-    if (candidate.volume != null && candidate.volume > 0) {
-      volumeScore = Math.min(Math.log10(candidate.volume) / 8, 1.0);
-    }
-
-    let spreadScore = 0;
-    if (candidate.bid != null && candidate.ask != null && candidate.ask > candidate.bid) {
-      const mid = (candidate.bid + candidate.ask) / 2;
-      const spreadRatio = (candidate.ask - candidate.bid) / mid;
-      spreadScore = Math.max(1.0 - Math.min(spreadRatio / 0.05, 1.0), 0);
-    } else {
-      spreadScore = 0.5;
-    }
-
-    const priceBonus = candidate.lastPrice != null ? 0.25 : 0;
-    return Math.max(0, Math.min(1, volumeScore * 0.4 + spreadScore * 0.4 + priceBonus * 0.2));
-  }
-
-  private _buildRationale(candidate: BoundedCandidate, score: number): string {
-    const parts: string[] = [];
-    if (candidate.volume != null && candidate.volume > 0) parts.push(`vol=${candidate.volume.toLocaleString()}`);
-    if (candidate.bid != null && candidate.ask != null) parts.push(`spread=${(candidate.ask - candidate.bid).toFixed(2)}`);
-    if (candidate.lastPrice != null) parts.push(`last=${candidate.lastPrice}`);
-    const detail = parts.length > 0 ? ` (${parts.join(', ')})` : '';
-    return `Deterministic score ${(score * 100).toFixed(0)}%${detail}`;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -120,6 +56,12 @@ export interface WindowMetrics {
   tradeCount: number;
   profitFactor: number | null;
   extendedMetrics: Record<string, unknown> | null;
+  /** LLM consultation status from the coordinator (truthful, never synthetic). */
+  llmStatus: string | null;
+  /** Average LLM score across ticks where LLM was consulted, or null. */
+  llmScore: number | null;
+  /** Number of ticks where LLM was actually consulted (as reported by coordinator). */
+  llmTickCount: number;
 }
 
 export interface WalkForwardAggregateMetrics {
@@ -595,7 +537,6 @@ export class WalkForwardEvaluator {
     let aggregateLlmSum = 0;
     let aggregateLlmCount = 0;
     const llmStatuses = new Set<string>();
-    let hasLlm = false;
     let llmStatus: string | null = null;
 
     for (const window of windows) {
@@ -618,18 +559,41 @@ export class WalkForwardEvaluator {
           aggregateDeterministicSum += metrics.totalReturn;
           aggregateDeterministicCount += 1;
         }
+        // Aggregate truthful LLM evidence from coordinator output
+        if (metrics.llmStatus != null) {
+          llmStatuses.add(metrics.llmStatus);
+          if (metrics.llmScore != null) {
+            aggregateLlmSum += metrics.llmScore;
+            aggregateLlmCount += 1;
+          }
+        }
       }
     }
 
-    if (config.llmConfig?.enabled && this._proposalEngine) {
-      hasLlm = true;
-      llmStatus = 'consulted';
+    // Derive truthful llmStatus from observed coordinator statuses
+    if (llmStatuses.size > 0) {
+      // If any window had a consulted LLM, report consulted (truthfully)
+      if (llmStatuses.has(LLMStatus.Consulted)) {
+        llmStatus = LLMStatus.Consulted;
+      } else if (llmStatuses.has(LLMStatus.Degraded)) {
+        llmStatus = LLMStatus.Degraded;
+      } else if (llmStatuses.has(LLMStatus.Error)) {
+        llmStatus = LLMStatus.Error;
+      } else {
+        llmStatus = LLMStatus.Skipped;
+      }
+    } else if (config.llmConfig?.enabled && this._proposalEngine) {
+      // LLM was configured but coordinator reported no LLM evidence —
+      // something went wrong upstream. Report Skipped rather than fabricated 'consulted'.
+      llmStatus = LLMStatus.Skipped;
     }
 
     const deterministicScore = aggregateDeterministicCount > 0
       ? +(aggregateDeterministicSum / aggregateDeterministicCount).toFixed(4)
       : 0;
-    const llmScore = hasLlm ? +(deterministicScore * 0.95 + 0.05).toFixed(4) : null;
+    const llmScore = aggregateLlmCount > 0
+      ? +(aggregateLlmSum / aggregateLlmCount).toFixed(4)
+      : null;
 
     return {
       config,
@@ -656,17 +620,38 @@ export class WalkForwardEvaluator {
         tradeCount: 0,
         profitFactor: null,
         extendedMetrics: null,
+        llmStatus: null,
+        llmScore: null,
+        llmTickCount: 0,
       };
     }
 
     const bestScores: number[] = [];
+    let llmTickCount = 0;
+    let llmScoreSum = 0;
+    let llmScoreCount = 0;
+    const observedLlmStatuses = new Set<string>();
+
     for (const tick of ticks) {
       try {
         const candidates = await this._dataProvider.getCandidates(tick);
         if (candidates.length === 0) continue;
         const result = await coordinator.evaluate(candidates);
         if (result.candidates.length === 0) continue;
-        bestScores.push(result.candidates[0].mergedScore);
+
+        const top = result.candidates[0];
+        bestScores.push(top.mergedScore);
+
+        // Capture truthful LLM evidence from the coordinator, including explicit skipped status.
+        const status = top.llmStatus;
+        if (status != null) {
+          observedLlmStatuses.add(status);
+          if (status === LLMStatus.Consulted && top.llmScore != null) {
+            llmScoreSum += top.llmScore;
+            llmScoreCount += 1;
+            llmTickCount += 1;
+          }
+        }
       } catch {
         continue;
       }
@@ -681,6 +666,14 @@ export class WalkForwardEvaluator {
         tradeCount: ticks.length,
         profitFactor: null,
         extendedMetrics: null,
+        llmStatus: observedLlmStatuses.size > 0
+          ? (observedLlmStatuses.has(LLMStatus.Consulted) ? LLMStatus.Consulted
+            : observedLlmStatuses.has(LLMStatus.Degraded) ? LLMStatus.Degraded
+            : observedLlmStatuses.has(LLMStatus.Error) ? LLMStatus.Error
+            : LLMStatus.Skipped)
+          : LLMStatus.Skipped,
+        llmScore: llmScoreCount > 0 ? +(llmScoreSum / llmScoreCount).toFixed(4) : null,
+        llmTickCount,
       };
     }
 
@@ -692,6 +685,14 @@ export class WalkForwardEvaluator {
     const maxScore = Math.max(...bestScores);
     const winningTicks = bestScores.filter(score => score >= WIN_SCORE_THRESHOLD).length;
     const losingTicks = bestScores.filter(score => score < WIN_SCORE_THRESHOLD).length;
+
+    // Determine truthful llmStatus from observed coordinator statuses
+    const windowLlmStatus = observedLlmStatuses.size > 0
+      ? (observedLlmStatuses.has(LLMStatus.Consulted) ? LLMStatus.Consulted
+        : observedLlmStatuses.has(LLMStatus.Degraded) ? LLMStatus.Degraded
+        : observedLlmStatuses.has(LLMStatus.Error) ? LLMStatus.Error
+        : LLMStatus.Skipped)
+      : LLMStatus.Skipped;
 
     return {
       totalReturn: +mean.toFixed(4),
@@ -707,19 +708,19 @@ export class WalkForwardEvaluator {
         maxScore,
         minScore,
       },
+      llmStatus: windowLlmStatus,
+      llmScore: llmScoreCount > 0 ? +(llmScoreSum / llmScoreCount).toFixed(4) : null,
+      llmTickCount,
     };
   }
 
   private _createCoordinator(config: WalkForwardTrialConfig): StrategyCoordinator {
     const maxCandidates = (config.params.maxCandidates as number) ?? 5;
-    const frameworkConfig: Partial<StrategyFrameworkConfig> = { maxCandidates };
-    const plugins: StrategyPlugin[] = [new DeterministicScorerPlugin()];
-
-    if (config.llmConfig?.enabled && this._proposalEngine) {
-      plugins.push(new LlmRankingStrategy(this._proposalEngine));
-    }
-
-    return new StrategyCoordinator(plugins, frameworkConfig);
+    return createStrategyCoordinator({
+      proposalEngine: this._proposalEngine,
+      maxCandidates,
+      parallelPlugins: true,
+    });
   }
 
   private _computeAggregateMetrics(

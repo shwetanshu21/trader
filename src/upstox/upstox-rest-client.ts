@@ -6,10 +6,11 @@ const UPSTOX_API_BASE_URL = 'https://api.upstox.com';
 const UPSTOX_PROFILE_URL = `${UPSTOX_API_BASE_URL}/v2/user/profile`;
 const UPSTOX_FULL_QUOTES_URL = `${UPSTOX_API_BASE_URL}/v2/market-quote/quotes`;
 const UPSTOX_INSTRUMENTS_URL = 'https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz';
-const UPSTOX_HISTORICAL_CANDLES_URL = `${UPSTOX_API_BASE_URL}/v2/historical-candles`;
+const UPSTOX_HISTORICAL_CANDLES_URL = `${UPSTOX_API_BASE_URL}/v2/historical-candle`;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_INSTRUMENT_CACHE_MS = 60 * 60 * 1000;
+const QUOTE_BATCH_SIZE = 10;
 
 export interface UpstoxBridgeProfile {
   status: string;
@@ -44,8 +45,16 @@ export interface UpstoxQuoteResponse {
   data: Record<string, Record<string, unknown>>;
 }
 
+/** Raw Upstox candle payload: timestamp may arrive as ISO-8601 string. */
+type RawUpstoxHistoricalCandle = [string | number, number, number, number, number, number, number];
+
 /** [timestamp_ms, open, high, low, close, volume, open_interest] */
 export type UpstoxHistoricalCandle = [number, number, number, number, number, number, number];
+
+interface RawUpstoxHistoricalCandlesResponse {
+  status: string;
+  data: { candles: RawUpstoxHistoricalCandle[] };
+}
 
 export interface UpstoxHistoricalCandlesResponse {
   status: string;
@@ -118,14 +127,22 @@ export class UpstoxRestClient {
     }
 
     const token = readUpstoxTokenRecord();
-    const url = new URL(UPSTOX_FULL_QUOTES_URL);
-    url.searchParams.set('instrument_key', instrumentKeys.join(','));
+    const merged: Record<string, unknown> = {};
 
-    const data = await this._fetchJson<UpstoxQuoteResponse>(url.toString(), {
-      headers: authHeaders(token.accessToken),
-    });
+    for (let index = 0; index < instrumentKeys.length; index += QUOTE_BATCH_SIZE) {
+      const batch = instrumentKeys.slice(index, index + QUOTE_BATCH_SIZE);
+      const url = new URL(UPSTOX_FULL_QUOTES_URL);
+      url.searchParams.set('instrument_key', batch.join(','));
+
+      const data = await this._fetchJson<UpstoxQuoteResponse>(url.toString(), {
+        headers: authHeaders(token.accessToken),
+      });
+
+      Object.assign(merged, data.data ?? {});
+    }
+
     this._lastQuoteFetchAt = Date.now();
-    return data;
+    return { status: 'success', data: merged as Record<string, Record<string, unknown>> };
   }
 
   async fetchHistoricalCandles(
@@ -136,9 +153,18 @@ export class UpstoxRestClient {
   ): Promise<UpstoxHistoricalCandlesResponse> {
     const token = readUpstoxTokenRecord();
     const url = `${UPSTOX_HISTORICAL_CANDLES_URL}/${instrumentKey}/${interval}/${toDate}/${fromDate}`;
-    return this._fetchJson<UpstoxHistoricalCandlesResponse>(url, {
+    const response = await this._fetchJson<RawUpstoxHistoricalCandlesResponse>(url, {
       headers: authHeaders(token.accessToken),
     });
+
+    return {
+      status: response.status,
+      data: {
+        candles: (response.data.candles ?? [])
+          .map(normalizeHistoricalCandle)
+          .sort((a, b) => a[0] - b[0]),
+      },
+    };
   }
 
   private async _getInstrumentCache(): Promise<UpstoxInstrumentRecord[]> {
@@ -238,3 +264,25 @@ function normalizeSegmentFilter(value: string): string {
 function truncate(value: string, max = 300): string {
   return value.length <= max ? value : `${value.slice(0, max)}…`;
 }
+
+function normalizeHistoricalCandle(candle: RawUpstoxHistoricalCandle): UpstoxHistoricalCandle {
+  const timestampRaw = candle[0];
+  const timestamp = typeof timestampRaw === 'number'
+    ? timestampRaw
+    : Date.parse(timestampRaw);
+
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`Invalid Upstox candle timestamp: ${String(timestampRaw)}`);
+  }
+
+  return [
+    timestamp,
+    candle[1],
+    candle[2],
+    candle[3],
+    candle[4],
+    candle[5],
+    candle[6],
+  ];
+}
+

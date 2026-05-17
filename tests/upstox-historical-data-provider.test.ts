@@ -338,7 +338,7 @@ describe('UpstoxHistoricalDataProvider', () => {
                 : input.url;
 
           // Return empty candle array for all instruments
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(
                 JSON.stringify({
@@ -395,7 +395,7 @@ describe('UpstoxHistoricalDataProvider', () => {
                 ? input.toString()
                 : input.url;
 
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -486,7 +486,7 @@ describe('UpstoxHistoricalDataProvider', () => {
             return Promise.reject(new Error('Network error'));
           }
 
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -610,7 +610,7 @@ describe('UpstoxHistoricalDataProvider', () => {
                 ? input.toString()
                 : input.url;
 
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -748,7 +748,7 @@ describe('UpstoxHistoricalDataProvider', () => {
                 ? input.toString()
                 : input.url;
 
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -788,7 +788,7 @@ describe('UpstoxHistoricalDataProvider', () => {
 
       // Reset the spy counter for the second provider
       const historicalCandleUrls = fetchSpy.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCandleUrls).toBe(2); // 2 API calls for 2 instruments
 
@@ -808,7 +808,7 @@ describe('UpstoxHistoricalDataProvider', () => {
 
       // Verify NO historical-candle API calls were made
       const historicalCallsAfterCache = fetchSpy.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCallsAfterCache).toBe(0);
     });
@@ -848,7 +848,7 @@ describe('UpstoxHistoricalDataProvider', () => {
             return Promise.reject(new Error('Should not fetch cached instrument'));
           }
 
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -889,7 +889,7 @@ describe('UpstoxHistoricalDataProvider', () => {
 
       // Only INFY should have made historical-candle API calls
       const historicalCalls = fetchSpy.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCalls).toBe(1);
 
@@ -927,7 +927,7 @@ describe('UpstoxHistoricalDataProvider', () => {
                 : input.url;
 
           // RELIANCE should still be fetched since its cache is corrupt
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -973,7 +973,7 @@ describe('UpstoxHistoricalDataProvider', () => {
 
       // RELIANCE data should still be fetched via API (1 call for RELIANCE, INFY from cache)
       const historicalCalls = fetchSpy.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCalls).toBe(1);
 
@@ -999,7 +999,7 @@ describe('UpstoxHistoricalDataProvider', () => {
                 ? input.toString()
                 : input.url;
 
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -1039,7 +1039,7 @@ describe('UpstoxHistoricalDataProvider', () => {
 
       // All fetches should be API calls (no cache)
       const historicalCalls = fetchSpy.mock.calls.filter(
-        call => String(call[0]).includes('/v2/historical-candles/'),
+        call => String(call[0]).includes('/v2/historical-candle/'),
       ).length;
       expect(historicalCalls).toBe(2);
     });
@@ -1069,7 +1069,7 @@ describe('UpstoxHistoricalDataProvider', () => {
                 ? input.toString()
                 : input.url;
 
-          if (url.includes('/v2/historical-candles/')) {
+          if (url.includes('/v2/historical-candle/')) {
             return Promise.resolve(
               new Response(JSON.stringify(SAMPLE_CANDLES), {
                 status: 200,
@@ -1111,6 +1111,71 @@ describe('UpstoxHistoricalDataProvider', () => {
       // Verify cache file uses sanitized name (| replaced with _)
       const cacheFilePath = path.join(cacheDir, 'NSE_FO_12345.json');
       expect(fs.existsSync(cacheFilePath)).toBe(true);
+    });
+  });
+
+  describe('chunked historical fetches', () => {
+    it('splits long ranges into multiple historical-candle requests and merges them', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const configPath = writeConfigFile(dir, [INSTRUMENTS[0]]);
+      const client = new UpstoxRestClient();
+
+      const calls: string[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+
+        if (url.includes('/v2/historical-candle/')) {
+          calls.push(url);
+          const isFirstChunk = url.includes('/2026-04-28/2026-04-01');
+          return Promise.resolve(new Response(JSON.stringify({
+            status: 'success',
+            data: {
+              candles: isFirstChunk
+                ? [['2026-04-28T15:29:00+05:30', 100, 101, 99, 100.5, 10, 0]]
+                : [['2026-05-16T15:29:00+05:30', 110, 111, 109, 110.5, 12, 0]],
+            },
+          }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }));
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      const provider = new UpstoxHistoricalDataProvider({
+        restClient: client,
+        configPath,
+        rangeStart: Date.parse('2026-04-01T00:00:00.000Z'),
+        rangeEnd: Date.parse('2026-05-16T23:59:59.999Z'),
+      });
+
+      const earlyTick: ReplayTick = {
+        index: 1,
+        timestamp: Date.parse('2026-04-28T12:00:00.000Z'),
+        fidelity: ReplayFidelity.Full,
+      };
+      const lateTick: ReplayTick = {
+        index: 2,
+        timestamp: Date.parse('2026-05-16T12:00:00.000Z'),
+        fidelity: ReplayFidelity.Full,
+      };
+
+      const earlyCandidates = await provider.getCandidates(earlyTick);
+      const lateCandidates = await provider.getCandidates(lateTick);
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toContain('/2026-04-28/2026-04-01');
+      expect(calls[1]).toContain('/2026-05-16/2026-04-29');
+      expect(earlyCandidates).toHaveLength(1);
+      expect(lateCandidates).toHaveLength(1);
+      expect(earlyCandidates[0].lastPrice).toBe(100.5);
+      expect(lateCandidates[0].lastPrice).toBe(110.5);
     });
   });
 });

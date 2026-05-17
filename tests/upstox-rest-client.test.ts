@@ -78,7 +78,7 @@ function installFetchMock(): void {
     }
 
     // Handle historical candles
-    if (url.includes('/v2/historical-candles/')) {
+    if (url.includes('/v2/historical-candle/')) {
       // Extract the URL path to verify construction in tests
       return new Response(JSON.stringify(SAMPLE_CANDLES), {
         status: 200,
@@ -98,7 +98,7 @@ function installErrorFetchMock(status: number): void {
         ? input.toString()
         : input.url;
 
-    if (url.includes('/v2/historical-candles/')) {
+    if (url.includes('/v2/historical-candle/')) {
       return new Response(JSON.stringify({ status: 'error', message: 'Request failed' }), {
         status,
         statusText: status === 401 ? 'Unauthorized' : 'Bad Request',
@@ -120,7 +120,7 @@ function installUrlCaptureMock(capturedUrl: { value: string }): void {
 
     capturedUrl.value = url;
 
-    if (url.includes('/v2/historical-candles/')) {
+    if (url.includes('/v2/historical-candle/')) {
       return new Response(JSON.stringify(SAMPLE_CANDLES), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -176,14 +176,14 @@ describe('UpstoxRestClient.fetchHistoricalCandles', () => {
       '2024-01-02',
     );
 
-    expect(captured.value).toContain('/v2/historical-candles/');
+    expect(captured.value).toContain('/v2/historical-candle/');
     expect(captured.value).toContain('NSE_EQ|INE002A01018');
     expect(captured.value).toContain('1minute');
     expect(captured.value).toContain('2024-01-02');
     expect(captured.value).toContain('2024-01-01');
-    // Verify the URL pattern: .../historical-candles/{instrument_key}/{interval}/{to_date}/{from_date}
+    // Verify the URL pattern: .../historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}
     expect(captured.value).toMatch(
-      /\/v2\/historical-candles\/NSE_EQ\|INE002A01018\/1minute\/2024-01-02\/2024-01-01$/,
+      /\/v2\/historical-candle\/NSE_EQ\|INE002A01018\/1minute\/2024-01-02\/2024-01-01$/,
     );
   });
 
@@ -209,23 +209,45 @@ describe('UpstoxRestClient.fetchHistoricalCandles', () => {
     ).rejects.toThrow('Upstox API request failed (400)');
   });
 
-  it('handles pipe character in instrument key in URL path', async () => {
+  it('normalizes ISO timestamp candles to epoch ms and ascending order', async () => {
     const dir = makeTempDir();
     writeTokenFile(dir);
-    const captured = { value: '' };
-    installUrlCaptureMock(captured);
+    globalThis.fetch = ((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+      if (url.includes('/v2/historical-candle/')) {
+        return new Response(JSON.stringify({
+          status: 'success',
+          data: {
+            candles: [
+              ['2024-01-02T09:16:00+05:30', 101, 102, 100, 101.5, 11, 0],
+              ['2024-01-02T09:15:00+05:30', 100, 101, 99, 100.5, 10, 0],
+            ],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      throw new Error(`Unexpected fetch URL in test: ${url}`);
+    }) as typeof globalThis.fetch;
 
     const client = new UpstoxRestClient();
-    await client.fetchHistoricalCandles(
-      'NSE_FO|INE123456789',
-      'day',
-      '2024-03-01',
-      '2024-03-31',
+    const result = await client.fetchHistoricalCandles(
+      'NSE_EQ|INE002A01018',
+      '1minute',
+      '2024-01-01',
+      '2024-01-02',
     );
 
-    expect(captured.value).toContain('NSE_FO|INE123456789');
-    expect(captured.value).toMatch(
-      /\/v2\/historical-candles\/NSE_FO\|INE123456789\/day\/2024-03-31\/2024-03-01$/,
-    );
+    expect(result.data.candles).toHaveLength(2);
+    expect(result.data.candles[0][0]).toBeLessThan(result.data.candles[1][0]);
+    expect(result.data.candles[0][4]).toBe(100.5);
+    expect(typeof result.data.candles[0][0]).toBe('number');
   });
 });

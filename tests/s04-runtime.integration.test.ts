@@ -1598,7 +1598,7 @@ const NSE_ALLOWLIST_SYMBOLS = [
   'INDUSINDBK', 'INFY', 'ITC', 'JSW_STEEL', 'KOTAKBANK',
   'LT', 'M&M', 'MARUTI', 'NESTLEIND', 'NTPC',
   'ONGC', 'POWERGRID', 'RELIANCE', 'SBILIFE', 'SBIN',
-  'SHRIRAMFIN', 'SUNPHARMA', 'TATACONSUM', 'TATAMOTORS', 'TATASTEEL',
+  'SHRIRAMFIN', 'SUNPHARMA', 'TATACONSUM', 'TMCV', 'TATASTEEL',
   'TCS', 'TECHM', 'TITAN', 'ULTRACEMCO', 'WIPRO',
 ];
 
@@ -1811,8 +1811,9 @@ describe('RuntimeApp-root witnesses', () => {
 
       // Plugin identities are preserved
       const parsedPlugins = JSON.parse(run.pluginsJson) as Array<{ id: string }>;
-      expect(parsedPlugins.length).toBeGreaterThanOrEqual(1);
-      expect(parsedPlugins[0].id).toBe('llm-ranking-v1');
+      expect(parsedPlugins.length).toBeGreaterThanOrEqual(2);
+      expect(parsedPlugins[0].id).toBe('deterministic-screener-v1');
+      expect(parsedPlugins[1].id).toBe('llm-ranking-v1');
 
       // Candidates are capped at maxCandidates (5) matching coordinator config
       expect(run.candidates.length).toBeLessThanOrEqual(5);

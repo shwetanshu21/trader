@@ -96,6 +96,10 @@ export class KiteMcpClient {
     return this._instrumentKeysByToken.size > 0;
   }
 
+  getCachedInstrumentKeyCount(): number {
+    return this._instrumentKeysByToken.size;
+  }
+
   async fetchQuotes(tokens: number[]): Promise<Array<{ instrumentToken: number; quote: Record<string, unknown> }>> {
     await this._ensureConnected();
 
@@ -109,6 +113,14 @@ export class KiteMcpClient {
     const instrumentKeys = tokens
       .map(token => this._instrumentKeysByToken.get(token))
       .filter((value): value is string => Boolean(value));
+
+    if (process.env.TRADER_UPSTOX_DEBUG_QUOTE_KEYS_PATH?.trim()) {
+      const debugPath = process.env.TRADER_UPSTOX_DEBUG_QUOTE_KEYS_PATH.trim();
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      fs.mkdirSync(path.dirname(debugPath), { recursive: true });
+      fs.writeFileSync(debugPath, JSON.stringify({ tokens, instrumentKeys }, null, 2));
+    }
 
     if (instrumentKeys.length === 0) {
       throw new Error('No Upstox instrument keys are cached for requested quote tokens');
@@ -260,6 +272,10 @@ function normalizeInstrumentRecords(raw: unknown, tokenToKey: Map<number, string
     const instrumentType = classifyInstrumentType(segment, String(row.instrument_type ?? ''), tradingsymbol);
     const tickSize = rawTickSize >= 1 ? rawTickSize / 100 : rawTickSize;
 
+    const existingKey = tokenToKey.get(instrumentToken);
+    if (existingKey && existingKey !== instrumentKey) {
+      continue;
+    }
     tokenToKey.set(instrumentToken, instrumentKey);
 
     records.push({

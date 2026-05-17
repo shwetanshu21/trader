@@ -593,6 +593,58 @@ describe('Universe Supervisor — integration', () => {
 
       expect(supervisor.label).toBe('broker');
     });
+
+    it('heals partial subscription counts by subscribing the full eligible token set', async () => {
+      const { BrokerSupervisor } = await import('../src/integrations/broker/broker-supervisor.js');
+      const { getEligibleSymbols } = await import('../src/universe/policy.js');
+      const db = new DatabaseManager(':memory:');
+      const brokerRepo = new BrokerRepository(db.db);
+      const session = new MockSessionService();
+      const instruments = new MockInstrumentsService();
+
+      const symbols = getEligibleSymbols('NSE');
+      const seeded = [...symbols].sort().slice(0, 5);
+      for (const sym of seeded) {
+        instruments.setInstruments('NSE', [
+          ...instruments.getInstrumentsBySegment('NSE'),
+          sampleNseInstrument(sym),
+        ]);
+      }
+
+      const subscribeCalls: number[][] = [];
+      const stream = {
+        ...new MockMarketDataStream(),
+        subscribe(tokens: number[]) {
+          subscribeCalls.push(tokens);
+        },
+        getDiagnostics() {
+          return {
+            state: 'connected',
+            connectedAt: Date.now(),
+            lastHeartbeatAt: Date.now(),
+            lastQuoteReceivedAt: Date.now(),
+            reconnectCount: 0,
+            parseFailures: 0,
+            subscribedCount: 1,
+            lastError: null,
+            createdAt: Date.now(),
+          };
+        },
+      };
+
+      const supervisor = new BrokerSupervisor(
+        session as any,
+        instruments as any,
+        brokerRepo,
+        stream as any,
+        {
+          refreshSession: async () => ({ accessToken: 'mcp-session', reason: 'probe' }),
+          fetchInstrumentCatalog: async () => [],
+          hasCachedInstrumentKeys: () => true,
+        } as any,
+      );
+      expect(subscribeCalls[0]?.length).toBe(seeded.length);
+    });
   });
 
   // ── Dashboard universe coverage ──────────────────────────────────────

@@ -9,6 +9,7 @@ import type { UpstoxHistoricalCandle } from '../upstox/upstox-rest-client.js';
 import type { BoundedCandidate } from '../types/runtime.js';
 import { ReplayFidelity, type ReplayTick } from './types.js';
 import type { HistoricalDataProvider } from './historical-data-provider.js';
+import { buildUpstoxHistoricalDateChunks, epochMsToUtcDateStr, type HistoricalDateChunk } from './upstox-date-range.js';
 
 // ---------------------------------------------------------------------------
 // Instrument record subset used by the provider
@@ -204,11 +205,12 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
     this._candleCache = new Map();
     this._bulkFetchAttempted = true;
 
-    const fromDate = this._epochMsToDateStr(this._rangeStart);
-    const toDate = this._epochMsToDateStr(this._rangeEnd);
+    const fromDate = epochMsToUtcDateStr(this._rangeStart);
+    const toDate = epochMsToUtcDateStr(this._rangeEnd);
+    const dateChunks = buildUpstoxHistoricalDateChunks(this._rangeStart, this._rangeEnd);
 
     console.log(
-      `[UpstoxHistoricalDataProvider] Pre-fetching candles for ${this._instruments.length} instruments from ${fromDate} to ${toDate}...`,
+      `[UpstoxHistoricalDataProvider] Pre-fetching candles for ${this._instruments.length} instruments from ${fromDate} to ${toDate} across ${dateChunks.length} chunk(s)...`,
     );
 
     let completedCount = 0;
@@ -240,20 +242,15 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
       // Fall through to API fetch
       cacheMissCount++;
       try {
-        const response = await this._restClient.fetchHistoricalCandles(
+        const candles = await this._fetchCandlesForInstrument(
           instrument.instrument_key,
-          '1minute',
-          fromDate,
-          toDate,
+          dateChunks,
         );
 
-        if (
-          response.status === 'success' &&
-          response.data.candles.length > 0
-        ) {
+        if (candles.length > 0) {
           this._candleCache.set(
             instrument.instrument_key,
-            response.data.candles,
+            candles,
           );
 
           // Write to cache directory if configured
@@ -262,9 +259,9 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
               if (!fs.existsSync(this._cacheDir!)) {
                 fs.mkdirSync(this._cacheDir!, { recursive: true });
               }
-              fs.writeFileSync(cachePath, JSON.stringify(response.data.candles), 'utf8');
+              fs.writeFileSync(cachePath, JSON.stringify(candles), 'utf8');
               console.log(
-                `[UpstoxHistoricalDataProvider] Cached ${instrument.instrument_key} to ${cachePath} (${response.data.candles.length} candles)`,
+                `[UpstoxHistoricalDataProvider] Cached ${instrument.instrument_key} to ${cachePath} (${candles.length} candles)`,
               );
             } catch (writeError) {
               console.warn(
@@ -300,6 +297,30 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
         `[UpstoxHistoricalDataProvider] Pre-fetch complete: ${this._candleCache.size} instruments have candle data (${this._fetchFailureCount} failures)`,
       );
     }
+  }
+
+  private async _fetchCandlesForInstrument(
+    instrumentKey: string,
+    dateChunks: HistoricalDateChunk[],
+  ): Promise<UpstoxHistoricalCandle[]> {
+    const merged = new Map<number, UpstoxHistoricalCandle>();
+
+    for (const chunk of dateChunks) {
+      const response = await this._restClient.fetchHistoricalCandles(
+        instrumentKey,
+        '1minute',
+        chunk.fromDate,
+        chunk.toDate,
+      );
+
+      if (response.status !== 'success') continue;
+
+      for (const candle of response.data.candles) {
+        merged.set(candle[0], candle);
+      }
+    }
+
+    return [...merged.values()].sort((a, b) => a[0] - b[0]);
   }
 
   /** Load instrument records from the config JSON file. */
@@ -351,14 +372,5 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
     }
 
     return result;
-  }
-
-  /** Convert epoch ms to YYYY-MM-DD format. */
-  private _epochMsToDateStr(epochMs: number): string {
-    const date = new Date(epochMs);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
   }
 }

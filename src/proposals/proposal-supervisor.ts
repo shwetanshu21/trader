@@ -20,7 +20,6 @@ import type {
   ProposalEngineConfig,
   NewProposalAttempt,
   BoundedCandidate,
-  StrategyPlugin,
   HybridCandidateEvidence,
   ProposalAttemptWithReasons,
 } from '../types/runtime.js';
@@ -41,7 +40,7 @@ import { ProposalEngine, type EngineContext, type NormalizedProposal } from './p
 import { IndiaProposalValidator, type ValidatorInput } from './india-validator.js';
 import { UniverseService, type UniverseCoverageSummary } from '../universe/universe-service.js';
 import { StrategyCoordinator } from '../strategy/framework.js';
-import { LlmRankingStrategy } from '../strategy/llm-ranking-strategy.js';
+import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
 
 // ---------------------------------------------------------------------------
 // ProposalSupervisor
@@ -89,8 +88,6 @@ export class ProposalSupervisor implements TickWork {
      *  This is the production path — the runtime composition root constructs
      *  and injects the coordinator. */
     coordinator?: StrategyCoordinator;
-    /** Optional additional strategy plugins beyond the default LLM ranking plugin. */
-    additionalPlugins?: StrategyPlugin[];
     /** Optional hybrid score repository for atomic proposal + evidence persistence. */
     hybridScoreRepo?: HybridScoreRepository | null;
     /** Optional strategy run repository for append-only screening-round artifacts. */
@@ -109,17 +106,14 @@ export class ProposalSupervisor implements TickWork {
     this._strategyRunRepo = options.strategyRunRepo ?? null;
 
     // Use externally-constructed coordinator when provided (production path).
-    // Otherwise build one internally (backward compatibility for tests).
+    // Otherwise build one via the shared factory (backward compatibility for tests).
     if (options.coordinator) {
       this._coordinator = options.coordinator;
     } else {
-      const llmPlugin = new LlmRankingStrategy(this._engine);
-      const plugins = options.additionalPlugins
-        ? [llmPlugin, ...options.additionalPlugins]
-        : [llmPlugin];
-
-      this._coordinator = new StrategyCoordinator(plugins, {
+      this._coordinator = createStrategyCoordinator({
+        proposalEngine: this._engine,
         maxCandidates: this._maxProposals,
+        parallelPlugins: true,
       });
     }
   }

@@ -1,0 +1,446 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "deployment-witness",
+  "capturedAt": "2026-05-17T09:33:16.017Z",
+  "runId": "2026-05-17T09-33-16-017Z",
+  "label": "CAX11 blocked-mode witness — 2026-05-17T09:33:16.017Z",
+  "subsystems": [
+    {
+      "id": "runtime",
+      "label": "Trader Runtime",
+      "reachable": true,
+      "required": true,
+      "metadata": {
+        "healthEndpoint": "http://127.0.0.1:38517/health",
+        "dashboardEndpoint": "http://127.0.0.1:38517/dashboard.json",
+        "healthReachable": true,
+        "dashboardReachable": true,
+        "healthVerdict": "healthy",
+        "healthUptimeMs": null,
+        "dashboardVerdict": "healthy",
+        "strategyDecisionCount": null,
+        "executionMode": null
+      }
+    },
+    {
+      "id": "notifier",
+      "label": "Upstox Notifier",
+      "reachable": true,
+      "required": true,
+      "metadata": {
+        "healthEndpoint": "http://127.0.0.1:38517/health",
+        "reachable": true,
+        "notifierUptimeMs": null,
+        "notifierPath": null,
+        "tokenPath": null,
+        "lastDelivery": null
+      }
+    },
+    {
+      "id": "mcp-bridge",
+      "label": "Local MCP Bridge",
+      "reachable": true,
+      "required": true,
+      "metadata": {
+        "healthEndpoint": "http://127.0.0.1:38517/health",
+        "reachable": true,
+        "rawStatus": null
+      }
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy / Basic-Auth Proxy",
+      "reachable": false,
+      "required": true,
+      "metadata": {
+        "caddyInstalled": false,
+        "caddyRunning": false,
+        "configExists": false,
+        "dataExists": false
+      }
+    },
+    {
+      "id": "sqlite",
+      "label": "SQLite Database",
+      "reachable": false,
+      "required": true,
+      "metadata": {
+        "dbPath": "./data/production.db",
+        "dbExists": false,
+        "walExists": false
+      }
+    },
+    {
+      "id": "logs",
+      "label": "Application Logs",
+      "reachable": true,
+      "required": true,
+      "metadata": {
+        "logPaths": [
+          "./tmp/upstox/logs",
+          "./logs"
+        ],
+        "anyLogDirExists": true
+      }
+    },
+    {
+      "id": "artifacts",
+      "label": "Deployment Artifacts",
+      "reachable": true,
+      "required": true,
+      "metadata": {
+        "artifactRoots": [
+          "./data/artifacts"
+        ],
+        "anyArtifactDirExists": true
+      }
+    }
+  ],
+  "pathWitnesses": [
+    {
+      "label": "SQLite database",
+      "path": "./data/production.db",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "SQLite WAL",
+      "path": "./data/production.db-wal",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "SQLite SHM",
+      "path": "./data/production.db-shm",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "Log directory: ./tmp/upstox/logs",
+      "path": "./tmp/upstox/logs",
+      "exists": true,
+      "sizeBytes": 4096,
+      "mtimeMs": 1778582246306.5945,
+      "children": [
+        {
+          "name": "bridge.log",
+          "isDirectory": false,
+          "sizeBytes": 249
+        },
+        {
+          "name": "notifier.log",
+          "isDirectory": false,
+          "sizeBytes": 248
+        },
+        {
+          "name": "runtime.log",
+          "isDirectory": false,
+          "sizeBytes": 3645
+        },
+        {
+          "name": "tunnel.log",
+          "isDirectory": false,
+          "sizeBytes": 47
+        }
+      ]
+    },
+    {
+      "label": "Log directory: ./logs",
+      "path": "./logs",
+      "exists": false,
+      "sizeBytes": 0,
+      "mtimeMs": 0
+    },
+    {
+      "label": "Artifact directory: ./data/artifacts",
+      "path": "./data/artifacts",
+      "exists": true,
+      "sizeBytes": 4096,
+      "mtimeMs": 1778969250817.325,
+      "children": [
+        {
+          "name": "deployment-witness",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "walk-forward",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        }
+      ]
+    },
+    {
+      "label": "Deployment witness artifacts root",
+      "path": "data/artifacts/deployment-witness",
+      "exists": true,
+      "sizeBytes": 4096,
+      "mtimeMs": 1779010396010.4841,
+      "children": [
+        {
+          "name": "2026-05-17T06-27-46-461Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-27-46-469Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-43-17-110Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-43-17-640Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-43-48-166Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-44-15-011Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-45-55-010Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-45-55-018Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-46-50-985Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-46-51-442Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-50-10-210Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-50-10-218Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-50-49-983Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-50-50-453Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-57-01-704Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-57-02-301Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-58-31-870Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-58-31-882Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-58-45-132Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T06-58-45-535Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-27-47-360Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-27-47-368Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-28-13-848Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-28-13-857Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-28-21-467Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-28-21-920Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-30-05-264Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-30-05-322Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-30-18-157Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-30-18-166Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-30-25-726Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-30-26-154Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-53-33-666Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-53-33-675Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-54-19-544Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-54-19-553Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-54-54-309Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T07-54-54-319Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T09-33-15-995Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T09-33-16-003Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T09-33-16-010Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "2026-05-17T09-33-16-017Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "steady-2026-05-17T07-28-22-190Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "steady-2026-05-17T07-30-26-444Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        },
+        {
+          "name": "steady-2026-05-17T09-18-24-530Z",
+          "isDirectory": true,
+          "sizeBytes": 4096
+        }
+      ]
+    }
+  ],
+  "hostEvidence": {
+    "hostname": "rspi-358-2aa6d2",
+    "platform": "linux",
+    "release": "6.12.75+rpt-rpi-2712",
+    "arch": "arm64",
+    "totalMemoryBytes": 8454619136,
+    "freeMemoryBytes": 4733976576,
+    "cpuModel": "Cortex-A76",
+    "cpuCores": 4,
+    "loadAverage1m": 1.16,
+    "hostUptimeSec": 13463
+  },
+  "appEvidence": {
+    "capturedAt": "2026-05-17T09:33:16.017Z",
+    "verdict": "degraded",
+    "subsystemCount": 7,
+    "unreachableSubsystems": [
+      "caddy",
+      "sqlite"
+    ]
+  },
+  "annotations": [
+    {
+      "label": "capture-node-version",
+      "value": "v22.22.2"
+    },
+    {
+      "label": "capture-platform",
+      "value": "linux arm64"
+    },
+    {
+      "label": "http-timeout-ms",
+      "value": 5000
+    }
+  ]
+}
