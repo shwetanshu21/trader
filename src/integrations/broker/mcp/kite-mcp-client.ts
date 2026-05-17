@@ -82,7 +82,6 @@ export class KiteMcpClient {
       exchanges: ['NSE'],
       segments: ['EQ', 'FO'],
       instrumentTypes: ['EQ', 'FUT', 'CE', 'PE'],
-      maxRecords: 15000,
     });
 
     const records = normalizeInstrumentRecords(raw, this._instrumentKeysByToken);
