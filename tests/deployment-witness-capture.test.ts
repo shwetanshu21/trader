@@ -23,6 +23,13 @@ import {
   capturePathEvidence,
   captureWitness,
   writeWitnessBundle,
+  sampleHostResources,
+  probeProcess,
+  probeHttp,
+  probeHttpBatch,
+  computeGrowthRecords,
+  buildSubsystemEvidence,
+  runSteadyStateWitness,
   type CaptureOptions,
 } from '../src/deployment/witness-capture.js';
 import {
@@ -30,6 +37,7 @@ import {
   buildPathWitness,
   validateManifest,
   hasRequiredEvidence,
+  validateSteadyStateManifest,
 } from '../src/deployment/witness-contract.js';
 
 // ---------------------------------------------------------------------------
@@ -665,4 +673,389 @@ describe('failure modes', () => {
     expect(dbWitness!.exists).toBe(true);
     expect(dbWitness!.sizeBytes).toBe(0);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Steady-state witness tests
+// ---------------------------------------------------------------------------
+
+describe('sampleHostResources', () => {
+  it('returns a resource sample with all required fields', () => {
+    const sample = sampleHostResources();
+    expect(sample).toBeDefined();
+    expect(sample.timestamp).toBeDefined();
+    expect(typeof sample.totalMemoryBytes).toBe('number');
+    expect(sample.totalMemoryBytes).toBeGreaterThan(0);
+    expect(typeof sample.freeMemoryBytes).toBe('number');
+    expect(typeof sample.usedMemoryBytes).toBe('number');
+    expect(typeof sample.memoryUsageFraction).toBe('number');
+    expect(sample.memoryUsageFraction).toBeGreaterThan(0);
+    expect(sample.memoryUsageFraction).toBeLessThanOrEqual(1);
+    expect(typeof sample.loadAverage1m).toBe('number');
+    expect(typeof sample.cpuModel).toBe('string');
+    expect(sample.cpuCores).toBeGreaterThan(0);
+    expect(sample.hostUptimeSec).toBeGreaterThan(0);
+  });
+
+  it('includes diskUsage when growthTrackPaths are provided', () => {
+    const sample = sampleHostResources([
+      { label: 'Test DB', path: '/tmp/nonexistent-test-path-12345.db' },
+    ]);
+    expect(sample.diskUsage).toBeDefined();
+    expect(sample.diskUsage!['Test DB']).toBeDefined();
+    expect(sample.diskUsage!['Test DB'].exists).toBe(false);
+  });
+
+  it('produces consistent usedMemoryBytes = total - free', () => {
+    const sample = sampleHostResources();
+    expect(sample.usedMemoryBytes).toBe(sample.totalMemoryBytes - sample.freeMemoryBytes);
+  });
+
+  it('diskUsage is undefined when no paths provided', () => {
+    const sample = sampleHostResources();
+    expect(sample.diskUsage).toBeUndefined();
+  });
+});
+
+describe('probeProcess', () => {
+  it('returns a ProcessProbe with all fields', () => {
+    const result = probeProcess('this-process-definitely-does-not-exist-xyz');
+    expect(result.processName).toBe('this-process-definitely-does-not-exist-xyz');
+    expect(typeof result.running).toBe('boolean');
+    expect(result.running).toBe(false);
+    // pid should be null when not running
+    expect(result.pid).toBeNull();
+  });
+
+  it('detects the current node process', () => {
+    // 'node' should be running in the test environment
+    const result = probeProcess('node');
+    expect(result.running).toBe(true);
+    expect(result.pid).toBeGreaterThan(0);
+  });
+});
+
+describe('probeHttp', () => {
+  it('returns success for a valid HTTP endpoint', async () => {
+    const { server, port } = await startTestServer([
+      { path: '/health', status: 200, body: JSON.stringify({ ok: true }) },
+    ]);
+
+    try {
+      const result = await probeHttp(`http://127.0.0.1:${port}/health`, 5000);
+      expect(result.success).toBe(true);
+      expect(result.statusCode).toBe(200);
+      expect(result.responseTimeMs).toBeGreaterThanOrEqual(0);
+      expect(result.timestamp).toBeDefined();
+      expect(result.error).toBeNull();
+    } finally {
+      server.close();
+    }
+  });
+
+  it('returns failure for an unreachable endpoint', async () => {
+    const result = await probeHttp('http://127.0.0.1:18995/nonexistent', 500);
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(0);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('returns failure for HTTP error status', async () => {
+    const { server, port } = await startTestServer([
+      { path: '/health', status: 500, body: 'Internal Server Error' },
+    ]);
+
+    try {
+      const result = await probeHttp(`http://127.0.0.1:${port}/health`, 5000);
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(500);
+      expect(result.error).toContain('500');
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('probeHttpBatch', () => {
+  it('probes multiple URLs in parallel', async () => {
+    const { server, port } = await startTestServer([
+      { path: '/a', status: 200, body: 'ok' },
+      { path: '/b', status: 200, body: 'ok' },
+    ]);
+
+    try {
+      const results = await probeHttpBatch(
+        [`http://127.0.0.1:${port}/a`, `http://127.0.0.1:${port}/b`],
+        5000,
+      );
+      expect(results.length).toBe(2);
+      expect(results[0].success).toBe(true);
+      expect(results[1].success).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('handles mixed success and failure', async () => {
+    const { server, port } = await startTestServer([
+      { path: '/ok', status: 200, body: 'ok' },
+    ]);
+
+    try {
+      const results = await probeHttpBatch(
+        [`http://127.0.0.1:${port}/ok`, 'http://127.0.0.1:18994/nonexistent'],
+        500,
+      );
+      expect(results.length).toBe(2);
+      expect(results[0].success).toBe(true);
+      expect(results[1].success).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('computeGrowthRecords', () => {
+  it('returns empty array when no diskUsage data', () => {
+    const start = new Date('2025-01-05T00:00:00.000Z');
+    const end = new Date('2025-01-05T01:00:00.000Z');
+    const records = computeGrowthRecords(null, null, start, end);
+    expect(records).toEqual([]);
+  });
+
+  it('computes growth from start to end samples', () => {
+    const startSample = {
+      timestamp: '2025-01-05T00:00:00.000Z',
+      totalMemoryBytes: 8_000_000_000,
+      freeMemoryBytes: 4_000_000_000,
+      usedMemoryBytes: 4_000_000_000,
+      memoryUsageFraction: 0.5,
+      loadAverage1m: 1.0,
+      loadAverage5m: 0.8,
+      loadAverage15m: 0.6,
+      cpuModel: 'ARM',
+      cpuCores: 4,
+      hostUptimeSec: 3600,
+      diskUsage: {
+        'SQLite database': { path: './data/production.db', sizeBytes: 1_000_000, exists: true },
+      },
+    };
+    const endSample = {
+      ...startSample,
+      timestamp: '2025-01-05T01:00:00.000Z',
+      diskUsage: {
+        'SQLite database': { path: './data/production.db', sizeBytes: 1_500_000, exists: true },
+      },
+    };
+    const start = new Date('2025-01-05T00:00:00.000Z');
+    const end = new Date('2025-01-05T01:00:00.000Z');
+
+    const records = computeGrowthRecords(startSample, endSample, start, end);
+    expect(records.length).toBe(1);
+    expect(records[0].label).toBe('SQLite database');
+    expect(records[0].growthBytes).toBe(500_000);
+    expect(records[0].growthBytesPerHour).toBe(500_000);
+    expect(records[0].existedThroughout).toBe(true);
+  });
+
+  it('returns empty array when window is zero', () => {
+    const sample = {
+      timestamp: '2025-01-05T00:00:00.000Z',
+      totalMemoryBytes: 8_000_000_000,
+      freeMemoryBytes: 4_000_000_000,
+      usedMemoryBytes: 4_000_000_000,
+      memoryUsageFraction: 0.5,
+      loadAverage1m: 1.0,
+      loadAverage5m: 0.8,
+      loadAverage15m: 0.6,
+      cpuModel: 'ARM',
+      cpuCores: 4,
+      hostUptimeSec: 3600,
+      diskUsage: {
+        'SQLite': { path: './data/production.db', sizeBytes: 1_000_000, exists: true },
+      },
+    };
+    const now = new Date('2025-01-05T00:00:00.000Z');
+    const records = computeGrowthRecords(sample, sample, now, now);
+    expect(records).toEqual([]);
+  });
+});
+
+describe('buildSubsystemEvidence', () => {
+  it('returns healthy=true when all probes succeed', () => {
+    const probes = [
+      { url: 'http://localhost/health', success: true, statusCode: 200, responseTimeMs: 50, timestamp: '2025-01-05T00:00:00.000Z', error: null },
+      { url: 'http://localhost/health', success: true, statusCode: 200, responseTimeMs: 45, timestamp: '2025-01-05T00:01:00.000Z', error: null },
+    ];
+    const evidence = buildSubsystemEvidence('runtime', 'Trader Runtime', probes, null);
+    expect(evidence.healthyThroughout).toBe(true);
+    expect(evidence.missingEvidenceReason).toBeNull();
+    expect(evidence.probes.length).toBe(2);
+  });
+
+  it('returns healthy=false when any probe fails', () => {
+    const probes = [
+      { url: 'http://localhost/health', success: true, statusCode: 200, responseTimeMs: 50, timestamp: '2025-01-05T00:00:00.000Z', error: null },
+      { url: 'http://localhost/health', success: false, statusCode: 503, responseTimeMs: 100, timestamp: '2025-01-05T00:01:00.000Z', error: 'HTTP 503' },
+    ];
+    const evidence = buildSubsystemEvidence('runtime', 'Trader Runtime', probes, null);
+    expect(evidence.healthyThroughout).toBe(false);
+  });
+
+  it('sets missingEvidenceReason when no probes were taken', () => {
+    const evidence = buildSubsystemEvidence('runtime', 'Trader Runtime', [], 'Endpoint unreachable from start');
+    expect(evidence.healthyThroughout).toBe(false);
+    expect(evidence.missingEvidenceReason).toBe('Endpoint unreachable from start');
+  });
+
+  it('sets default missingEvidenceReason when none provided and no probes', () => {
+    const evidence = buildSubsystemEvidence('runtime', 'Trader Runtime', [], null);
+    expect(evidence.missingEvidenceReason).toContain('No probes were taken');
+  });
+});
+
+describe('runSteadyStateWitness', () => {
+  const TEST_SS_ROOT = path.join(ARTIFACTS_ROOT, '__test_steady_state__');
+
+  beforeEach(() => {
+    if (fs.existsSync(TEST_SS_ROOT)) {
+      fs.rmSync(TEST_SS_ROOT, { recursive: true, force: true });
+    }
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(TEST_SS_ROOT)) {
+      fs.rmSync(TEST_SS_ROOT, { recursive: true, force: true });
+    }
+  });
+
+  it('produces a complete steady-state manifest with all required fields', async () => {
+    const { server, port } = await startTestServer([
+      { path: '/health', status: 200, body: JSON.stringify({ verdict: 'healthy' }) },
+    ]);
+
+    try {
+      const result = await runSteadyStateWitness({
+        runtimeHealthUrl: `http://127.0.0.1:${port}/health`,
+        runtimeDashboardUrl: `http://127.0.0.1:${port}/health`,
+        notifierHealthUrl: `http://127.0.0.1:${port}/health`,
+        bridgeHealthUrl: `http://127.0.0.1:${port}/health`,
+        steadyStateDurationSec: 2, // Short duration for tests
+        steadyStateIntervalSec: 1,
+        httpTimeoutMs: 2000,
+        label: 'test-steady-state',
+        processNames: ['node'],
+      });
+
+      expect(result).toBeDefined();
+      expect(result.runId).toContain('steady-');
+      expect(result.bundleDir).toContain('deployment-witness');
+
+      const m = result.manifest;
+      expect(m.artifactType).toBe('steady-state-witness');
+      expect(m.schemaVersion).toBe(1);
+      expect(m.startedAt).toBeDefined();
+      expect(m.endedAt).toBeDefined();
+      expect(m.durationSec).toBeGreaterThan(0);
+      expect(m.intervalSec).toBe(1);
+      expect(m.runId).toBeTruthy();
+
+      // Resource samples
+      expect(Array.isArray(m.resourceSamples)).toBe(true);
+      expect(m.resourceSamples.length).toBeGreaterThanOrEqual(2);
+
+      // Resource summary
+      expect(m.resourceSummary.sampleCount).toBeGreaterThanOrEqual(2);
+      expect(m.resourceSummary.memory.avgUsedBytes).toBeGreaterThan(0);
+
+      // Process evidence
+      expect(Array.isArray(m.processEvidence)).toBe(true);
+      const nodeProbe = m.processEvidence.find(p => p.processName === 'node');
+      expect(nodeProbe).toBeDefined();
+      expect(nodeProbe!.running).toBe(true);
+
+      // Subsystem evidence
+      expect(Array.isArray(m.subsystemEvidence)).toBe(true);
+      expect(m.subsystemEvidence.length).toBeGreaterThanOrEqual(3);
+      const runtime = m.subsystemEvidence.find(s => s.subsystemId === 'runtime');
+      expect(runtime).toBeDefined();
+      expect(runtime!.healthyThroughout).toBe(true);
+
+      // Growth records
+      expect(Array.isArray(m.growthRecords)).toBe(true);
+
+      // Verdict
+      expect(m.verdict).toBeDefined();
+      expect(['pass', 'caveat', 'fail']).toContain(m.verdict.verdict);
+      expect(m.verdict.summary).toBeTruthy();
+      expect(Array.isArray(m.verdict.concerns)).toBe(true);
+
+      // Annotations
+      expect(Array.isArray(m.annotations)).toBe(true);
+
+      // Validate against contract
+      const violations = validateSteadyStateManifest(m);
+      expect(violations).toEqual([]);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it('degrades verdict when endpoints are unreachable', async () => {
+    const result = await runSteadyStateWitness({
+      runtimeHealthUrl: 'http://127.0.0.1:18993/nonexistent',
+      runtimeDashboardUrl: 'http://127.0.0.1:18993/nonexistent',
+      notifierHealthUrl: 'http://127.0.0.1:18993/nonexistent',
+      bridgeHealthUrl: 'http://127.0.0.1:18993/nonexistent',
+      steadyStateDurationSec: 2,
+      steadyStateIntervalSec: 1,
+      httpTimeoutMs: 500,
+      label: 'test-degraded',
+      processNames: ['node'],
+    });
+
+    const m = result.manifest;
+    // Probes were attempted but all failed — should be caveat, not fail
+    // (fail is reserved for subsystems with zero probes / missing evidence)
+    expect(m.verdict.verdict).toBe('caveat');
+    expect(m.verdict.degradedRequiredCount).toBeGreaterThan(0);
+
+    // Subsystem evidence should reflect failures
+    const runtimeEvidence = m.subsystemEvidence.find(s => s.subsystemId === 'runtime');
+    expect(runtimeEvidence).toBeDefined();
+    expect(runtimeEvidence!.healthyThroughout).toBe(false);
+    expect(runtimeEvidence!.probes.length).toBeGreaterThanOrEqual(1);
+    expect(runtimeEvidence!.probes.every(p => p.success)).toBe(false);
+  }, 30_000);
+
+  it('generates process evidence for running node process', async () => {
+    const { server, port } = await startTestServer([
+      { path: '/health', status: 200, body: JSON.stringify({ verdict: 'healthy' }) },
+    ]);
+
+    try {
+      const result = await runSteadyStateWitness({
+        runtimeHealthUrl: `http://127.0.0.1:${port}/health`,
+        runtimeDashboardUrl: `http://127.0.0.1:${port}/health`,
+        notifierHealthUrl: `http://127.0.0.1:${port}/health`,
+        bridgeHealthUrl: `http://127.0.0.1:${port}/health`,
+        steadyStateDurationSec: 1,
+        steadyStateIntervalSec: 1,
+        httpTimeoutMs: 2000,
+        processNames: ['node', 'this-process-does-not-exist'],
+      });
+
+      const nodeProbe = result.manifest.processEvidence.find(p => p.processName === 'node');
+      expect(nodeProbe).toBeDefined();
+      expect(nodeProbe!.running).toBe(true);
+
+      const missingProbe = result.manifest.processEvidence.find(
+        p => p.processName === 'this-process-does-not-exist',
+      );
+      expect(missingProbe).toBeDefined();
+      expect(missingProbe!.running).toBe(false);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
 });

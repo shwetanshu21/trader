@@ -26,11 +26,19 @@ import {
   buildPathWitness,
   bundlePath,
   ensureBundleDir,
+  computeResourceSummary,
+  deriveSteadyStateVerdict,
+  validateSteadyStateManifest,
   type DeploymentWitnessManifest,
   type SubsystemRecord,
   type PathWitness,
   type HostEvidence,
   type AppEvidence,
+  type ResourceSample,
+  type SubsystemEvidence,
+  type GrowthRecord,
+  type ResourceSummary,
+  type SteadyStateVerdict,
 } from '../src/deployment/witness-contract.js';
 
 // ---------------------------------------------------------------------------
@@ -726,6 +734,395 @@ describe('DeploymentWitnessContract', () => {
       };
       const violations = validateManifest(manifest);
       expect(violations.length).toBeGreaterThanOrEqual(5);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Steady-state contract tests
+  // -----------------------------------------------------------------------
+
+  describe('computeResourceSummary', () => {
+    function makeSample(overrides: Partial<ResourceSample>): ResourceSample {
+      return {
+        timestamp: '2025-01-05T00:00:00.000Z',
+        totalMemoryBytes: 8_000_000_000,
+        freeMemoryBytes: 4_000_000_000,
+        usedMemoryBytes: 4_000_000_000,
+        memoryUsageFraction: 0.5,
+        loadAverage1m: 1.0,
+        loadAverage5m: 0.8,
+        loadAverage15m: 0.6,
+        cpuModel: 'ARM Cortex-A76',
+        cpuCores: 4,
+        hostUptimeSec: 3600,
+        ...overrides,
+      };
+    }
+
+    it('returns zeroed summary for empty samples', () => {
+      const summary = computeResourceSummary([]);
+      expect(summary.sampleCount).toBe(0);
+      expect(summary.memory.avgUsageFraction).toBe(0);
+      expect(summary.load.avgLoad1m).toBe(0);
+    });
+
+    it('computes correct averages for single sample', () => {
+      const sample = makeSample({ usedMemoryBytes: 2_000_000_000, memoryUsageFraction: 0.25, loadAverage1m: 0.5 });
+      const summary = computeResourceSummary([sample]);
+      expect(summary.sampleCount).toBe(1);
+      expect(summary.memory.avgUsedBytes).toBe(2_000_000_000);
+      expect(summary.memory.peakUsageFraction).toBe(0.25);
+      expect(summary.load.avgLoad1m).toBe(0.5);
+      expect(summary.load.peakLoad1m).toBe(0.5);
+    });
+
+    it('computes min/max/avg from multiple samples', () => {
+      const samples = [
+        makeSample({ usedMemoryBytes: 2_000_000_000, memoryUsageFraction: 0.25, loadAverage1m: 0.5 }),
+        makeSample({ usedMemoryBytes: 4_000_000_000, memoryUsageFraction: 0.50, loadAverage1m: 1.0 }),
+        makeSample({ usedMemoryBytes: 6_000_000_000, memoryUsageFraction: 0.75, loadAverage1m: 2.0 }),
+      ];
+      const summary = computeResourceSummary(samples);
+      expect(summary.sampleCount).toBe(3);
+      expect(summary.memory.minUsedBytes).toBe(2_000_000_000);
+      expect(summary.memory.maxUsedBytes).toBe(6_000_000_000);
+      expect(summary.memory.avgUsedBytes).toBe(4_000_000_000);
+      expect(summary.memory.peakUsageFraction).toBe(0.75);
+      expect(summary.load.avgLoad1m).toBeCloseTo(1.167, 1);
+      expect(summary.load.peakLoad1m).toBe(2.0);
+    });
+
+    it('computes disk growth from first-to-last sample with diskUsage', () => {
+      const diskUsage1 = { 'SQLite database': { path: './data/production.db', sizeBytes: 1_000_000, exists: true } };
+      const diskUsage2 = { 'SQLite database': { path: './data/production.db', sizeBytes: 1_500_000, exists: true } };
+
+      const samples = [
+        makeSample({ diskUsage: diskUsage1, timestamp: '2025-01-05T00:00:00.000Z' }),
+        makeSample({ diskUsage: diskUsage2, timestamp: '2025-01-05T01:00:00.000Z' }),
+      ];
+      const summary = computeResourceSummary(samples);
+      expect(summary.disk.totalGrowthBytes).toBe(500_000);
+      expect(summary.disk.highestGrowthPaths.length).toBe(1);
+      expect(summary.disk.highestGrowthPaths[0].label).toBe('SQLite database');
+      // 500000 bytes / 1 hour = 500000 bytes/hour
+      expect(summary.disk.highestGrowthPaths[0].growthBytesPerHour).toBe(500_000);
+    });
+
+    it('handles samples where diskUsage is undefined', () => {
+      const samples = [
+        makeSample({ timestamp: '2025-01-05T00:00:00.000Z' }),
+        makeSample({ timestamp: '2025-01-05T01:00:00.000Z' }),
+      ];
+      const summary = computeResourceSummary(samples);
+      expect(summary.disk.totalGrowthBytes).toBe(0);
+      expect(summary.disk.highestGrowthPaths).toEqual([]);
+    });
+  });
+
+  describe('deriveSteadyStateVerdict', () => {
+    const requiredIds = [...REQUIRED_SUBSYSTEMS];
+
+    function makeSubsystemEvidence(
+      subsystemId: string,
+      healthyThroughout: boolean,
+      missingEvidenceReason: string | null = null,
+      probeCount = 3,
+    ): SubsystemEvidence {
+      const probes = Array.from({ length: probeCount }, (_, i) => ({
+        url: `http://localhost/${subsystemId}/health`,
+        success: healthyThroughout,
+        statusCode: healthyThroughout ? 200 : 503,
+        responseTimeMs: 50,
+        timestamp: `2025-01-05T00:${String(i * 10).padStart(2, '0')}:00.000Z`,
+        error: healthyThroughout ? null : `HTTP 503`,
+      }));
+      return {
+        subsystemId,
+        label: subsystemId.charAt(0).toUpperCase() + subsystemId.slice(1),
+        healthyThroughout,
+        probes,
+        missingEvidenceReason,
+      };
+    }
+
+    function makeResourceSummary(overrides?: Partial<ResourceSummary>): ResourceSummary {
+      return {
+        sampleCount: 4,
+        memory: { avgUsedBytes: 4_000_000_000, minUsedBytes: 3_500_000_000, maxUsedBytes: 4_500_000_000, avgUsageFraction: 0.5, peakUsageFraction: 0.56 },
+        load: { avgLoad1m: 1.0, peakLoad1m: 1.5, avgLoad5m: 0.8, avgLoad15m: 0.6 },
+        disk: { totalGrowthBytes: 0, highestGrowthPaths: [] },
+        ...overrides,
+      };
+    }
+
+    it('returns pass when all subsystems are healthy throughout', () => {
+      const evidence = requiredIds.map(id =>
+        makeSubsystemEvidence(id, true),
+      );
+      const summary = makeResourceSummary();
+      const verdict = deriveSteadyStateVerdict(evidence, summary, [], requiredIds);
+      expect(verdict.verdict).toBe('pass');
+      expect(verdict.concerns).toEqual([]);
+      expect(verdict.degradedRequiredCount).toBe(0);
+    });
+
+    it('returns fail when a required subsystem has missing evidence', () => {
+      const evidence = requiredIds.map(id =>
+        makeSubsystemEvidence(id, true),
+      );
+      evidence[0] = makeSubsystemEvidence('runtime', false, 'No HTTP response from runtime health endpoint', 0);
+      const summary = makeResourceSummary();
+      const verdict = deriveSteadyStateVerdict(evidence, summary, [], requiredIds);
+      expect(verdict.verdict).toBe('fail');
+      expect(verdict.concerns.length).toBeGreaterThan(0);
+      expect(verdict.concerns.some(c => c.includes('runtime'))).toBe(true);
+      expect(verdict.missingEvidenceCount).toBe(1);
+    });
+
+    it('returns caveat when a required subsystem is not healthy throughout', () => {
+      const evidence = requiredIds.map(id =>
+        makeSubsystemEvidence(id, true),
+      );
+      evidence[1] = makeSubsystemEvidence('notifier', false);
+      const summary = makeResourceSummary();
+      const verdict = deriveSteadyStateVerdict(evidence, summary, [], requiredIds);
+      expect(verdict.verdict).toBe('caveat');
+      expect(verdict.concerns.some(c => c.includes('notifier'))).toBe(true);
+    });
+
+    it('returns caveat when memory peak exceeds 80%', () => {
+      const evidence = requiredIds.map(id =>
+        makeSubsystemEvidence(id, true),
+      );
+      const summary = makeResourceSummary({
+        memory: { avgUsedBytes: 6_000_000_000, minUsedBytes: 4_000_000_000, maxUsedBytes: 7_000_000_000, avgUsageFraction: 0.75, peakUsageFraction: 0.88 },
+      });
+      const verdict = deriveSteadyStateVerdict(evidence, summary, [], requiredIds);
+      expect(verdict.verdict).toBe('caveat');
+      expect(verdict.concerns.some(c => c.includes('Memory') && c.includes('80%'))).toBe(true);
+    });
+
+    it('returns caveat when load average exceeds core count', () => {
+      const evidence = requiredIds.map(id =>
+        makeSubsystemEvidence(id, true),
+      );
+      const summary = makeResourceSummary({
+        load: { avgLoad1m: 3.0, peakLoad1m: 5.2, avgLoad5m: 2.5, avgLoad15m: 2.0 },
+      });
+      const verdict = deriveSteadyStateVerdict(evidence, summary, [], requiredIds);
+      expect(verdict.verdict).toBe('caveat');
+      expect(verdict.concerns.some(c => c.includes('Load') && c.includes('core count'))).toBe(true);
+    });
+
+    it('returns caveat when growth rate exceeds 50 MB/hour', () => {
+      const evidence = requiredIds.map(id =>
+        makeSubsystemEvidence(id, true),
+      );
+      const summary = makeResourceSummary();
+      const growthRecords: GrowthRecord[] = [{
+        label: 'SQLite database',
+        path: './data/production.db',
+        startSizeBytes: 1_000_000,
+        endSizeBytes: 1_000_000 + 60 * 1024 * 1024, // 60 MB growth in 1 hour
+        growthBytes: 60 * 1024 * 1024,
+        growthBytesPerHour: 60 * 1024 * 1024,
+        existedThroughout: true,
+      }];
+      const verdict = deriveSteadyStateVerdict(evidence, summary, growthRecords, requiredIds);
+      expect(verdict.verdict).toBe('caveat');
+      expect(verdict.concerns.some(c => c.includes('SQLite') && c.includes('MB/hour'))).toBe(true);
+    });
+
+    it('returns pass when only non-required subsystems are unhealthy', () => {
+      const evidence = requiredIds.map(id =>
+        makeSubsystemEvidence(id, true),
+      );
+      // Add an extra non-required subsystem that is unhealthy
+      evidence.push(makeSubsystemEvidence('extra-service', false));
+      const summary = makeResourceSummary();
+      const verdict = deriveSteadyStateVerdict(evidence, summary, [], requiredIds);
+      expect(verdict.verdict).toBe('pass');
+    });
+
+    it('produces subsystem verdicts with correct per-subsystem health', () => {
+      const evidence = [
+        makeSubsystemEvidence('runtime', true),
+        makeSubsystemEvidence('notifier', false),
+      ];
+      const summary = makeResourceSummary();
+      const verdict = deriveSteadyStateVerdict(evidence, summary, [], ['runtime', 'notifier']);
+      expect(verdict.subsystemVerdicts.length).toBe(2);
+      expect(verdict.subsystemVerdicts.find(sv => sv.subsystemId === 'runtime')!.healthy).toBe(true);
+      expect(verdict.subsystemVerdicts.find(sv => sv.subsystemId === 'notifier')!.healthy).toBe(false);
+    });
+  });
+
+  describe('validateSteadyStateManifest', () => {
+    function sampleSteadyStateManifest(): Record<string, unknown> {
+      return {
+        schemaVersion: 1,
+        artifactType: 'steady-state-witness',
+        startedAt: '2025-01-05T00:00:00.000Z',
+        endedAt: '2025-01-05T00:02:00.000Z',
+        durationSec: 120,
+        intervalSec: 30,
+        runId: 'steady-20250105T000000Z',
+        label: 'test steady-state',
+        resourceSamples: [{
+          timestamp: '2025-01-05T00:00:00.000Z',
+          totalMemoryBytes: 8_000_000_000,
+          freeMemoryBytes: 4_000_000_000,
+          usedMemoryBytes: 4_000_000_000,
+          memoryUsageFraction: 0.5,
+          loadAverage1m: 1.0,
+          loadAverage5m: 0.8,
+          loadAverage15m: 0.6,
+          cpuModel: 'ARM',
+          cpuCores: 4,
+          hostUptimeSec: 3600,
+        }],
+        resourceSummary: {
+          sampleCount: 1,
+          memory: { avgUsedBytes: 4_000_000_000, minUsedBytes: 4_000_000_000, maxUsedBytes: 4_000_000_000, avgUsageFraction: 0.5, peakUsageFraction: 0.5 },
+          load: { avgLoad1m: 1.0, peakLoad1m: 1.0, avgLoad5m: 0.8, avgLoad15m: 0.6 },
+          disk: { totalGrowthBytes: 0, highestGrowthPaths: [] },
+        },
+        processEvidence: [{ processName: 'node', running: true, pid: 1234, error: null }],
+        subsystemEvidence: [{
+          subsystemId: 'runtime',
+          label: 'Runtime',
+          healthyThroughout: true,
+          probes: [{ url: 'http://localhost/health', success: true, statusCode: 200, responseTimeMs: 50, timestamp: '2025-01-05T00:00:00.000Z', error: null }],
+          missingEvidenceReason: null,
+        }],
+        growthRecords: [],
+        verdict: {
+          verdict: 'pass',
+          summary: 'All subsystems healthy',
+          reasoning: 'No concerns',
+          subsystemVerdicts: [{ subsystemId: 'runtime', healthy: true, note: 'healthy', missingEvidenceReason: null }],
+          concerns: [],
+          degradedRequiredCount: 0,
+          missingEvidenceCount: 0,
+        },
+        annotations: [],
+      };
+    }
+
+    it('returns empty violations for a valid steady-state manifest', () => {
+      const manifest = sampleSteadyStateManifest();
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations).toEqual([]);
+    });
+
+    it('rejects null or non-object', () => {
+      expect(validateSteadyStateManifest(null)).toEqual(['Manifest must be a non-null object']);
+      expect(validateSteadyStateManifest(undefined)).toEqual(['Manifest must be a non-null object']);
+    });
+
+    it('rejects wrong schema version', () => {
+      const manifest = sampleSteadyStateManifest();
+      manifest.schemaVersion = 99;
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('Schema version must be 1'))).toBe(true);
+    });
+
+    it('rejects wrong artifactType', () => {
+      const manifest = sampleSteadyStateManifest();
+      manifest.artifactType = 'point-in-time';
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes("artifactType must be 'steady-state-witness'"))).toBe(true);
+    });
+
+    it('rejects missing startedAt', () => {
+      const manifest = sampleSteadyStateManifest();
+      delete manifest.startedAt;
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('startedAt'))).toBe(true);
+    });
+
+    it('rejects non-positive durationSec', () => {
+      const manifest = sampleSteadyStateManifest();
+      manifest.durationSec = -1;
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('durationSec'))).toBe(true);
+    });
+
+    it('rejects empty resourceSamples', () => {
+      const manifest = sampleSteadyStateManifest();
+      manifest.resourceSamples = [];
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('resourceSamples must not be empty'))).toBe(true);
+    });
+
+    it('rejects missing resourceSamples fields', () => {
+      const manifest = sampleSteadyStateManifest();
+      (manifest.resourceSamples as Array<Record<string, unknown>>)[0].totalMemoryBytes = undefined;
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('totalMemoryBytes'))).toBe(true);
+    });
+
+    it('rejects missing resourceSummary', () => {
+      const manifest = sampleSteadyStateManifest();
+      delete manifest.resourceSummary;
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('resourceSummary'))).toBe(true);
+    });
+
+    it('rejects non-array processEvidence', () => {
+      const manifest = sampleSteadyStateManifest();
+      manifest.processEvidence = 'not-an-array';
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('processEvidence must be an array'))).toBe(true);
+    });
+
+    it('rejects empty subsystemEvidence', () => {
+      const manifest = sampleSteadyStateManifest();
+      manifest.subsystemEvidence = [];
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('subsystemEvidence must not be empty'))).toBe(true);
+    });
+
+    it('rejects missing verdict', () => {
+      const manifest = sampleSteadyStateManifest();
+      delete manifest.verdict;
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('verdict'))).toBe(true);
+    });
+
+    it('rejects invalid verdict value', () => {
+      const manifest = sampleSteadyStateManifest();
+      (manifest.verdict as Record<string, unknown>).verdict = 'invalid';
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes("'pass', 'caveat', or 'fail'"))).toBe(true);
+    });
+
+    it('rejects missing verdict summary', () => {
+      const manifest = sampleSteadyStateManifest();
+      (manifest.verdict as Record<string, unknown>).summary = '';
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.some(v => v.includes('verdict.summary'))).toBe(true);
+    });
+
+    it('reports multiple violations at once', () => {
+      const manifest = {
+        schemaVersion: 99,
+        artifactType: 'wrong',
+        startedAt: null,
+        endedAt: null,
+        durationSec: 0,
+        intervalSec: 0,
+        runId: '',
+        resourceSamples: 'not-array',
+        resourceSummary: null,
+        processEvidence: 'not-array',
+        subsystemEvidence: 'not-array',
+        growthRecords: 'not-array',
+        verdict: null,
+        annotations: 'not-array',
+      };
+      const violations = validateSteadyStateManifest(manifest);
+      expect(violations.length).toBeGreaterThan(5);
     });
   });
 });

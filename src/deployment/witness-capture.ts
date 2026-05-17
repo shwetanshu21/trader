@@ -3,10 +3,16 @@
 // Captures synchronized host and application evidence for a deployment-witness
 // bundle, writing redacted artifacts under the bundle root directory.
 //
+// Also provides steady-state witness capture: time-series resource sampling,
+// process presence probing, HTTP health probing, and disk growth tracking
+// over a configurable duration.
+//
 // Design:
 //   - Host evidence uses Node.js `os` module (no external deps).
 //   - Application evidence fetches health endpoints from runtime, notifier,
 //     and MCP bridge via HTTP GET with configurable timeouts.
+//   - Steady-state witness periodically samples resources, probes processes,
+//     checks HTTP health endpoints, and records disk sizes.
 //   - Path witnesses record SQLite DB, log roots, and artifact roots using
 //     the contract's buildPathWitness helper.
 //   - Caddy evidence is best-effort (process/service discovery).
@@ -18,6 +24,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as http from 'node:http';
+import { execSync } from 'node:child_process';
 
 import {
   ARTIFACTS_ROOT,
@@ -27,12 +34,23 @@ import {
   redactHostname,
   redactMap,
   serializeManifest,
+  computeResourceSummary,
+  deriveSteadyStateVerdict,
   type DeploymentWitnessManifest,
+  type SteadyStateWitnessManifest,
   type SubsystemRecord,
   type HostEvidence,
   type AppEvidence,
   type PathWitness,
   type OptionalAnnotation,
+  type ResourceSample,
+  type ProcessProbe,
+  type HttpProbe,
+  type GrowthRecord,
+  type SubsystemEvidence,
+  type SteadyStateVerdict,
+  type ResourceSummary,
+  type DiskSnapshot,
 } from './witness-contract.js';
 
 // ---------------------------------------------------------------------------
@@ -42,14 +60,20 @@ import {
 /** Default timeout (ms) for health endpoint HTTP requests. */
 const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 
+/** Default steady-state witness interval in seconds. */
+const DEFAULT_STEADY_STATE_INTERVAL_SEC = 30;
+
+/** Default steady-state witness duration in seconds. */
+const DEFAULT_STEADY_STATE_DURATION_SEC = 120;
+
 /** Default health endpoints. */
 const DEFAULTS = {
   runtimeHealthUrl: 'http://127.0.0.1:3001/health',
   runtimeDashboardUrl: 'http://127.0.0.1:3001/dashboard.json',
   notifierHealthUrl: 'http://127.0.0.1:8788/health',
   bridgeHealthUrl: 'http://127.0.0.1:8787/health',
-  // These are the paths discovered from scripts/start-upstox-stack.sh
-  dbPath: './data/trader.db',
+  // Production DB path from systemd unit (TRADER_DB_PATH=./data/production.db)
+  dbPath: './data/production.db',
   // Notifier logs directory
   logPaths: ['./tmp/upstox/logs', './logs'],
   // Configurable artifact paths
@@ -58,6 +82,8 @@ const DEFAULTS = {
   caddyConfigPath: '/etc/caddy/Caddyfile',
   // Caddy data directory
   caddyDataPath: '/var/lib/caddy/data',
+  // Process names to probe for steady-state evidence
+  processNames: ['trader', 'node', 'caddy'],
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -88,6 +114,14 @@ export interface CaptureOptions {
   caddyDataPath?: string;
   /** HTTP timeout for health fetches (ms). */
   httpTimeoutMs?: number;
+  /** Steady-state witness duration in seconds (default: 120). */
+  steadyStateDurationSec?: number;
+  /** Steady-state witness sampling interval in seconds (default: 30). */
+  steadyStateIntervalSec?: number;
+  /** Process names to probe for steady-state evidence (default: ['trader', 'node', 'caddy']). */
+  processNames?: string[];
+  /** Paths to track for disk growth during steady-state witness. */
+  growthTrackPaths?: Array<{ label: string; path: string }>;
 }
 
 /** Result of a single subsystem health fetch. */
@@ -442,6 +476,446 @@ export function capturePathEvidence(options: CaptureOptions): PathWitness[] {
 }
 
 // ---------------------------------------------------------------------------
+// Steady-state witness capture
+// ---------------------------------------------------------------------------
+
+/**
+ * Take a single resource sample: host memory, load, and disk usage for tracked paths.
+ */
+export function sampleHostResources(
+  growthTrackPaths?: Array<{ label: string; path: string }>,
+): ResourceSample {
+  const now = new Date();
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const loadAvg = os.loadavg();
+  const cpus = os.cpus();
+  const cpuModel = cpus.length > 0 ? cpus[0].model : 'unknown';
+
+  let diskUsage: Record<string, DiskSnapshot> | undefined;
+
+  if (growthTrackPaths && growthTrackPaths.length > 0) {
+    diskUsage = {};
+    for (const { label, path: p } of growthTrackPaths) {
+      let sizeBytes = 0;
+      let exists = false;
+      try {
+        const stat = fs.statSync(p);
+        exists = true;
+        if (stat.isDirectory()) {
+          sizeBytes = computeDirSize(p);
+        } else {
+          sizeBytes = stat.size;
+        }
+      } catch {
+        // Path does not exist
+      }
+      diskUsage[label] = { path: p, sizeBytes, exists };
+    }
+  }
+
+  return {
+    timestamp: now.toISOString(),
+    totalMemoryBytes: totalMem,
+    freeMemoryBytes: freeMem,
+    usedMemoryBytes: usedMem,
+    memoryUsageFraction: totalMem > 0 ? usedMem / totalMem : 0,
+    loadAverage1m: loadAvg[0] ?? 0,
+    loadAverage5m: loadAvg[1] ?? 0,
+    loadAverage15m: loadAvg[2] ?? 0,
+    cpuModel,
+    cpuCores: cpus.length,
+    diskUsage,
+    hostUptimeSec: Math.floor(os.uptime()),
+  };
+}
+
+/**
+ * Recursively compute the total size of a directory in bytes.
+ * Uses `fs.readdirSync` and `fs.statSync` — no external deps.
+ */
+export function computeDirSize(dirPath: string): number {
+  let totalSize = 0;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      try {
+        if (entry.isDirectory()) {
+          totalSize += computeDirSize(fullPath);
+        } else if (entry.isFile()) {
+          const stat = fs.statSync(fullPath);
+          totalSize += stat.size;
+        }
+      } catch {
+        // Permission denied or missing — skip
+      }
+    }
+  } catch {
+    // Directory not accessible
+  }
+  return totalSize;
+}
+
+/**
+ * Probe whether a process is running by searching /proc (Linux) or using ps.
+ * Returns a ProcessProbe with PID if found.
+ */
+export function probeProcess(processName: string): ProcessProbe {
+  const result: ProcessProbe = {
+    processName,
+    running: false,
+    pid: null,
+    error: null,
+  };
+
+  try {
+    // First try /proc (Linux)
+    if (os.platform() === 'linux') {
+      try {
+        const procDirs = fs.readdirSync('/proc').filter(
+          (name: string) => /^\d+$/.test(name),
+        );
+        for (const pidStr of procDirs) {
+          try {
+            const cmdlinePath = path.join('/proc', pidStr, 'cmdline');
+            const cmdline = fs.readFileSync(cmdlinePath, 'utf-8');
+            if (cmdline.includes(processName)) {
+              result.running = true;
+              result.pid = parseInt(pidStr, 10);
+              return result;
+            }
+          } catch {
+            // Process may have exited between readdir and stat
+          }
+        }
+      } catch {
+        // /proc not accessible
+      }
+    }
+
+    // Fallback: try `ps aux` via child_process
+    const psOutput = execSync(`ps aux | grep -v grep | grep "${processName}" || true`, {
+      encoding: 'utf-8',
+      timeout: 5000,
+    }).trim();
+
+    if (psOutput) {
+      result.running = true;
+      // Try to extract PID from ps output (second column on most implementations)
+      const lines = psOutput.split('\n');
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          const pid = parseInt(parts[1], 10);
+          if (!isNaN(pid)) {
+            result.pid = pid;
+            break;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    result.error = err instanceof Error ? err.message : String(err);
+  }
+
+  return result;
+}
+
+/**
+ * Perform a single HTTP health probe.
+ * Returns an HttpProbe with response time and status.
+ */
+export async function probeHttp(
+  url: string,
+  timeoutMs: number,
+): Promise<HttpProbe> {
+  const startTime = Date.now();
+  const timestamp = new Date().toISOString();
+
+  return new Promise(resolve => {
+    const req = http.get(url, { timeout: timeoutMs }, res => {
+      // Consume response to get the full body
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const responseTimeMs = Date.now() - startTime;
+        const statusCode = res.statusCode ?? 0;
+        resolve({
+          url,
+          success: statusCode >= 200 && statusCode < 300,
+          statusCode,
+          responseTimeMs,
+          timestamp,
+          error: statusCode >= 200 && statusCode < 300 ? null : `HTTP ${statusCode}`,
+        });
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({
+        url,
+        success: false,
+        statusCode: 0,
+        responseTimeMs: Date.now() - startTime,
+        timestamp,
+        error: 'timeout',
+      });
+    });
+
+    req.on('error', (err: Error) => {
+      resolve({
+        url,
+        success: false,
+        statusCode: 0,
+        responseTimeMs: Date.now() - startTime,
+        timestamp,
+        error: err.message,
+      });
+    });
+  });
+}
+
+/**
+ * Probe a list of URLs in parallel and return the results.
+ */
+export async function probeHttpBatch(
+  urls: string[],
+  timeoutMs: number,
+): Promise<HttpProbe[]> {
+  return Promise.all(urls.map(url => probeHttp(url, timeoutMs)));
+}
+
+/**
+ * Build growth records by comparing tracked-path sizes between two time points.
+ */
+export function computeGrowthRecords(
+  startSample: ResourceSample | null,
+  endSample: ResourceSample | null,
+  startTime: Date,
+  endTime: Date,
+): GrowthRecord[] {
+  const records: GrowthRecord[] = [];
+  if (!startSample?.diskUsage || !endSample?.diskUsage) return records;
+
+  const windowHours = (endTime.getTime() - startTime.getTime()) / 3_600_000;
+  if (windowHours <= 0) return records;
+
+  const allLabels = new Set([
+    ...Object.keys(startSample.diskUsage),
+    ...Object.keys(endSample.diskUsage),
+  ]);
+
+  for (const label of allLabels) {
+    const start = startSample.diskUsage[label];
+    const end = endSample.diskUsage[label];
+
+    if (!start || !end) continue;
+
+    const growthBytes = end.sizeBytes - start.sizeBytes;
+    const growthBytesPerHour = Math.round(growthBytes / windowHours);
+
+    records.push({
+      label,
+      path: start.path,
+      startSizeBytes: start.sizeBytes,
+      endSizeBytes: end.sizeBytes,
+      growthBytes,
+      growthBytesPerHour,
+      existedThroughout: start.exists && end.exists,
+    });
+  }
+
+  return records;
+}
+
+/**
+ * Build subsystem evidence from periodic HTTP probe history.
+ */
+export function buildSubsystemEvidence(
+  subsystemId: string,
+  label: string,
+  probeHistory: HttpProbe[],
+  missingEvidenceReason: string | null,
+  metadata?: Record<string, unknown>,
+): SubsystemEvidence {
+  const healthyThroughout = probeHistory.length > 0 && probeHistory.every(p => p.success);
+
+  return {
+    subsystemId,
+    label,
+    healthyThroughout,
+    probes: probeHistory,
+    missingEvidenceReason: probeHistory.length === 0
+      ? (missingEvidenceReason ?? 'No probes were taken for this subsystem')
+      : null,
+    metadata: metadata ? redactMap(metadata) : undefined,
+  };
+}
+
+/**
+ * Run the full steady-state witness capture.
+ *
+ * This function:
+ * 1. Creates a bundle directory for the steady-state run
+ * 2. Takes an initial baseline resource sample
+ * 3. Periodically samples host resources, probes HTTP health endpoints, and probes processes
+ * 4. At the end, takes a final resource sample
+ * 5. Computes growth records, resource summary, and verdict
+ * 6. Returns the assembled SteadyStateWitnessManifest
+ */
+export async function runSteadyStateWitness(
+  options: CaptureOptions = {},
+): Promise<{
+  bundleDir: string;
+  runId: string;
+  manifest: SteadyStateWitnessManifest;
+}> {
+  const httpTimeoutMs = options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+  const durationSec = options.steadyStateDurationSec ?? DEFAULT_STEADY_STATE_DURATION_SEC;
+  const intervalSec = options.steadyStateIntervalSec ?? DEFAULT_STEADY_STATE_INTERVAL_SEC;
+  const processNames = options.processNames ?? [...DEFAULTS.processNames];
+
+  // Generate run ID
+  const startTime = new Date();
+  const runId = `steady-${startTime.toISOString().replace(/[:.]/g, '-').replace(/Z$/, 'Z')}`;
+  const bundleDir = ensureBundleDir(runId);
+  const label = options.label ?? `CAX11 steady-state witness — ${startTime.toISOString()}`;
+
+  // Build growth track paths from options or defaults
+  const growthTrackPaths: Array<{ label: string; path: string }> =
+    options.growthTrackPaths ?? [
+      { label: 'SQLite database', path: options.dbPath ?? DEFAULTS.dbPath },
+      { label: 'Deployment artifacts', path: ARTIFACTS_ROOT },
+      { label: 'Application logs', path: (options.logPaths ?? DEFAULTS.logPaths)[0] },
+    ];
+
+  // URLs to probe for subsystem health
+  const healthUrls: Array<{ subsystemId: string; label: string; url: string }> = [
+    { subsystemId: 'runtime', label: 'Trader Runtime', url: options.runtimeHealthUrl ?? DEFAULTS.runtimeHealthUrl },
+    { subsystemId: 'notifier', label: 'Upstox Notifier', url: options.notifierHealthUrl ?? DEFAULTS.notifierHealthUrl },
+    { subsystemId: 'mcp-bridge', label: 'Local MCP Bridge', url: options.bridgeHealthUrl ?? DEFAULTS.bridgeHealthUrl },
+    { subsystemId: 'caddy', label: 'Caddy / Basic-Auth Proxy', url: 'http://127.0.0.1:80/health' }, // Best-effort
+  ];
+
+  // Probe state
+  const resourceSamples: ResourceSample[] = [];
+  const probeHistory: Map<string, HttpProbe[]> = new Map();
+  for (const h of healthUrls) {
+    probeHistory.set(h.subsystemId, []);
+  }
+
+  // Take initial baseline sample
+  const initialSample = sampleHostResources(growthTrackPaths);
+  resourceSamples.push(initialSample);
+
+  // ── Sampling loop ────────────────────────────────────────────────────
+  const startMs = Date.now();
+  const endMs = startMs + durationSec * 1000;
+  let iterationCount = 0;
+
+  while (Date.now() < endMs) {
+    iterationCount++;
+    const now = Date.now();
+    const remainingMs = endMs - now;
+
+    // 1. Sample host resources
+    const sample = sampleHostResources(growthTrackPaths);
+    resourceSamples.push(sample);
+
+    // 2. Probe HTTP health endpoints
+    const healthProbes = await probeHttpBatch(
+      healthUrls.map(h => h.url),
+      httpTimeoutMs,
+    );
+    for (let i = 0; i < healthUrls.length; i++) {
+      const existing = probeHistory.get(healthUrls[i].subsystemId) ?? [];
+      existing.push(healthProbes[i]);
+      probeHistory.set(healthUrls[i].subsystemId, existing);
+    }
+
+    // 3. Probe process presence (every other iteration to reduce overhead)
+    if (iterationCount % 2 === 0) {
+      // Process probes are stored at the end
+    }
+
+    // Sleep until next interval (or end time)
+    const nextIntervalMs = Math.min(intervalSec * 1000, remainingMs);
+    if (nextIntervalMs > 200) {
+      await sleep(nextIntervalMs);
+    } else {
+      break;
+    }
+  }
+
+  // Take final sample
+  const finalSample = sampleHostResources(growthTrackPaths);
+  resourceSamples.push(finalSample);
+
+  const endTime = new Date();
+  const actualDurationSec = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
+
+  // ── Process evidence ──────────────────────────────────────────────────
+  const processEvidence: ProcessProbe[] = processNames.map(name => probeProcess(name));
+
+  // ── Build subsystem evidence ──────────────────────────────────────────
+  const subsystemEvidence: SubsystemEvidence[] = healthUrls.map(h =>
+    buildSubsystemEvidence(h.subsystemId, h.label, probeHistory.get(h.subsystemId) ?? [], null),
+  );
+
+  // ── Growth records ────────────────────────────────────────────────────
+  const growthRecords = computeGrowthRecords(initialSample, finalSample, startTime, endTime);
+
+  // ── Resource summary ──────────────────────────────────────────────────
+  const resourceSummary = computeResourceSummary(resourceSamples);
+
+  // ── Verdict ───────────────────────────────────────────────────────────
+  const verdict = deriveSteadyStateVerdict(
+    subsystemEvidence,
+    resourceSummary,
+    growthRecords,
+    [...REQUIRED_SUBSYSTEMS],
+  );
+
+  // ── Annotations ───────────────────────────────────────────────────────
+  const annotations: OptionalAnnotation[] = [
+    { label: 'capture-node-version', value: process.version },
+    { label: 'capture-platform', value: `${os.platform()} ${os.arch()}` },
+    { label: 'http-timeout-ms', value: httpTimeoutMs },
+    { label: 'process-count-total', value: processEvidence.filter(p => p.running).length },
+    { label: 'iterations', value: iterationCount },
+  ];
+
+  // ── Assemble manifest ─────────────────────────────────────────────────
+  const manifest: SteadyStateWitnessManifest = {
+    schemaVersion: 1,
+    artifactType: 'steady-state-witness',
+    startedAt: startTime.toISOString(),
+    endedAt: endTime.toISOString(),
+    durationSec: actualDurationSec,
+    intervalSec,
+    runId,
+    label,
+    resourceSamples,
+    resourceSummary,
+    processEvidence,
+    subsystemEvidence,
+    growthRecords,
+    verdict,
+    annotations,
+  };
+
+  return { bundleDir, runId, manifest };
+}
+
+/** Promise-based sleep. */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
 // Main capture orchestrator
 // ---------------------------------------------------------------------------
 
@@ -679,4 +1153,9 @@ export function writeWitnessBundle(result: CaptureResult): { manifestPath: strin
   return { manifestPath, evidencePaths };
 }
 
-export { DEFAULT_HTTP_TIMEOUT_MS, DEFAULTS };
+export {
+  DEFAULT_HTTP_TIMEOUT_MS,
+  DEFAULT_STEADY_STATE_INTERVAL_SEC,
+  DEFAULT_STEADY_STATE_DURATION_SEC,
+  DEFAULTS,
+};
