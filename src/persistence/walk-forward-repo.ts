@@ -473,6 +473,7 @@ export class WalkForwardRepository {
         t.merged_score AS merged_score,
         t.deterministic_score AS deterministic_score,
         t.llm_score AS llm_score,
+        t.llm_status AS llm_status,
         (SELECT COUNT(*) FROM walk_forward_trial_windows tw WHERE tw.trial_id = t.id) AS window_count
       FROM walk_forward_trials t
       WHERE t.run_id = ?
@@ -486,6 +487,7 @@ export class WalkForwardRepository {
       merged_score: number;
       deterministic_score: number;
       llm_score: number | null;
+      llm_status: string | null;
       window_count: number;
     }>;
 
@@ -497,6 +499,7 @@ export class WalkForwardRepository {
       mergedScore: r.merged_score,
       deterministicScore: r.deterministic_score,
       llmScore: r.llm_score,
+      llmStatus: r.llm_status,
       windowCount: r.window_count,
     }));
   }

@@ -320,8 +320,53 @@ export interface WalkForwardRankedCandidate {
   deterministicScore: number;
   /** LLM-provided score, or null. */
   llmScore: number | null;
+  /** Truthful aggregate LLM status for the trial, or null. */
+  llmStatus: string | null;
   /** Number of windows in which this trial was evaluated (evidence rows). */
   windowCount: number;
+}
+
+/**
+ * Compact replay linkage persisted inside walk_forward_trial_windows.metrics_json.
+ *
+ * The row stores a bounded summary instead of duplicating every replay tick,
+ * while still letting downstream readers follow the evidence back to the
+ * canonical replay session and its strategy-run checkpoints.
+ */
+export interface WalkForwardReplayEvidence {
+  replaySessionId: number;
+  replayStatus: string;
+  replayLabel: string;
+  replayRangeStart: number;
+  replayRangeEnd: number;
+  replayCompletedTicks: number;
+  replayTotalTicks: number;
+  checkpointCount: number;
+  strategyRunCount: number;
+  firstStrategyRunId: number | null;
+  lastStrategyRunId: number | null;
+  topCandidateCount: number;
+  llmStatusCounts: Record<string, number> | Partial<Record<string, number>>;
+  pluginErrorCount: number;
+  errorMessage: string | null;
+}
+
+/**
+ * Structured metrics envelope encoded into walk_forward_trial_windows.metrics_json.
+ */
+export interface WalkForwardWindowMetricsEnvelope {
+  schemaVersion: 1;
+  source: 'replay-session';
+  replayEvidence: WalkForwardReplayEvidence;
+  summary: {
+    tickCount: number;
+    meanMergedScore: number | null;
+    meanDeterministicScore: number | null;
+    meanLlmScore: number | null;
+    stdDevMergedScore: number | null;
+    maxMergedScore: number | null;
+    minMergedScore: number | null;
+  };
 }
 
 // ---------------------------------------------------------------------------

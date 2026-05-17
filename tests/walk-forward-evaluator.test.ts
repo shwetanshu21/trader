@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -6,10 +6,11 @@ import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { WalkForwardRepository } from '../src/persistence/walk-forward-repo.js';
 import { WalkForwardEvaluator, WalkForwardInterruptionError, type WalkForwardTrialConfig } from '../src/replay/walk-forward-evaluator.js';
 import { FixtureHistoricalDataProvider } from '../src/replay/historical-data-provider.js';
-import { WalkForwardStatus } from '../src/replay/walk-forward-types.js';
+import { WalkForwardStatus, type WalkForwardWindowMetricsEnvelope } from '../src/replay/walk-forward-types.js';
 import { ReplayFidelity } from '../src/replay/types.js';
 import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
-import type { BoundedCandidate } from '../src/types/runtime.js';
+import { ProposalEngine } from '../src/proposals/proposal-engine.js';
+import { LLMStatus, type BoundedCandidate, type ProposalEngineConfig } from '../src/types/runtime.js';
 
 const DAY_MS = 86_400_000;
 
@@ -30,6 +31,7 @@ const trialConfigs: WalkForwardTrialConfig[] = [
 ];
 
 const tmpDirs: string[] = [];
+const originalFetch = globalThis.fetch;
 
 function createDbPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-evaluator-'));
@@ -37,7 +39,21 @@ function createDbPath(): string {
   return path.join(dir, 'walk-forward.db');
 }
 
-function createEvaluator(dbPath: string, executionResolutionMinutes?: number): {
+function makeEngineConfig(overrides?: Partial<ProposalEngineConfig>): ProposalEngineConfig {
+  return {
+    providerMode: 'custom',
+    providerUrl: 'https://llm.example.test/rank',
+    timeoutMs: 1000,
+    maxProposalsPerTick: 5,
+    ...overrides,
+  };
+}
+
+function createEvaluator(options?: {
+  dbPath?: string;
+  executionResolutionMinutes?: number;
+  proposalEngine?: ProposalEngine;
+}): {
   dbManager: DatabaseManager;
   repo: WalkForwardRepository;
   evaluator: WalkForwardEvaluator;
@@ -45,7 +61,7 @@ function createEvaluator(dbPath: string, executionResolutionMinutes?: number): {
   rangeEnd: number;
   dataProvider: FixtureHistoricalDataProvider;
 } {
-  const dbManager = new DatabaseManager(dbPath);
+  const dbManager = new DatabaseManager(options?.dbPath ?? createDbPath());
   const repo = new WalkForwardRepository(dbManager.db);
   const rangeEnd = Date.UTC(2025, 0, 31);
   const rangeStart = rangeEnd - 14 * DAY_MS;
@@ -54,18 +70,26 @@ function createEvaluator(dbPath: string, executionResolutionMinutes?: number): {
     rangeStart,
     rangeEnd,
     priceDrift: 0.001,
-    executionResolutionMinutes: executionResolutionMinutes ?? null,
+    executionResolutionMinutes: options?.executionResolutionMinutes ?? null,
   });
   const evaluator = new WalkForwardEvaluator({
     db: dbManager.db,
     marketProfile: INDIA_NSE_EQ_MARKET,
     dataProvider,
+    proposalEngine: options?.proposalEngine,
   });
 
   return { dbManager, repo, evaluator, rangeStart, rangeEnd, dataProvider };
 }
 
+function parseWindowMetrics(metricsJson: string | null): WalkForwardWindowMetricsEnvelope {
+  expect(metricsJson).toBeTruthy();
+  return JSON.parse(metricsJson!) as WalkForwardWindowMetricsEnvelope;
+}
+
 afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
   for (const dir of tmpDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -74,7 +98,7 @@ afterEach(() => {
 describe('WalkForwardEvaluator', () => {
   it('checkpoints persisted trials and resumes an interrupted run without duplicating completed work', async () => {
     const dbPath = createDbPath();
-    const first = createEvaluator(dbPath);
+    const first = createEvaluator({ dbPath });
 
     await expect(first.evaluator.evaluate({
       rangeStart: first.rangeStart,
@@ -92,9 +116,18 @@ describe('WalkForwardEvaluator', () => {
     expect(first.repo.countTrialsForRun(1)).toBe(1);
     expect(first.repo.countCheckpoints(1)).toBe(1);
     expect(first.repo.getLatestCheckpoint(1)?.lastCompletedTrialIndex).toBe(0);
+
+    const firstTrial = first.repo.getTrialForRunByIndex(1, 0);
+    expect(firstTrial?.mergedScore).toBeGreaterThanOrEqual(0);
+    const firstTrialEvidence = first.repo.getTrialWindowEvidence(firstTrial!.id);
+    const firstEnvelope = parseWindowMetrics(firstTrialEvidence[0].metricsJson);
+    expect(firstEnvelope.source).toBe('replay-session');
+    expect(firstEnvelope.replayEvidence.replaySessionId).toBeGreaterThan(0);
+    expect(firstEnvelope.replayEvidence.checkpointCount).toBeGreaterThan(0);
+    expect(firstEnvelope.replayEvidence.strategyRunCount).toBeGreaterThan(0);
     first.dbManager.close();
 
-    const resumed = createEvaluator(dbPath);
+    const resumed = createEvaluator({ dbPath });
     const result = await resumed.evaluator.evaluate({
       rangeStart: resumed.rangeStart,
       rangeEnd: resumed.rangeEnd,
@@ -116,9 +149,8 @@ describe('WalkForwardEvaluator', () => {
     resumed.dbManager.close();
   });
 
-  it('carries fine-grained execution metadata through a full evaluation proof path', async () => {
-    const dbPath = createDbPath();
-    const ctx = createEvaluator(dbPath, 1);
+  it('persists replay-backed evidence handles for every trial window', async () => {
+    const ctx = createEvaluator({ executionResolutionMinutes: 1 });
 
     const result = await ctx.evaluator.evaluate({
       rangeStart: ctx.rangeStart,
@@ -126,7 +158,7 @@ describe('WalkForwardEvaluator', () => {
       windowSizeMs: 4 * DAY_MS,
       stepSizeMs: 2 * DAY_MS,
       inSampleRatio: 0.75,
-      label: 'fine-grained-proof',
+      label: 'replay-evidence-proof',
       trialConfigs,
     });
 
@@ -137,6 +169,125 @@ describe('WalkForwardEvaluator', () => {
       executionResolutionMinutes: 1,
       supportsFineGrainedExecution: true,
     });
+
+    for (const trial of result.trials) {
+      expect(trial.windowEvidence.length).toBeGreaterThan(0);
+      for (const evidence of trial.windowEvidence) {
+        const envelope = parseWindowMetrics(evidence.metricsJson);
+        expect(envelope.source).toBe('replay-session');
+        expect(envelope.replayEvidence.replaySessionId).toBeGreaterThan(0);
+        expect(envelope.replayEvidence.replayStatus).toBe('completed');
+        if (envelope.replayEvidence.topCandidateCount > 0) {
+          expect(envelope.replayEvidence.firstStrategyRunId).toBeGreaterThan(0);
+          expect(envelope.replayEvidence.lastStrategyRunId).toBeGreaterThan(0);
+        } else {
+          expect(envelope.replayEvidence.firstStrategyRunId).toBeNull();
+          expect(envelope.replayEvidence.lastStrategyRunId).toBeNull();
+        }
+      }
+    }
+
+    ctx.dbManager.close();
+  });
+
+  it('persists skipped LLM provenance when the trial requests LLM but no provider engine is wired', async () => {
+    const ctx = createEvaluator();
+
+    const result = await ctx.evaluator.evaluate({
+      rangeStart: ctx.rangeStart,
+      rangeEnd: ctx.rangeEnd,
+      windowSizeMs: 4 * DAY_MS,
+      stepSizeMs: 2 * DAY_MS,
+      inSampleRatio: 0.75,
+      label: 'llm-skipped-proof',
+      trialConfigs: [{
+        label: 'LLM requested but disabled',
+        params: { maxCandidates: 3 },
+        llmConfig: { enabled: true, maxCandidates: 3 },
+      }],
+    });
+
+    expect(result.trials).toHaveLength(1);
+    expect(result.trials[0].llmStatus).toBe(LLMStatus.Skipped);
+    expect(result.trials[0].llmScore).toBeNull();
+
+    const skipCounts = result.trials[0].windowEvidence
+      .map(evidence => parseWindowMetrics(evidence.metricsJson).replayEvidence.llmStatusCounts.skipped ?? 0);
+    expect(skipCounts.some(count => count > 0)).toBe(true);
+
+    ctx.dbManager.close();
+  });
+
+  it('persists provider-error LLM provenance from replay-backed evidence', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(
+      async () => new Response('Server Error', { status: 500 }),
+    );
+    const proposalEngine = new ProposalEngine(makeEngineConfig());
+    const ctx = createEvaluator({ proposalEngine });
+
+    const result = await ctx.evaluator.evaluate({
+      rangeStart: ctx.rangeStart,
+      rangeEnd: ctx.rangeEnd,
+      windowSizeMs: 4 * DAY_MS,
+      stepSizeMs: 2 * DAY_MS,
+      inSampleRatio: 0.75,
+      label: 'llm-error-proof',
+      trialConfigs: [{
+        label: 'LLM provider 5xx',
+        params: { maxCandidates: 3 },
+        llmConfig: { enabled: true, maxCandidates: 3 },
+      }],
+    });
+
+    expect(result.trials[0].llmStatus).toBe(LLMStatus.Error);
+    expect(result.trials[0].llmScore).toBeNull();
+    expect(result.rankedCandidates[0].llmStatus).toBe(LLMStatus.Error);
+
+    const errorCounts = result.trials[0].windowEvidence
+      .map(evidence => parseWindowMetrics(evidence.metricsJson).replayEvidence.llmStatusCounts.error ?? 0);
+    expect(errorCounts.some(count => count > 0)).toBe(true);
+    expect(result.trials[0].windowEvidence.every(evidence =>
+      parseWindowMetrics(evidence.metricsJson).replayEvidence.pluginErrorCount >= 0,
+    )).toBe(true);
+
+    ctx.dbManager.close();
+  });
+
+  it('persists degraded LLM provenance when the provider returns empty rankings', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify({ someUnexpectedField: 'value' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const proposalEngine = new ProposalEngine(makeEngineConfig());
+    const ctx = createEvaluator({ proposalEngine });
+
+    const result = await ctx.evaluator.evaluate({
+      rangeStart: ctx.rangeStart,
+      rangeEnd: ctx.rangeEnd,
+      windowSizeMs: 4 * DAY_MS,
+      stepSizeMs: 2 * DAY_MS,
+      inSampleRatio: 0.75,
+      label: 'llm-degraded-proof',
+      trialConfigs: [{
+        label: 'LLM empty rankings',
+        params: { maxCandidates: 3 },
+        llmConfig: { enabled: true, maxCandidates: 3 },
+      }],
+    });
+
+    expect(result.trials[0].llmStatus).toBe(LLMStatus.Degraded);
+    expect(result.trials[0].llmScore).toBeNull();
+    expect(result.rankedCandidates[0].llmStatus).toBe(LLMStatus.Degraded);
+
+    const degradedCounts = result.trials[0].windowEvidence
+      .map(evidence => parseWindowMetrics(evidence.metricsJson).replayEvidence.llmStatusCounts.degraded ?? 0);
+    expect(degradedCounts.some(count => count > 0)).toBe(true);
+    expect(result.trials[0].windowEvidence.every(evidence =>
+      parseWindowMetrics(evidence.metricsJson).replayEvidence.replaySessionId > 0,
+    )).toBe(true);
+
     ctx.dbManager.close();
   });
 });

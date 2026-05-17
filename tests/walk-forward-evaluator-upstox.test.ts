@@ -22,6 +22,7 @@ import {
   WalkForwardSelectionResult,
   WalkForwardWindowType,
   type WalkForwardSelectionConfig,
+  type WalkForwardWindowMetricsEnvelope,
 } from '../src/replay/walk-forward-types.js';
 import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
 
@@ -324,10 +325,21 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
       for (const candidate of result.rankedCandidates) {
         expect(candidate.deterministicScore).toBeGreaterThanOrEqual(0);
         expect(candidate.deterministicScore).toBeLessThanOrEqual(1);
-        // merged score should match deterministic since no LLM
-        expect(candidate.mergedScore).toBe(candidate.deterministicScore);
+        // merged score is the truthful replay-backed merged score summary
+        expect(candidate.mergedScore).toBeGreaterThanOrEqual(0);
+        expect(candidate.mergedScore).toBeLessThanOrEqual(1);
         expect(candidate.llmScore).toBeNull();
+        expect(candidate.llmStatus).toBe('skipped');
         expect(candidate.windowCount).toBeGreaterThanOrEqual(1);
+      }
+
+      for (const trial of result.trials) {
+        for (const evidence of trial.windowEvidence) {
+          const envelope = JSON.parse(evidence.metricsJson ?? 'null') as WalkForwardWindowMetricsEnvelope | null;
+          expect(envelope?.source).toBe('replay-session');
+          expect(envelope?.replayEvidence.replaySessionId).toBeGreaterThan(0);
+          expect(envelope?.replayEvidence.replayStatus).toBe('completed');
+        }
       }
 
       // Verify candidates are sorted by rank
@@ -689,6 +701,11 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
       expect(llmTrial).toBeDefined();
       expect(llmTrial!.llmStatus).toBe('skipped');
       expect(llmTrial!.llmScore).toBeNull();
+      for (const evidence of llmTrial!.windowEvidence) {
+        const envelope = JSON.parse(evidence.metricsJson ?? 'null') as WalkForwardWindowMetricsEnvelope | null;
+        expect(envelope?.source).toBe('replay-session');
+        expect(envelope?.replayEvidence.llmStatusCounts.skipped).toBeGreaterThan(0);
+      }
 
       // All candidates should have valid deterministic scores
       for (const candidate of result.rankedCandidates) {

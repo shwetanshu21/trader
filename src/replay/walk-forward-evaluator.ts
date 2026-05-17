@@ -1,18 +1,20 @@
 // ── Walk-Forward Evaluator ──
 // Partitions historical data into rolling windows, generates a bounded search
-// space over deterministic and LLM-aware strategy settings, executes trials
-// through the replay/strategy seams, checkpoints durable progress, and can
-// resume interrupted runs without restarting already-persisted trials.
+// space over strategy settings, executes each window through the shared replay
+// seam, checkpoints durable progress, and can resume interrupted runs without
+// restarting already-persisted trials.
 
 import type Database from 'better-sqlite3';
 import { ReplayClock } from './replay-clock.js';
-import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
-import { StrategyCoordinator } from '../strategy/framework.js';
+import { runReplay } from './replay-runner.js';
+import { ReplaySessionRepository } from '../persistence/replay-session-repo.js';
+import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { ProposalEngine } from '../proposals/proposal-engine.js';
-import { LLMStatus } from '../types/runtime.js';
+import { LLMStatus, type StrategyRunWithCandidates } from '../types/runtime.js';
 import type { HistoricalDataProvider } from './historical-data-provider.js';
 import type { MarketProfile } from '../market/market-profile.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
+import { ReplaySessionStatus } from './types.js';
 import {
   WalkForwardStatus,
   WalkForwardWindowStatus,
@@ -21,6 +23,8 @@ import {
   type WalkForwardWindowRow,
   type WalkForwardTrialWindowRow,
   type WalkForwardRankedCandidate,
+  type WalkForwardReplayEvidence,
+  type WalkForwardWindowMetricsEnvelope,
 } from './walk-forward-types.js';
 
 // ---------------------------------------------------------------------------
@@ -55,12 +59,14 @@ export interface WindowMetrics {
   winRate: number | null;
   tradeCount: number;
   profitFactor: number | null;
-  extendedMetrics: Record<string, unknown> | null;
-  /** LLM consultation status from the coordinator (truthful, never synthetic). */
+  deterministicScore: number | null;
+  mergedScore: number | null;
+  extendedMetrics: WalkForwardWindowMetricsEnvelope | null;
+  /** LLM consultation status summarized from persisted replay evidence. */
   llmStatus: string | null;
-  /** Average LLM score across ticks where LLM was consulted, or null. */
+  /** Average truthful LLM score across ticks where LLM was consulted, or null. */
   llmScore: number | null;
-  /** Number of ticks where LLM was actually consulted (as reported by coordinator). */
+  /** Number of ticks where LLM was actually consulted. */
   llmTickCount: number;
 }
 
@@ -96,6 +102,7 @@ interface TrialState {
     windowType: WalkForwardWindowType;
     metrics: WindowMetrics;
   }>;
+  aggregateMergedScore: number;
   aggregateDeterministicScore: number;
   aggregateLlmScore: number | null;
   llmStatus: string | null;
@@ -139,6 +146,8 @@ export class WalkForwardEvaluator {
   private readonly _marketProfile: MarketProfile;
   private readonly _db: Database.Database;
   private readonly _proposalEngine?: ProposalEngine;
+  private readonly _replaySessionRepo: ReplaySessionRepository;
+  private readonly _strategyRunRepo: StrategyRunRepository;
 
   constructor(options: {
     db: Database.Database;
@@ -154,6 +163,8 @@ export class WalkForwardEvaluator {
     this._clock = options.clock ?? new ReplayClock(options.marketProfile);
     this._dataProvider = options.dataProvider;
     this._proposalEngine = options.proposalEngine;
+    this._replaySessionRepo = new ReplaySessionRepository(options.db);
+    this._strategyRunRepo = new StrategyRunRepository(options.db);
   }
 
   async evaluate(config: WalkForwardEvaluatorConfig): Promise<EvaluatorRunResult> {
@@ -218,9 +229,13 @@ export class WalkForwardEvaluator {
         if (completedTrialIndexes.has(ti)) continue;
 
         const trialState = await this._evaluateTrial(
+          state.run.id,
           ti,
           trialConfigs[ti],
           windows,
+          strategyId,
+          strategyVersion,
+          marketId,
         );
 
         this._persistTrial(state.run.id, state.insertedWindows, trialState, now);
@@ -337,16 +352,12 @@ export class WalkForwardEvaluator {
     trialState: TrialState,
     createdAt: number,
   ): void {
-    const mergedScore = trialState.aggregateLlmScore != null
-      ? +(((trialState.aggregateDeterministicScore + trialState.aggregateLlmScore) / 2).toFixed(4))
-      : trialState.aggregateDeterministicScore;
-
     const trial = this._repo.insertTrial({
       runId,
       trialIndex: trialState.trialIndex,
       label: trialState.config.label,
       paramsJson: JSON.stringify(trialState.config),
-      mergedScore,
+      mergedScore: trialState.aggregateMergedScore,
       deterministicScore: trialState.aggregateDeterministicScore,
       llmScore: trialState.aggregateLlmScore,
       llmStatus: trialState.llmStatus,
@@ -526,28 +537,56 @@ export class WalkForwardEvaluator {
   }
 
   private async _evaluateTrial(
+    runId: number,
     trialIndex: number,
     config: WalkForwardTrialConfig,
     windows: PartitionedWindow[],
+    strategyId: string,
+    strategyVersion: string,
+    marketId: string,
   ): Promise<TrialState> {
-    const coordinator = this._createCoordinator(config);
     const windowMetrics: TrialState['windowMetrics'] = [];
+    let aggregateMergedSum = 0;
+    let aggregateMergedCount = 0;
     let aggregateDeterministicSum = 0;
     let aggregateDeterministicCount = 0;
     let aggregateLlmSum = 0;
     let aggregateLlmCount = 0;
     const llmStatuses = new Set<string>();
-    let llmStatus: string | null = null;
 
     for (const window of windows) {
-      const inSampleMetrics = await this._evaluateWindowRange(coordinator, window.inSampleStart, window.inSampleEnd);
+      const inSampleMetrics = await this._evaluateWindowRange({
+        runId,
+        trialIndex,
+        trialLabel: config.label,
+        strategyId,
+        strategyVersion,
+        marketId,
+        window,
+        windowType: WalkForwardWindowType.InSample,
+        rangeStart: window.inSampleStart,
+        rangeEnd: window.inSampleEnd,
+        maxCandidates: (config.params.maxCandidates as number) ?? config.llmConfig?.maxCandidates ?? 5,
+      });
       windowMetrics.push({
         windowIndex: window.index,
         windowType: WalkForwardWindowType.InSample,
         metrics: inSampleMetrics,
       });
 
-      const outOfSampleMetrics = await this._evaluateWindowRange(coordinator, window.outOfSampleStart, window.outOfSampleEnd);
+      const outOfSampleMetrics = await this._evaluateWindowRange({
+        runId,
+        trialIndex,
+        trialLabel: config.label,
+        strategyId,
+        strategyVersion,
+        marketId,
+        window,
+        windowType: WalkForwardWindowType.OutOfSample,
+        rangeStart: window.outOfSampleStart,
+        rangeEnd: window.outOfSampleEnd,
+        maxCandidates: (config.params.maxCandidates as number) ?? config.llmConfig?.maxCandidates ?? 5,
+      });
       windowMetrics.push({
         windowIndex: window.index,
         windowType: WalkForwardWindowType.OutOfSample,
@@ -555,63 +594,164 @@ export class WalkForwardEvaluator {
       });
 
       for (const metrics of [inSampleMetrics, outOfSampleMetrics]) {
-        if (metrics.tradeCount > 0) {
-          aggregateDeterministicSum += metrics.totalReturn;
+        if (metrics.mergedScore != null) {
+          aggregateMergedSum += metrics.mergedScore;
+          aggregateMergedCount += 1;
+        }
+        if (metrics.deterministicScore != null) {
+          aggregateDeterministicSum += metrics.deterministicScore;
           aggregateDeterministicCount += 1;
         }
-        // Aggregate truthful LLM evidence from coordinator output
+        if (metrics.llmScore != null) {
+          aggregateLlmSum += metrics.llmScore;
+          aggregateLlmCount += 1;
+        }
         if (metrics.llmStatus != null) {
           llmStatuses.add(metrics.llmStatus);
-          if (metrics.llmScore != null) {
-            aggregateLlmSum += metrics.llmScore;
-            aggregateLlmCount += 1;
-          }
         }
       }
     }
-
-    // Derive truthful llmStatus from observed coordinator statuses
-    if (llmStatuses.size > 0) {
-      // If any window had a consulted LLM, report consulted (truthfully)
-      if (llmStatuses.has(LLMStatus.Consulted)) {
-        llmStatus = LLMStatus.Consulted;
-      } else if (llmStatuses.has(LLMStatus.Degraded)) {
-        llmStatus = LLMStatus.Degraded;
-      } else if (llmStatuses.has(LLMStatus.Error)) {
-        llmStatus = LLMStatus.Error;
-      } else {
-        llmStatus = LLMStatus.Skipped;
-      }
-    } else if (config.llmConfig?.enabled && this._proposalEngine) {
-      // LLM was configured but coordinator reported no LLM evidence —
-      // something went wrong upstream. Report Skipped rather than fabricated 'consulted'.
-      llmStatus = LLMStatus.Skipped;
-    }
-
-    const deterministicScore = aggregateDeterministicCount > 0
-      ? +(aggregateDeterministicSum / aggregateDeterministicCount).toFixed(4)
-      : 0;
-    const llmScore = aggregateLlmCount > 0
-      ? +(aggregateLlmSum / aggregateLlmCount).toFixed(4)
-      : null;
 
     return {
       config,
       trialIndex,
       windowMetrics,
-      aggregateDeterministicScore: deterministicScore,
-      aggregateLlmScore: llmScore,
-      llmStatus,
+      aggregateMergedScore: aggregateMergedCount > 0
+        ? +(aggregateMergedSum / aggregateMergedCount).toFixed(4)
+        : 0,
+      aggregateDeterministicScore: aggregateDeterministicCount > 0
+        ? +(aggregateDeterministicSum / aggregateDeterministicCount).toFixed(4)
+        : 0,
+      aggregateLlmScore: aggregateLlmCount > 0
+        ? +(aggregateLlmSum / aggregateLlmCount).toFixed(4)
+        : null,
+      llmStatus: this._summarizeLlmStatus(llmStatuses),
     };
   }
 
-  private async _evaluateWindowRange(
-    coordinator: StrategyCoordinator,
-    rangeStart: number,
-    rangeEnd: number,
-  ): Promise<WindowMetrics> {
-    const ticks = this._clock.generateTicks(rangeStart, rangeEnd);
-    if (ticks.length === 0) {
+  private async _evaluateWindowRange(options: {
+    runId: number;
+    trialIndex: number;
+    trialLabel: string;
+    strategyId: string;
+    strategyVersion: string;
+    marketId: string;
+    window: PartitionedWindow;
+    windowType: WalkForwardWindowType;
+    rangeStart: number;
+    rangeEnd: number;
+    maxCandidates: number;
+  }): Promise<WindowMetrics> {
+    const replayResult = await runReplay({
+      db: this._db,
+      marketProfile: this._marketProfile,
+      dataProvider: this._dataProvider,
+      proposalEngine: this._proposalEngine,
+      maxCandidates: options.maxCandidates,
+      cadenceMinutes: this._clock.getCadenceMinutes(),
+      label: this._buildReplayLabel(options),
+      strategyId: options.strategyId,
+      strategyVersion: options.strategyVersion,
+      marketId: options.marketId,
+      rangeStart: options.rangeStart,
+      rangeEnd: options.rangeEnd,
+    });
+
+    if (replayResult.session.status !== ReplaySessionStatus.Completed) {
+      throw new Error(
+        `Replay-backed window evaluation failed for ${options.trialLabel} ${options.window.label} ` +
+        `${options.windowType}: ${replayResult.engineResult.errorMessage ?? replayResult.session.errorMessage ?? replayResult.session.status}`,
+      );
+    }
+
+    return this._summarizeReplaySession(replayResult.session.id);
+  }
+
+  private _buildReplayLabel(options: {
+    runId: number;
+    trialIndex: number;
+    trialLabel: string;
+    window: PartitionedWindow;
+    windowType: WalkForwardWindowType;
+  }): string {
+    const typeLabel = options.windowType === WalkForwardWindowType.InSample ? 'in' : 'out';
+    return [
+      `wf${options.runId}`,
+      `t${String(options.trialIndex + 1).padStart(2, '0')}`,
+      typeLabel,
+      options.window.label.replace(/\s+/g, '-'),
+      options.trialLabel.replace(/\s+/g, '-').slice(0, 32),
+    ].join('-');
+  }
+
+  private _summarizeReplaySession(sessionId: number): WindowMetrics {
+    const session = this._replaySessionRepo.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Replay session ${sessionId} disappeared before summarization`);
+    }
+
+    const checkpoints = this._replaySessionRepo.getSessionCheckpoints(sessionId);
+    const strategyRuns: StrategyRunWithCandidates[] = checkpoints
+      .map(checkpoint => checkpoint.strategyRunId != null
+        ? this._strategyRunRepo.getRunById(checkpoint.strategyRunId)
+        : null)
+      .filter((run): run is StrategyRunWithCandidates => run != null);
+
+    const topCandidates = strategyRuns
+      .map(run => run.candidates[0] ?? null)
+      .filter(candidate => candidate != null);
+
+    const mergedScores = topCandidates.map(candidate => candidate.mergedScore);
+    const deterministicScores = topCandidates.map(candidate => candidate.deterministicScore);
+    const consultedCandidates = topCandidates.filter(candidate => candidate.llmStatus === LLMStatus.Consulted);
+    const llmScores = consultedCandidates
+      .map(candidate => candidate.llmScore)
+      .filter((score): score is number => score != null);
+    const llmStatusCounts = this._countLlmStatuses(topCandidates.map(candidate => candidate.llmStatus ?? null));
+    const llmStatuses = new Set(Object.keys(llmStatusCounts));
+    const pluginErrorCount = topCandidates.filter(candidate => candidate.hasPluginErrors).length;
+
+    const mergedMean = this._average(mergedScores);
+    const mergedStd = this._stdDev(mergedScores, mergedMean);
+    const mergedMin = mergedScores.length > 0 ? Math.min(...mergedScores) : null;
+    const mergedMax = mergedScores.length > 0 ? Math.max(...mergedScores) : null;
+    const winningTicks = mergedScores.filter(score => score >= WIN_SCORE_THRESHOLD).length;
+    const losingTicks = mergedScores.filter(score => score < WIN_SCORE_THRESHOLD).length;
+
+    const replayEvidence: WalkForwardReplayEvidence = {
+      replaySessionId: session.id,
+      replayStatus: session.status,
+      replayLabel: session.label,
+      replayRangeStart: session.rangeStart,
+      replayRangeEnd: session.rangeEnd,
+      replayCompletedTicks: session.completedTicks,
+      replayTotalTicks: session.totalTicks,
+      checkpointCount: checkpoints.length,
+      strategyRunCount: strategyRuns.length,
+      firstStrategyRunId: strategyRuns[0]?.id ?? null,
+      lastStrategyRunId: strategyRuns[strategyRuns.length - 1]?.id ?? null,
+      topCandidateCount: topCandidates.length,
+      llmStatusCounts,
+      pluginErrorCount,
+      errorMessage: session.errorMessage,
+    };
+
+    const extendedMetrics: WalkForwardWindowMetricsEnvelope = {
+      schemaVersion: 1,
+      source: 'replay-session',
+      replayEvidence,
+      summary: {
+        tickCount: mergedScores.length,
+        meanMergedScore: mergedMean,
+        meanDeterministicScore: this._average(deterministicScores),
+        meanLlmScore: this._average(llmScores),
+        stdDevMergedScore: mergedStd,
+        maxMergedScore: mergedMax,
+        minMergedScore: mergedMin,
+      },
+    };
+
+    if (mergedScores.length === 0) {
       return {
         totalReturn: 0,
         sharpeRatio: null,
@@ -619,108 +759,60 @@ export class WalkForwardEvaluator {
         winRate: null,
         tradeCount: 0,
         profitFactor: null,
-        extendedMetrics: null,
-        llmStatus: null,
-        llmScore: null,
-        llmTickCount: 0,
+        deterministicScore: null,
+        mergedScore: null,
+        extendedMetrics,
+        llmStatus: this._summarizeLlmStatus(llmStatuses),
+        llmScore: this._average(llmScores),
+        llmTickCount: consultedCandidates.length,
       };
     }
-
-    const bestScores: number[] = [];
-    let llmTickCount = 0;
-    let llmScoreSum = 0;
-    let llmScoreCount = 0;
-    const observedLlmStatuses = new Set<string>();
-
-    for (const tick of ticks) {
-      try {
-        const candidates = await this._dataProvider.getCandidates(tick);
-        if (candidates.length === 0) continue;
-        const result = await coordinator.evaluate(candidates);
-        if (result.candidates.length === 0) continue;
-
-        const top = result.candidates[0];
-        bestScores.push(top.mergedScore);
-
-        // Capture truthful LLM evidence from the coordinator, including explicit skipped status.
-        const status = top.llmStatus;
-        if (status != null) {
-          observedLlmStatuses.add(status);
-          if (status === LLMStatus.Consulted && top.llmScore != null) {
-            llmScoreSum += top.llmScore;
-            llmScoreCount += 1;
-            llmTickCount += 1;
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    if (bestScores.length === 0) {
-      return {
-        totalReturn: 0,
-        sharpeRatio: null,
-        maxDrawdown: null,
-        winRate: null,
-        tradeCount: ticks.length,
-        profitFactor: null,
-        extendedMetrics: null,
-        llmStatus: observedLlmStatuses.size > 0
-          ? (observedLlmStatuses.has(LLMStatus.Consulted) ? LLMStatus.Consulted
-            : observedLlmStatuses.has(LLMStatus.Degraded) ? LLMStatus.Degraded
-            : observedLlmStatuses.has(LLMStatus.Error) ? LLMStatus.Error
-            : LLMStatus.Skipped)
-          : LLMStatus.Skipped,
-        llmScore: llmScoreCount > 0 ? +(llmScoreSum / llmScoreCount).toFixed(4) : null,
-        llmTickCount,
-      };
-    }
-
-    const sum = bestScores.reduce((a, b) => a + b, 0);
-    const mean = sum / bestScores.length;
-    const variance = bestScores.reduce((acc, score) => acc + (score - mean) ** 2, 0) / bestScores.length;
-    const std = Math.sqrt(variance);
-    const minScore = Math.min(...bestScores);
-    const maxScore = Math.max(...bestScores);
-    const winningTicks = bestScores.filter(score => score >= WIN_SCORE_THRESHOLD).length;
-    const losingTicks = bestScores.filter(score => score < WIN_SCORE_THRESHOLD).length;
-
-    // Determine truthful llmStatus from observed coordinator statuses
-    const windowLlmStatus = observedLlmStatuses.size > 0
-      ? (observedLlmStatuses.has(LLMStatus.Consulted) ? LLMStatus.Consulted
-        : observedLlmStatuses.has(LLMStatus.Degraded) ? LLMStatus.Degraded
-        : observedLlmStatuses.has(LLMStatus.Error) ? LLMStatus.Error
-        : LLMStatus.Skipped)
-      : LLMStatus.Skipped;
 
     return {
-      totalReturn: +mean.toFixed(4),
-      sharpeRatio: std > 1e-10 ? +(mean / std).toFixed(4) : null,
-      maxDrawdown: minScore < mean ? +(mean - minScore).toFixed(4) : 0,
-      winRate: +(winningTicks / bestScores.length).toFixed(4),
-      tradeCount: bestScores.length,
+      totalReturn: +mergedMean.toFixed(4),
+      sharpeRatio: mergedStd > 1e-10 ? +(mergedMean / mergedStd).toFixed(4) : null,
+      maxDrawdown: mergedMin != null && mergedMin < mergedMean ? +(mergedMean - mergedMin).toFixed(4) : 0,
+      winRate: +(winningTicks / mergedScores.length).toFixed(4),
+      tradeCount: mergedScores.length,
       profitFactor: losingTicks > 0 ? +(winningTicks / losingTicks).toFixed(4) : (winningTicks > 0 ? 999 : null),
-      extendedMetrics: {
-        tickCount: bestScores.length,
-        meanScore: mean,
-        stdDev: std,
-        maxScore,
-        minScore,
-      },
-      llmStatus: windowLlmStatus,
-      llmScore: llmScoreCount > 0 ? +(llmScoreSum / llmScoreCount).toFixed(4) : null,
-      llmTickCount,
+      deterministicScore: this._average(deterministicScores),
+      mergedScore: +mergedMean.toFixed(4),
+      extendedMetrics,
+      llmStatus: this._summarizeLlmStatus(llmStatuses),
+      llmScore: this._average(llmScores),
+      llmTickCount: consultedCandidates.length,
     };
   }
 
-  private _createCoordinator(config: WalkForwardTrialConfig): StrategyCoordinator {
-    const maxCandidates = (config.params.maxCandidates as number) ?? 5;
-    return createStrategyCoordinator({
-      proposalEngine: this._proposalEngine,
-      maxCandidates,
-      parallelPlugins: true,
-    });
+  private _countLlmStatuses(statuses: Array<string | null>): Partial<Record<LLMStatus, number>> {
+    const counts: Partial<Record<LLMStatus, number>> = {};
+    for (const status of statuses) {
+      if (!status) continue;
+      const key = status as LLMStatus;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  private _summarizeLlmStatus(statuses: Iterable<string>): string | null {
+    const set = new Set(statuses);
+    if (set.size === 0) return null;
+    if (set.has(LLMStatus.Error)) return LLMStatus.Error;
+    if (set.has(LLMStatus.Degraded)) return LLMStatus.Degraded;
+    if (set.has(LLMStatus.Consulted)) return LLMStatus.Consulted;
+    if (set.has(LLMStatus.Skipped)) return LLMStatus.Skipped;
+    return [...set][0] ?? null;
+  }
+
+  private _average(values: number[]): number | null {
+    if (values.length === 0) return null;
+    return +(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(4);
+  }
+
+  private _stdDev(values: number[], mean: number | null): number | null {
+    if (values.length === 0 || mean == null) return null;
+    const variance = values.reduce((acc, value) => acc + (value - mean) ** 2, 0) / values.length;
+    return +Math.sqrt(variance).toFixed(6);
   }
 
   private _computeAggregateMetrics(
@@ -748,16 +840,16 @@ export class WalkForwardEvaluator {
 
     const scoreStability = stabilityCount > 0 ? +(stabilitySum / stabilityCount).toFixed(4) : 0;
     const topKOverlap = trials.length > 1 ? 1.0 : 0;
-    const llmTrials = trials.filter(trial => trial.llmScore != null);
+    const llmTrials = trials.filter(trial => trial.llmStatus === LLMStatus.Consulted || trial.llmStatus === LLMStatus.Degraded || trial.llmStatus === LLMStatus.Error);
     const llmConsultationRate = llmTrials.length > 0
       ? +(llmTrials.length / trials.length).toFixed(4)
       : null;
 
     let divergenceSum = 0;
     let divergenceCount = 0;
-    for (const trial of llmTrials) {
-      if (trial.llmScore != null && trial.deterministicScore > 0) {
-        divergenceSum += Math.abs(trial.deterministicScore - trial.llmScore);
+    for (const trial of trials) {
+      if (trial.llmScore != null) {
+        divergenceSum += Math.abs(trial.mergedScore - trial.deterministicScore);
         divergenceCount += 1;
       }
     }
