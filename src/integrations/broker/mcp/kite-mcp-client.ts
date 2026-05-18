@@ -290,6 +290,7 @@ function normalizeInstrumentRecords(raw: unknown, tokenToKey: Map<number, string
       instrumentType,
       segment: instrumentType === 'EQ' ? 'NSE' : 'NFO',
       exchangeToken: instrumentToken,
+      freezeQuantity: numberOrNull(row.freeze_quantity ?? row.minimum_lot),
     });
   }
 

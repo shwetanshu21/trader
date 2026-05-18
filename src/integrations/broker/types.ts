@@ -94,6 +94,8 @@ export interface InstrumentRecord {
   segment: SupportedSegment;
   /** Exchange token (for ticker subscriptions). */
   exchangeToken: number;
+  /** Freeze quantity from broker instrument master, or null when unavailable. */
+  freezeQuantity: number | null;
 }
 
 /**

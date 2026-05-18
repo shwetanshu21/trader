@@ -289,6 +289,14 @@ export class DashboardReadModel {
           reasons: reasons.map(r => r.reasonMessage),
           hybrid: hybrid ? this._toHybridEvidence(hybrid) : null,
           indiaResearchEvidence: d.indiaResearchEvidence,
+          executionClass: d.executionClass,
+          segment: d.segment,
+          instrumentType: d.instrumentType,
+          expiry: d.expiry,
+          strike: d.strike,
+          lotSize: d.lotSize,
+          tickSize: d.tickSize,
+          freezeQuantity: d.freezeQuantity,
         };
       });
     } catch {

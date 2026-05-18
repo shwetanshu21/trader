@@ -10,6 +10,7 @@ import {
   type StrategyDecisionRow,
   type NewStrategyDecision,
   type StrategyDecisionReason,
+  type ExecutionClass,
 } from '../types/runtime.js';
 import type {
   StrategyEvaluationInput,
@@ -38,6 +39,47 @@ export interface StrategyRiskServiceOptions {
   proposalRepo?: ProposalRepository;
   strategyRunRepo?: StrategyRunRepository;
   policy?: IndiaStrategyPolicyConfig;
+}
+
+/**
+ * Derive execution-class metadata from instrument record.
+ * Falls back to EQ defaults when instrument data is unavailable.
+ */
+function deriveExecutionClassMeta(instrument: import('../types/runtime.js').InstrumentRecord | null): {
+  executionClass: ExecutionClass;
+  segment: string;
+  instrumentType: string;
+  expiry: string | null;
+  strike: number | null;
+  lotSize: number;
+  tickSize: number;
+  freezeQuantity: number | null;
+} {
+  if (!instrument) {
+    return {
+      executionClass: 'EQ',
+      segment: 'NSE',
+      instrumentType: 'EQ',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
+    };
+  }
+
+  const executionClass: ExecutionClass = instrument.segment === 'NFO' ? 'FO' : 'EQ';
+
+  return {
+    executionClass,
+    segment: instrument.segment,
+    instrumentType: instrument.instrumentType,
+    expiry: instrument.expiry,
+    strike: instrument.strike,
+    lotSize: instrument.lotSize,
+    tickSize: instrument.tickSize,
+    freezeQuantity: instrument.freezeQuantity,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +146,7 @@ export class StrategyRiskService implements StrategyRiskPort {
     });
 
     if (!evaluation.approved) {
+      const execMeta = deriveExecutionClassMeta(instrument);
       return {
         decision: {
           proposalAttemptId: input.proposalAttemptId,
@@ -130,11 +173,13 @@ export class StrategyRiskService implements StrategyRiskPort {
           riskStopDistance: null,
           riskExposureTag: null,
           indiaResearchEvidence: researchEvidence,
+          ...execMeta,
         },
         reasons: evaluation.reasons,
       };
     }
 
+    const execMeta = deriveExecutionClassMeta(instrument);
     return {
       decision: {
         proposalAttemptId: input.proposalAttemptId,
@@ -161,6 +206,7 @@ export class StrategyRiskService implements StrategyRiskPort {
         riskStopDistance: evaluation.riskStopDistance,
         riskExposureTag: evaluation.riskExposureTag,
         indiaResearchEvidence: researchEvidence,
+        ...execMeta,
       },
       reasons: [],
     };
@@ -323,6 +369,7 @@ export class StrategyRiskService implements StrategyRiskPort {
     });
 
     if (!evaluation.approved) {
+      const execMeta = deriveExecutionClassMeta(instrument);
       const decision: NewStrategyDecision = {
         proposalAttemptId: input.proposalAttemptId,
         decisionStatus: StrategyDecisionStatus.Refused,
@@ -348,11 +395,13 @@ export class StrategyRiskService implements StrategyRiskPort {
         riskStopDistance: null,
         riskExposureTag: null,
         indiaResearchEvidence: researchEvidence,
+        ...execMeta,
       };
 
       return this._strategyRepo.insertDecisionWithReasons(decision, evaluation.reasons);
     }
 
+    const execMeta = deriveExecutionClassMeta(instrument);
     const decision: NewStrategyDecision = {
       proposalAttemptId: input.proposalAttemptId,
       decisionStatus: StrategyDecisionStatus.Approved,
@@ -378,6 +427,7 @@ export class StrategyRiskService implements StrategyRiskPort {
       riskStopDistance: evaluation.riskStopDistance,
       riskExposureTag: evaluation.riskExposureTag,
       indiaResearchEvidence: researchEvidence,
+      ...execMeta,
     };
 
     return this._strategyRepo.insertDecisionWithReasons(decision, []);

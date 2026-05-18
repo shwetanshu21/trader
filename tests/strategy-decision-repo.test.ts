@@ -76,6 +76,14 @@ function sampleApprovedDecision(
     riskMaxLossRupees: 10689.38,
     riskStopDistance: null,
     riskExposureTag: 'intraday',
+    executionClass: 'EQ',
+    segment: 'NSE',
+    instrumentType: 'EQ',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
     ...overrides,
   };
 }
@@ -108,6 +116,14 @@ function sampleRefusedDecision(
     riskMaxLossRupees: null,
     riskStopDistance: null,
     riskExposureTag: null,
+    executionClass: 'EQ',
+    segment: 'NSE',
+    instrumentType: 'EQ',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
     ...overrides,
   };
 }
@@ -603,8 +619,165 @@ describe('StrategyDecisionRepository', () => {
   });
 
   // -----------------------------------------------------------------------
-  // India research evidence — decision-level persistence
+  // Execution-class metadata round-trips (S03)
   // -----------------------------------------------------------------------
+
+  describe('execution-class metadata (S03)', () => {
+    it('round-trips execution-class metadata for an EQ decision', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo);
+      const decision = sampleApprovedDecision(paId, {
+        executionClass: 'EQ',
+        segment: 'NSE',
+        instrumentType: 'EQ',
+        expiry: null,
+        strike: null,
+        lotSize: 1,
+        tickSize: 0.05,
+        freezeQuantity: null,
+      });
+
+      const inserted = strategyRepo.insertDecision(decision);
+      const loaded = strategyRepo.getDecisionById(inserted.id);
+
+      expect(loaded!.executionClass).toBe('EQ');
+      expect(loaded!.segment).toBe('NSE');
+      expect(loaded!.instrumentType).toBe('EQ');
+      expect(loaded!.expiry).toBeNull();
+      expect(loaded!.strike).toBeNull();
+      expect(loaded!.lotSize).toBe(1);
+      expect(loaded!.tickSize).toBe(0.05);
+      expect(loaded!.freezeQuantity).toBeNull();
+    });
+
+    it('round-trips execution-class metadata for an FO decision', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo, { tradingsymbol: 'NIFTY24DECFUT' });
+      const decision = sampleApprovedDecision(paId, {
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY24DECFUT',
+        executionClass: 'FO',
+        segment: 'NFO',
+        instrumentType: 'FUT',
+        expiry: '2024-12-26',
+        strike: null,
+        lotSize: 50,
+        tickSize: 5.0,
+        freezeQuantity: 500,
+      });
+
+      const inserted = strategyRepo.insertDecision(decision);
+      const loaded = strategyRepo.getDecisionById(inserted.id);
+
+      expect(loaded!.executionClass).toBe('FO');
+      expect(loaded!.segment).toBe('NFO');
+      expect(loaded!.instrumentType).toBe('FUT');
+      expect(loaded!.expiry).toBe('2024-12-26');
+      expect(loaded!.strike).toBeNull();
+      expect(loaded!.lotSize).toBe(50);
+      expect(loaded!.tickSize).toBe(5.0);
+      expect(loaded!.freezeQuantity).toBe(500);
+    });
+
+    it('round-trips execution-class metadata for an options decision', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo, { tradingsymbol: 'RELIANCE24DEC3000CE' });
+      const decision = sampleApprovedDecision(paId, {
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DEC3000CE',
+        executionClass: 'FO',
+        segment: 'NFO',
+        instrumentType: 'CE',
+        expiry: '2024-12-26',
+        strike: 3000,
+        lotSize: 500,
+        tickSize: 0.05,
+        freezeQuantity: 2500,
+      });
+
+      const inserted = strategyRepo.insertDecision(decision);
+      const loaded = strategyRepo.getDecisionById(inserted.id);
+
+      expect(loaded!.executionClass).toBe('FO');
+      expect(loaded!.segment).toBe('NFO');
+      expect(loaded!.instrumentType).toBe('CE');
+      expect(loaded!.expiry).toBe('2024-12-26');
+      expect(loaded!.strike).toBe(3000);
+      expect(loaded!.lotSize).toBe(500);
+      expect(loaded!.tickSize).toBe(0.05);
+      expect(loaded!.freezeQuantity).toBe(2500);
+    });
+
+    it('preserves execution-class metadata through getRecentDecisions', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo, { tradingsymbol: 'NIFTY_FUT' });
+      strategyRepo.insertDecision(sampleApprovedDecision(paId, {
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY_FUT',
+        executionClass: 'FO',
+        segment: 'NFO',
+        instrumentType: 'FUT',
+        expiry: '2024-12-26',
+        strike: null,
+        lotSize: 50,
+        tickSize: 5.0,
+        freezeQuantity: 500,
+      }));
+
+      const decisions = strategyRepo.getRecentDecisions();
+      expect(decisions.length).toBe(1);
+      expect(decisions[0].executionClass).toBe('FO');
+      expect(decisions[0].segment).toBe('NFO');
+      expect(decisions[0].instrumentType).toBe('FUT');
+      expect(decisions[0].lotSize).toBe(50);
+      expect(decisions[0].freezeQuantity).toBe(500);
+    });
+
+    it('preserves execution-class metadata in getApprovedUnconsumedCandidates', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo, { tradingsymbol: 'EQ_CANDIDATE' });
+      strategyRepo.insertDecision(sampleApprovedDecision(paId, {
+        tradingsymbol: 'EQ_CANDIDATE',
+        executionClass: 'EQ',
+        segment: 'NSE',
+        instrumentType: 'EQ',
+        lotSize: 1,
+        tickSize: 0.05,
+      }));
+
+      const candidates = strategyRepo.getApprovedUnconsumedCandidates();
+      expect(candidates.length).toBe(1);
+      expect(candidates[0].executionClass).toBe('EQ');
+      expect(candidates[0].segment).toBe('NSE');
+      expect(candidates[0].instrumentType).toBe('EQ');
+      expect(candidates[0].lotSize).toBe(1);
+      expect(candidates[0].tickSize).toBe(0.05);
+    });
+
+    it('preserves execution-class metadata through getDecisionByProposalAttemptId', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo, { tradingsymbol: 'FO_CANDIDATE' });
+      strategyRepo.insertDecision(sampleApprovedDecision(paId, {
+        exchange: 'NFO',
+        tradingsymbol: 'FO_CANDIDATE',
+        executionClass: 'FO',
+        segment: 'NFO',
+        instrumentType: 'PE',
+        expiry: '2024-12-26',
+        strike: 25000,
+        lotSize: 15,
+        tickSize: 1.25,
+        freezeQuantity: 300,
+      }));
+
+      const loaded = strategyRepo.getDecisionByProposalAttemptId(paId);
+      expect(loaded!.executionClass).toBe('FO');
+      expect(loaded!.segment).toBe('NFO');
+      expect(loaded!.instrumentType).toBe('PE');
+      expect(loaded!.strike).toBe(25000);
+      expect(loaded!.freezeQuantity).toBe(300);
+    });
+  });
 
   describe('India research evidence (decision-level)', () => {
     it('round-trips a decision with India research evidence', () => {

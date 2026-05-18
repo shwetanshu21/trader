@@ -790,6 +790,23 @@ export interface DashboardStrategyDecision {
    * Null-safe: older decisions without evidence render cleanly.
    */
   indiaResearchEvidence: IndiaResearchDecisionEvidence | null;
+  // ── Execution-class metadata (S03) ──
+  /** High-level execution class: 'EQ' or 'FO'. */
+  executionClass: string;
+  /** Market segment (e.g. 'NSE', 'NFO'). */
+  segment: string;
+  /** Instrument type (e.g. 'EQ', 'FUT', 'CE', 'PE'). */
+  instrumentType: string;
+  /** Expiry date in YYYY-MM-DD format, or null for EQ. */
+  expiry: string | null;
+  /** Strike price, or null for EQ. */
+  strike: number | null;
+  /** Lot size (1 for EQ). */
+  lotSize: number;
+  /** Tick size (minimum price increment). */
+  tickSize: number;
+  /** Freeze quantity from broker instrument master, or null when unavailable. */
+  freezeQuantity: number | null;
 }
 
 export type ZerodhaConfig = BrokerConfig;
@@ -877,6 +894,18 @@ export interface UniversePolicyConfig {
   /** Quote staleness in ms beyond which a quote is considered stale. */
   maxQuoteStalenessMs: number;
 }
+
+// ---------------------------------------------------------------------------
+// Execution class — distinguishes cash-equity (EQ) from F&O (FO) execution
+// ---------------------------------------------------------------------------
+
+/**
+ * High-level execution class that governs class-aware safeguards.
+ *
+ * - `EQ`: Cash-equity execution (NSE EQ segment).
+ * - `FO`: Futures & Options execution (NFO segment).
+ */
+export type ExecutionClass = 'EQ' | 'FO';
 
 // ---------------------------------------------------------------------------
 // Strategy decision — deterministic authority layer between proposal and execution
@@ -1003,6 +1032,24 @@ export interface StrategyDecisionRow {
   riskExposureTag: string | null;
   /** India research evidence — null when no research evidence influenced this decision. */
   indiaResearchEvidence: IndiaResearchDecisionEvidence | null;
+
+  // ── Execution-class metadata (S03) ──
+  /** High-level execution class: 'EQ' or 'FO'. */
+  executionClass: ExecutionClass;
+  /** Market segment (e.g. 'NSE', 'NFO'). */
+  segment: string;
+  /** Instrument type (e.g. 'EQ', 'FUT', 'CE', 'PE'). */
+  instrumentType: string;
+  /** Expiry date in YYYY-MM-DD format, or null for EQ. */
+  expiry: string | null;
+  /** Strike price, or null for EQ. */
+  strike: number | null;
+  /** Lot size (1 for EQ). */
+  lotSize: number;
+  /** Tick size (minimum price increment). */
+  tickSize: number;
+  /** Freeze quantity from broker instrument master, or null when unavailable. */
+  freezeQuantity: number | null;
 }
 
 /** Shape for inserting a new strategy decision (without id). */
@@ -1042,6 +1089,24 @@ export interface StrategyApprovedCandidate {
   // ── Risk summary ──
   notional: number | null;
   sizingBasis: string;
+
+  // ── Execution-class metadata (S03) ──
+  /** High-level execution class: 'EQ' or 'FO'. */
+  executionClass: ExecutionClass;
+  /** Market segment (e.g. 'NSE', 'NFO'). */
+  segment: string;
+  /** Instrument type (e.g. 'EQ', 'FUT', 'CE', 'PE'). */
+  instrumentType: string;
+  /** Expiry date in YYYY-MM-DD format, or null for EQ. */
+  expiry: string | null;
+  /** Strike price, or null for EQ. */
+  strike: number | null;
+  /** Lot size (1 for EQ). */
+  lotSize: number;
+  /** Tick size (minimum price increment). */
+  tickSize: number;
+  /** Freeze quantity from broker instrument master, or null when unavailable. */
+  freezeQuantity: number | null;
 }
 
 /**

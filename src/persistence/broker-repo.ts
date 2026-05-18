@@ -556,6 +556,7 @@ function mapInstrumentRow(row: InstrumentDbRow): InstrumentRecord {
     instrumentType: row.instrument_type as InstrumentRecord['instrumentType'],
     segment: row.segment as InstrumentRecord['segment'],
     exchangeToken: row.exchange_token,
+    freezeQuantity: null,
   };
 }
 

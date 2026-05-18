@@ -655,6 +655,16 @@ export class DatabaseManager {
     // Migrate S02 columns for India research evidence (idempotent — only adds if missing)
     this._migrateAddColumnIfNotExists('strategy_run_candidates', 'india_research_evidence', 'TEXT');
     this._migrateAddColumnIfNotExists('strategy_decisions', 'india_research_evidence', 'TEXT');
+
+    // Migrate S03 columns for execution-class metadata (idempotent)
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'execution_class', 'TEXT NOT NULL DEFAULT \'EQ\'');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'segment', 'TEXT NOT NULL DEFAULT \'NSE\'');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'instrument_type', 'TEXT NOT NULL DEFAULT \'EQ\'');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'expiry', 'TEXT');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'strike', 'REAL');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'lot_size', 'INTEGER NOT NULL DEFAULT 1');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'tick_size', 'REAL NOT NULL DEFAULT 0.05');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'freeze_quantity', 'INTEGER');
   }
 
   /** Add a column to a table only if it does not already exist. */

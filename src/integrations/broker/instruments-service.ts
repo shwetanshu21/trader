@@ -185,6 +185,7 @@ export class InstrumentsService {
       instrumentType,
       segment: segment as SupportedSegment,
       exchangeToken: Number.isFinite(exchangeToken) ? exchangeToken : 0,
+      freezeQuantity: null,
     };
   }
 

@@ -37,8 +37,9 @@ export class StrategyDecisionRepository {
          exchange, tradingsymbol, side, product, quantity, price, trigger_price, order_type,
          quote_last_price, quote_bid, quote_ask, quote_volume, quote_received_at,
          risk_notional, risk_sizing_basis, risk_max_loss_rupees, risk_stop_distance, risk_exposure_tag,
-         india_research_evidence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         india_research_evidence,
+         execution_class, segment, instrument_type, expiry, strike, lot_size, tick_size, freeze_quantity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -66,6 +67,14 @@ export class StrategyDecisionRepository {
       decision.riskStopDistance,
       decision.riskExposureTag,
       decision.indiaResearchEvidence ? JSON.stringify(decision.indiaResearchEvidence) : null,
+      decision.executionClass,
+      decision.segment,
+      decision.instrumentType,
+      decision.expiry,
+      decision.strike,
+      decision.lotSize,
+      decision.tickSize,
+      decision.freezeQuantity,
     );
 
     return {
@@ -94,6 +103,14 @@ export class StrategyDecisionRepository {
       riskStopDistance: decision.riskStopDistance,
       riskExposureTag: decision.riskExposureTag,
       indiaResearchEvidence: decision.indiaResearchEvidence,
+      executionClass: decision.executionClass,
+      segment: decision.segment,
+      instrumentType: decision.instrumentType,
+      expiry: decision.expiry,
+      strike: decision.strike,
+      lotSize: decision.lotSize,
+      tickSize: decision.tickSize,
+      freezeQuantity: decision.freezeQuantity,
     };
   }
 
@@ -225,6 +242,14 @@ export class StrategyDecisionRepository {
       ask: r.quote_ask,
       notional: r.risk_notional,
       sizingBasis: r.risk_sizing_basis,
+      executionClass: r.execution_class as any,
+      segment: r.segment,
+      instrumentType: r.instrument_type,
+      expiry: r.expiry,
+      strike: r.strike,
+      lotSize: r.lot_size,
+      tickSize: r.tick_size,
+      freezeQuantity: r.freeze_quantity,
     }));
   }
 
@@ -392,6 +417,14 @@ interface StrategyDecisionDbRow {
   risk_stop_distance: number | null;
   risk_exposure_tag: string | null;
   india_research_evidence: string | null;
+  execution_class: string;
+  segment: string;
+  instrument_type: string;
+  expiry: string | null;
+  strike: number | null;
+  lot_size: number;
+  tick_size: number;
+  freeze_quantity: number | null;
 }
 
 function mapDecisionRow(row: StrategyDecisionDbRow): StrategyDecisionRow {
@@ -423,5 +456,13 @@ function mapDecisionRow(row: StrategyDecisionDbRow): StrategyDecisionRow {
     indiaResearchEvidence: row.india_research_evidence
       ? JSON.parse(row.india_research_evidence)
       : null,
+    executionClass: row.execution_class as any,
+    segment: row.segment,
+    instrumentType: row.instrument_type,
+    expiry: row.expiry,
+    strike: row.strike,
+    lotSize: row.lot_size,
+    tickSize: row.tick_size,
+    freezeQuantity: row.freeze_quantity,
   };
 }
