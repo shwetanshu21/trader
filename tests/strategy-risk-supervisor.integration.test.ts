@@ -72,6 +72,15 @@ function createContext(): TestContext {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+        indiaResearchEvidence: null,
+        executionClass: 'EQ' as const,
+        segment: input.instrument?.segment ?? 'NSE',
+        instrumentType: input.instrument?.instrumentType ?? 'EQ',
+        expiry: input.instrument?.expiry ?? null,
+        strike: input.instrument?.strike ?? null,
+        lotSize: input.instrument?.lotSize ?? 1,
+        tickSize: input.instrument?.tickSize ?? 0.05,
+        freezeQuantity: input.instrument?.freezeQuantity ?? null,
       };
 
       const result: StrategyEvaluationResult = { decision, reasons: [] };
@@ -210,6 +219,15 @@ describe('StrategyRiskSupervisor', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+    indiaResearchEvidence: null,
+    executionClass: 'EQ' as const,
+    segment: 'NSE',
+    instrumentType: 'EQ',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
       });
 
       expect(ctx.strategyRepo.countDecisions()).toBe(1);
@@ -357,6 +375,15 @@ describe('StrategyRiskSupervisor', () => {
           riskMaxLossRupees: null,
           riskStopDistance: null,
           riskExposureTag: null,
+          indiaResearchEvidence: null,
+          executionClass: 'EQ' as const,
+          segment: 'NSE',
+          instrumentType: 'EQ',
+          expiry: null,
+          strike: null,
+          lotSize: 1,
+          tickSize: 0.05,
+          freezeQuantity: null,
         },
         reasons: refuseReasons,
       });
@@ -489,6 +516,15 @@ describe('StrategyRiskSupervisor', () => {
             riskMaxLossRupees: null,
             riskStopDistance: null,
             riskExposureTag: null,
+            indiaResearchEvidence: null,
+            executionClass: 'EQ' as const,
+            segment: 'NSE',
+            instrumentType: 'EQ',
+            expiry: null,
+            strike: null,
+            lotSize: 1,
+            tickSize: 0.05,
+            freezeQuantity: null,
           },
           reasons: [],
         };

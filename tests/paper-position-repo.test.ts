@@ -105,6 +105,15 @@ function insertFullPaperFlow(
     riskMaxLossRupees: null,
     riskStopDistance: null,
     riskExposureTag: 'intraday',
+    indiaResearchEvidence: null,
+    executionClass: 'EQ' as const,
+    segment: 'NSE',
+    instrumentType: 'EQ',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
   });
 
   const attRow = ctx.attemptRepo.insertAttempt({

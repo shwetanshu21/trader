@@ -637,12 +637,8 @@ describe('Universe Supervisor — integration', () => {
         instruments as any,
         brokerRepo,
         stream as any,
-        {
-          refreshSession: async () => ({ accessToken: 'mcp-session', reason: 'probe' }),
-          fetchInstrumentCatalog: async () => [],
-          hasCachedInstrumentKeys: () => true,
-        } as any,
       );
+      await supervisor.doWork(new Date(), minimalHealth());
       expect(subscribeCalls[0]?.length).toBe(seeded.length);
     });
   });

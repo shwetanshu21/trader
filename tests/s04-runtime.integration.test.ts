@@ -346,6 +346,15 @@ function approveAllAcceptedProposals(
       riskMaxLossRupees: null,
       riskStopDistance: null,
       riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: 'EQ' as const,
+      segment: 'NSE',
+      instrumentType: 'EQ',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
     };
     strategyDecisionRepo.insertDecision(decision);
   }
@@ -638,6 +647,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());
@@ -722,6 +740,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       // Since we pass null quote/instrument from the gate, paper policy will
@@ -823,6 +850,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: 147.50,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       // Run the gate — it should find the candidate and enrich with persisted data
@@ -945,6 +981,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());
@@ -1040,6 +1085,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: 147.50,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       // Tick 1: consume
@@ -1138,6 +1192,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: 147.50,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());
@@ -1248,6 +1311,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());
@@ -1356,6 +1428,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       // Gate should now consume it
@@ -1430,6 +1511,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());
@@ -1482,6 +1572,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());
@@ -1540,6 +1639,15 @@ describe('S04 Runtime — Execution gate composition', () => {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       await executionGate.doWork(new Date(), minimalHealth());
@@ -2248,6 +2356,15 @@ describe('RuntimeApp-root witnesses', () => {
         riskMaxLossRupees: 147.50,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       // Verify hybrid score repo has no entry for this proposal
@@ -2341,6 +2458,15 @@ describe('RuntimeApp-root witnesses', () => {
         riskMaxLossRupees: 195.00,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       // Dashboard should show hybrid null for the manual decision
@@ -2595,6 +2721,15 @@ describe('RuntimeApp-root witnesses', () => {
         riskMaxLossRupees: 145.00,
         riskStopDistance: null,
         riskExposureTag: 'intraday',
+      indiaResearchEvidence: null,
+      executionClass: \'EQ\' as const,
+      segment: \'NSE\',
+      instrumentType: \'EQ\',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
       });
 
       const totalDecisions = h.strategyDecisionRepo!.countDecisions();

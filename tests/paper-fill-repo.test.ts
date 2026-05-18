@@ -93,6 +93,15 @@ function insertApprovedDecision(
     riskMaxLossRupees: 10689.38,
     riskStopDistance: null,
     riskExposureTag: 'intraday',
+    indiaResearchEvidence: null,
+    executionClass: 'EQ' as const,
+    segment: 'NSE',
+    instrumentType: 'EQ',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
   });
   return row.id;
 }
