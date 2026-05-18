@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RuntimeApp } from '../src/runtime/runtime-app.js';
+import { RuntimeApp, type RuntimeAppHandles } from '../src/runtime/runtime-app.js';
 import { ExecutionMode, type RuntimeConfig } from '../src/types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -568,5 +568,493 @@ describe('S05 Runtime — risk guard integration', () => {
     const handles = app.build();
     // Risk guard is always created when proposal engine is configured
     expect(handles.executionGateSupervisor!.hasRiskGuard).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S05 — FO dashboard evidence through shared runtime seam
+// ---------------------------------------------------------------------------
+// Proves that operator-visible dashboard/runtime evidence can show FO
+// execution class, FO symbols, and paper-ledger state through existing
+// read models instead of a new view.
+
+describe('S05 Runtime — FO dashboard evidence', () => {
+  let app: RuntimeApp;
+
+  afterEach(() => {
+    try { app?.stop('Teardown'); } catch { /* ignore */ }
+  });
+
+  function buildApp(): RuntimeAppHandles {
+    app = new RuntimeApp(testConfig({
+      port: 0,
+      proposalEngine: {
+        providerMode: 'custom',
+        providerUrl: 'http://localhost:9999/v1/proposals',
+        timeoutMs: 5000,
+        maxProposalsPerTick: 1,
+      },
+      execution: {
+        mode: ExecutionMode.Paper,
+        maxRetries: 0,
+        riskLimits: {
+          maxOpenPositions: 5,
+          maxOrdersPerInstrument: 1,
+          maxDailyLossRupees: 20000,
+          maxExposureRupees: 500000,
+          marketHoursStalenessMs: 120000,
+        },
+      },
+    }));
+    return app.build();
+  }
+
+  it('dashboard snapshot shows empty FO evidence when no FO activity exists', () => {
+    const handles = buildApp();
+    const snapshot = handles.dashboard.getSnapshot();
+
+    // Strategy decisions block exists and is empty
+    expect(snapshot.recentStrategyDecisions).toEqual([]);
+
+    // Execution evidence exists with zero FO counts
+    expect(snapshot.execution).not.toBeNull();
+    expect(snapshot.execution!.totalAttempts).toBe(0);
+    expect(snapshot.execution!.totalOrders).toBe(0);
+    expect(snapshot.execution!.totalFills).toBe(0);
+    expect(snapshot.execution!.openPositionCount).toBe(0);
+    expect(snapshot.execution!.recentPaperOrders).toEqual([]);
+    expect(snapshot.execution!.recentPaperFills).toEqual([]);
+    expect(snapshot.execution!.currentPositions).toEqual([]);
+    expect(snapshot.execution!.recentPositionEvents).toEqual([]);
+  });
+
+  it('strategy decision with FO execution class appears in dashboard decisions', () => {
+    const handles = buildApp();
+
+    // Seed a proposal row first (required FK)
+    const proposalId = handles.proposalRepo!.insertAttempt({
+      exchange: 'NFO',
+      tradingsymbol: 'NIFTY24DECFUT',
+      instrumentToken: 26000,
+      side: 'buy',
+      product: 'NRML',
+      quantity: 300,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      tag: null,
+      proposalStatus: 'accepted' as any,
+      createdAt: Date.now() - 120_000,
+    }).id;
+
+    // Seed an FO strategy decision
+    const decision = handles.strategyDecisionRepo!.insertDecision({
+      proposalAttemptId: proposalId,
+      decisionStatus: 'approved' as any,
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      decidedAt: Date.now() - 60_000,
+      exchange: 'NFO',
+      tradingsymbol: 'NIFTY24DECFUT',
+      side: 'buy',
+      product: 'NRML',
+      quantity: 300,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 21500.00,
+      quoteBid: 21480.00,
+      quoteAsk: 21500.50,
+      quoteVolume: 50000,
+      quoteReceivedAt: Date.now() - 5000,
+      riskNotional: 6450000,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 322500,
+      riskStopDistance: null,
+      riskExposureTag: 'intraday',
+      executionClass: 'FO',
+      segment: 'NFO',
+      instrumentType: 'FUT',
+      expiry: '2024-12-26',
+      strike: null,
+      lotSize: 50,
+      tickSize: 0.05,
+      freezeQuantity: 1500,
+    });
+
+    // Verify through dashboard snapshot
+    const snapshot = handles.dashboard.getSnapshot();
+    expect(snapshot.recentStrategyDecisions).toHaveLength(1);
+
+    const sd = snapshot.recentStrategyDecisions[0];
+    expect(sd.executionClass).toBe('FO');
+    expect(sd.exchange).toBe('NFO');
+    expect(sd.tradingsymbol).toBe('NIFTY24DECFUT');
+    expect(sd.segment).toBe('NFO');
+    expect(sd.instrumentType).toBe('FUT');
+    expect(sd.lotSize).toBe(50);
+    expect(sd.tickSize).toBe(0.05);
+    expect(sd.freezeQuantity).toBe(1500);
+    expect(sd.expiry).toBe('2024-12-26');
+    expect(sd.strike).toBeNull();
+  });
+
+  it('dashboard evidence shows FO paper order from the shared ledger seam', () => {
+    const handles = buildApp();
+    const now = Date.now();
+
+    // Seed proposal + FO strategy decision
+    const proposal = handles.proposalRepo!.insertAttempt({
+      exchange: 'NFO',
+      tradingsymbol: 'BANKNIFTY24DECFUT',
+      instrumentToken: 26001,
+      side: 'buy',
+      product: 'NRML',
+      quantity: 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      tag: null,
+      proposalStatus: 'accepted' as any,
+      createdAt: now - 120_000,
+    });
+
+    const decision = handles.strategyDecisionRepo!.insertDecision({
+      proposalAttemptId: proposal.id,
+      decisionStatus: 'approved' as any,
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      decidedAt: now - 60_000,
+      exchange: 'NFO',
+      tradingsymbol: 'BANKNIFTY24DECFUT',
+      side: 'buy',
+      product: 'NRML',
+      quantity: 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 48500.00,
+      quoteBid: 48480.00,
+      quoteAsk: 48520.00,
+      quoteVolume: 25000,
+      quoteReceivedAt: now - 5000,
+      riskNotional: 3637500,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 181875,
+      riskStopDistance: null,
+      riskExposureTag: 'intraday',
+      executionClass: 'FO',
+      segment: 'NFO',
+      instrumentType: 'FUT',
+      expiry: '2024-12-26',
+      strike: null,
+      lotSize: 25,
+      tickSize: 0.05,
+      freezeQuantity: 750,
+    });
+
+    // Seed execution attempt (completed, paper)
+    const attempt = handles.executionAttemptRepo!.insertAttempt({
+      strategyDecisionId: decision.id,
+      executionMode: ExecutionMode.Paper,
+      status: 'completed' as any,
+      outcomeCode: 'paper_simulated' as any,
+      brokerOrderId: 'paper-fo-dash-001',
+      message: 'Paper buy 75 BANKNIFTY24DECFUT at 48500 (ask=48520, last=48500)',
+      attemptedAt: now,
+      completedAt: now,
+    });
+
+    // Seed paper order
+    const order = handles.orderRepo!.insert({
+      executionAttemptId: attempt.id,
+      exchange: 'NFO',
+      tradingsymbol: 'BANKNIFTY24DECFUT',
+      side: 'buy',
+      product: 'NRML',
+      quantity: 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      tag: null,
+      status: 'filled' as any,
+      brokerOrderId: 'paper-fo-dash-001',
+      createdAt: now,
+      updatedAt: null,
+    });
+
+    // Seed paper fill
+    handles.fillRepo!.insert({
+      paperOrderId: order.id,
+      executionAttemptId: attempt.id,
+      exchange: 'NFO',
+      tradingsymbol: 'BANKNIFTY24DECFUT',
+      side: 'buy',
+      product: 'NRML',
+      filledQuantity: 75,
+      filledPrice: 48500.00,
+      brokerOrderId: 'paper-fo-dash-001',
+      filledAt: now,
+    });
+
+    // Seed position event and position
+    handles.positionRepo!.insertEvent({
+      paperOrderId: order.id,
+      paperFillId: 1, // Will be assigned by DB
+      executionAttemptId: attempt.id,
+      eventType: 'open' as any,
+      exchange: 'NFO',
+      tradingsymbol: 'BANKNIFTY24DECFUT',
+      product: 'NRML',
+      quantityDelta: 75,
+      price: 48500.00,
+      previousQuantity: 0,
+      previousAvgCost: 0,
+      newQuantity: 75,
+      newAvgCost: 48500.00,
+      realizedPnl: 0,
+      createdAt: now,
+    });
+
+    handles.positionRepo!.upsertPosition({
+      exchange: 'NFO',
+      tradingsymbol: 'BANKNIFTY24DECFUT',
+      product: 'NRML',
+      side: 'long' as any,
+      quantity: 75,
+      avgCostPrice: 48500.00,
+      realizedPnl: 0,
+      updatedAt: now,
+    });
+
+    // Verify dashboard snapshot carries FO paper evidence
+    const snapshot = handles.dashboard.getSnapshot();
+
+    expect(snapshot.execution!.totalAttempts).toBe(1);
+    expect(snapshot.execution!.totalOrders).toBe(1);
+    expect(snapshot.execution!.totalFills).toBe(1);
+    expect(snapshot.execution!.openPositionCount).toBe(1);
+
+    // Paper order carries FO metadata
+    expect(snapshot.execution!.recentPaperOrders).toHaveLength(1);
+    const po = snapshot.execution!.recentPaperOrders[0];
+    expect(po.exchange).toBe('NFO');
+    expect(po.tradingsymbol).toBe('BANKNIFTY24DECFUT');
+    expect(po.side).toBe('buy');
+    expect(po.product).toBe('NRML');
+    expect(po.quantity).toBe(75);
+
+    // Paper fill carries FO metadata
+    expect(snapshot.execution!.recentPaperFills).toHaveLength(1);
+    const pf = snapshot.execution!.recentPaperFills[0];
+    expect(pf.exchange).toBe('NFO');
+    expect(pf.tradingsymbol).toBe('BANKNIFTY24DECFUT');
+    expect(pf.side).toBe('buy');
+    expect(pf.filledQuantity).toBe(75);
+    expect(pf.filledPrice).toBe(48500.00);
+
+    // Current position carries FO metadata
+    expect(snapshot.execution!.currentPositions).toHaveLength(1);
+    const pos = snapshot.execution!.currentPositions[0];
+    expect(pos.exchange).toBe('NFO');
+    expect(pos.tradingsymbol).toBe('BANKNIFTY24DECFUT');
+    expect(pos.product).toBe('NRML');
+    expect(pos.quantity).toBe(75);
+    expect(pos.avgCostPrice).toBe(48500.00);
+
+    // Position event carries FO metadata
+    expect(snapshot.execution!.recentPositionEvents).toHaveLength(1);
+    const ev = snapshot.execution!.recentPositionEvents[0];
+    expect(ev.exchange).toBe('NFO');
+    expect(ev.tradingsymbol).toBe('BANKNIFTY24DECFUT');
+    expect(ev.product).toBe('NRML');
+    expect(ev.quantityDelta).toBe(75);
+    expect(ev.newQuantity).toBe(75);
+
+    // Recent strategy decision carries FO class
+    expect(snapshot.recentStrategyDecisions).toHaveLength(1);
+    expect(snapshot.recentStrategyDecisions[0].executionClass).toBe('FO');
+  });
+
+  it('dashboard evidence shows FO paper state via getStrategyEvidence()', () => {
+    const handles = buildApp();
+    const now = Date.now();
+
+    // Seed an FO strategy decision (approved)
+    const proposal = handles.proposalRepo!.insertAttempt({
+      exchange: 'NFO',
+      tradingsymbol: 'NIFTY24DECFUT',
+      instrumentToken: 26000,
+      side: 'buy',
+      product: 'NRML',
+      quantity: 300,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      tag: null,
+      proposalStatus: 'accepted' as any,
+      createdAt: now - 120_000,
+    });
+
+    handles.strategyDecisionRepo!.insertDecision({
+      proposalAttemptId: proposal.id,
+      decisionStatus: 'approved' as any,
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      decidedAt: now - 60_000,
+      exchange: 'NFO',
+      tradingsymbol: 'NIFTY24DECFUT',
+      side: 'buy',
+      product: 'NRML',
+      quantity: 300,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 21500.00,
+      quoteBid: 21480.00,
+      quoteAsk: 21500.50,
+      quoteVolume: 50000,
+      quoteReceivedAt: now - 5000,
+      riskNotional: 6450000,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 322500,
+      riskStopDistance: null,
+      riskExposureTag: 'intraday',
+      executionClass: 'FO',
+      segment: 'NFO',
+      instrumentType: 'FUT',
+      expiry: '2024-12-26',
+      strike: null,
+      lotSize: 50,
+      tickSize: 0.05,
+      freezeQuantity: 1500,
+    });
+
+    // Verify via getStrategyEvidence
+    const evidence = handles.dashboard.getStrategyEvidence();
+    expect(evidence.totalDecisions).toBe(1);
+    expect(evidence.approvedCount).toBe(1);
+    expect(evidence.refusedCount).toBe(0);
+    expect(evidence.recentDecisions).toHaveLength(1);
+    expect(evidence.recentDecisions[0].executionClass).toBe('FO');
+    expect(evidence.recentDecisions[0].exchange).toBe('NFO');
+  });
+
+  it('dashboard evidence distinguishes FO from EQ in a mixed scenario', () => {
+    const handles = buildApp();
+    const now = Date.now();
+
+    // Seed an EQ decision
+    const eqProposal = handles.proposalRepo!.insertAttempt({
+      exchange: 'NSE',
+      tradingsymbol: 'RELIANCE',
+      instrumentToken: 123456,
+      side: 'buy',
+      product: 'MIS',
+      quantity: 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      tag: null,
+      proposalStatus: 'accepted' as any,
+      createdAt: now - 120_000,
+    });
+
+    handles.strategyDecisionRepo!.insertDecision({
+      proposalAttemptId: eqProposal.id,
+      decisionStatus: 'approved' as any,
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      decidedAt: now - 60_000,
+      exchange: 'NSE',
+      tradingsymbol: 'RELIANCE',
+      side: 'buy',
+      product: 'MIS',
+      quantity: 75,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 2850.50,
+      quoteBid: 2850.00,
+      quoteAsk: 2851.00,
+      quoteVolume: 1250000,
+      quoteReceivedAt: now - 5000,
+      riskNotional: 213787.50,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 10689.38,
+      riskStopDistance: null,
+      riskExposureTag: 'intraday',
+      executionClass: 'EQ',
+      segment: 'NSE',
+      instrumentType: 'EQ',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
+    });
+
+    // Seed an FO decision
+    const foProposal = handles.proposalRepo!.insertAttempt({
+      exchange: 'NFO',
+      tradingsymbol: 'NIFTY24DECFUT',
+      instrumentToken: 26000,
+      side: 'buy',
+      product: 'NRML',
+      quantity: 300,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      tag: null,
+      proposalStatus: 'accepted' as any,
+      createdAt: now - 60_000,
+    });
+
+    handles.strategyDecisionRepo!.insertDecision({
+      proposalAttemptId: foProposal.id,
+      decisionStatus: 'approved' as any,
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      decidedAt: now - 30_000,
+      exchange: 'NFO',
+      tradingsymbol: 'NIFTY24DECFUT',
+      side: 'buy',
+      product: 'NRML',
+      quantity: 300,
+      price: null,
+      triggerPrice: null,
+      orderType: 'MARKET',
+      quoteLastPrice: 21500.00,
+      quoteBid: 21480.00,
+      quoteAsk: 21500.50,
+      quoteVolume: 50000,
+      quoteReceivedAt: now - 5000,
+      riskNotional: 6450000,
+      riskSizingBasis: 'last_price',
+      riskMaxLossRupees: 322500,
+      riskStopDistance: null,
+      riskExposureTag: 'intraday',
+      executionClass: 'FO',
+      segment: 'NFO',
+      instrumentType: 'FUT',
+      expiry: '2024-12-26',
+      strike: null,
+      lotSize: 50,
+      tickSize: 0.05,
+      freezeQuantity: 1500,
+    });
+
+    // Verify dashboard shows both
+    const snapshot = handles.dashboard.getSnapshot();
+    expect(snapshot.recentStrategyDecisions).toHaveLength(2);
+
+    const classes = snapshot.recentStrategyDecisions.map(d => d.executionClass);
+    expect(classes).toContain('EQ');
+    expect(classes).toContain('FO');
+
+    // Verify counts via getStrategyEvidence
+    const evidence = handles.dashboard.getStrategyEvidence();
+    expect(evidence.totalDecisions).toBe(2);
+    expect(evidence.approvedCount).toBe(2);
   });
 });

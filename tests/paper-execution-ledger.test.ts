@@ -97,17 +97,21 @@ function seedCandidate(
     createdAt: NOW - 120_000,
   });
 
+  const side = overrides?.side ?? 'buy';
+  const quantity = overrides?.quantity ?? 75;
+  const exchange = overrides?.exchange ?? 'NSE';
+
   const decision = ctx.strategyRepo.insertDecision({
     proposalAttemptId: proposal.id,
     decisionStatus: StrategyDecisionStatus.Approved,
     strategyId: 'india-nse-eq-v1',
     strategyVersion: '1.0.0',
     decidedAt: NOW - 60_000,
-    exchange: overrides?.exchange ?? 'NSE',
+    exchange,
     tradingsymbol: overrides?.tradingsymbol ?? 'RELIANCE',
-    side: overrides?.side ?? 'buy',
+    side,
     product: overrides?.product ?? 'MIS',
-    quantity: overrides?.quantity ?? 75,
+    quantity,
     price: overrides?.price ?? null,
     triggerPrice: overrides?.triggerPrice ?? null,
     orderType: overrides?.orderType ?? 'MARKET',
@@ -121,6 +125,15 @@ function seedCandidate(
     riskMaxLossRupees: 10689.38,
     riskStopDistance: null,
     riskExposureTag: 'intraday',
+    // Required execution-class metadata (S03)
+    executionClass: 'EQ',
+    segment: exchange === 'NFO' ? 'NFO' : 'NSE',
+    instrumentType: exchange === 'NFO' ? 'FUT' : 'EQ',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
   });
 
   return {
@@ -142,6 +155,14 @@ function seedCandidate(
     ask: decision.quoteAsk,
     notional: decision.riskNotional,
     sizingBasis: decision.riskSizingBasis,
+    executionClass: decision.executionClass as 'EQ' | 'FO',
+    segment: decision.segment,
+    instrumentType: decision.instrumentType,
+    expiry: decision.expiry,
+    strike: decision.strike,
+    lotSize: decision.lotSize,
+    tickSize: decision.tickSize,
+    freezeQuantity: decision.freezeQuantity,
   };
 }
 
@@ -652,6 +673,192 @@ describe('PaperExecutionLedger', () => {
       expect(result.order.createdAt).toBe(result.attempt.attemptedAt);
       expect(result.fill.filledAt).toBe(result.attempt.attemptedAt);
       expect(result.positionEvent.createdAt).toBe(result.attempt.attemptedAt);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // FO paper ledger — FO fills through the shared ledger seam
+  // -----------------------------------------------------------------------
+  // The PaperExecutionLedger is class-agnostic — it writes any successful
+  // paper fill through the same multi-table transaction regardless of
+  // execution class. These tests prove FO symbols flow correctly through
+  // the shared ledger with NFO exchange metadata.
+
+  describe('FO paper ledger', () => {
+    /**
+     * Seed an FO candidate through the DB with NFO exchange metadata.
+     */
+    function seedFOCandidate(
+      ctx: TestContext,
+      overrides?: Partial<StrategyApprovedCandidate>,
+    ): StrategyApprovedCandidate {
+      return seedCandidate(ctx, {
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY24DECFUT',
+        side: 'buy',
+        product: 'NRML',
+        quantity: 300,   // 6 lots of 50
+        price: null,
+        orderType: 'MARKET',
+        ...overrides,
+      });
+    }
+
+    it('writes all downstream rows for FO buy fill with NFO exchange metadata', () => {
+      const ctx = createContext();
+      const candidate = seedFOCandidate(ctx, { quantity: 300 });
+      const evaluation = successEvaluation({
+        fillPrice: 21500.00,
+        simulatedBrokerOrderId: 'paper-fo-001',
+        message: 'Paper buy 300 NIFTY24DECFUT at 21500 (ask=21500.50, last=21500.00)',
+      });
+
+      const result = ctx.ledger.writeSuccessfulPaperFill(candidate, evaluation);
+
+      // Attempt carries correct strategy decision reference
+      expect(result.attempt.strategyDecisionId).toBe(candidate.id);
+      expect(result.attempt.status).toBe(ExecutionAttemptStatus.Completed);
+
+      // Order carries FO exchange and symbol
+      expect(result.order.exchange).toBe('NFO');
+      expect(result.order.tradingsymbol).toBe('NIFTY24DECFUT');
+      expect(result.order.side).toBe('buy');
+      expect(result.order.product).toBe('NRML');
+      expect(result.order.quantity).toBe(300);
+      expect(result.order.status).toBe(PaperOrderStatus.Filled);
+
+      // Fill carries FO exchange and symbol
+      expect(result.fill.exchange).toBe('NFO');
+      expect(result.fill.tradingsymbol).toBe('NIFTY24DECFUT');
+      expect(result.fill.side).toBe('buy');
+      expect(result.fill.filledQuantity).toBe(300);
+      expect(result.fill.filledPrice).toBe(21500.00);
+
+      // Position event carries FO exchange and symbol
+      expect(result.positionEvent.eventType).toBe(PositionEventType.Open);
+      expect(result.positionEvent.exchange).toBe('NFO');
+      expect(result.positionEvent.tradingsymbol).toBe('NIFTY24DECFUT');
+      expect(result.positionEvent.product).toBe('NRML');
+      expect(result.positionEvent.quantityDelta).toBe(300);
+      expect(result.positionEvent.newQuantity).toBe(300);
+      expect(result.positionEvent.newAvgCost).toBe(21500.00);
+
+      // Position projection carries FO metadata
+      expect(result.position.exchange).toBe('NFO');
+      expect(result.position.tradingsymbol).toBe('NIFTY24DECFUT');
+      expect(result.position.product).toBe('NRML');
+      expect(result.position.side).toBe(PositionSide.Long);
+      expect(result.position.quantity).toBe(300);
+      expect(result.position.avgCostPrice).toBe(21500.00);
+
+      // All downstream rows retrievable from repos
+      expect(ctx.orderRepo.getByExecutionAttemptId(result.attempt.id)).not.toBeNull();
+      expect(ctx.fillRepo.getByExecutionAttemptId(result.attempt.id)).not.toBeNull();
+      const events = ctx.positionRepo.getEventsByKey('NFO', 'NIFTY24DECFUT', 'NRML');
+      expect(events).toHaveLength(1);
+      expect(ctx.positionRepo.getPosition('NFO', 'NIFTY24DECFUT', 'NRML')).not.toBeNull();
+    });
+
+    it('writes all downstream rows for FO sell fill', () => {
+      const ctx = createContext();
+      const candidate = seedFOCandidate(ctx, {
+        tradingsymbol: 'BANKNIFTY24DECFUT',
+        side: 'sell',
+        product: 'NRML',
+        quantity: 75,   // 3 lots of 25
+      });
+      const evaluation = successEvaluation({
+        fillPrice: 48500.00,
+        simulatedBrokerOrderId: 'paper-fo-sell-001',
+        message: 'Paper sell 75 BANKNIFTY24DECFUT at 48500 (bid=48500.00, last=48510.00)',
+      });
+
+      const result = ctx.ledger.writeSuccessfulPaperFill(candidate, evaluation);
+
+      expect(result.order.exchange).toBe('NFO');
+      expect(result.order.tradingsymbol).toBe('BANKNIFTY24DECFUT');
+      expect(result.order.side).toBe('sell');
+      expect(result.order.quantity).toBe(75);
+
+      expect(result.fill.exchange).toBe('NFO');
+      expect(result.fill.side).toBe('sell');
+      expect(result.fill.filledQuantity).toBe(75);
+      expect(result.fill.filledPrice).toBe(48500.00);
+
+      // Sell opens a Short position
+      expect(result.positionEvent.eventType).toBe(PositionEventType.Open);
+      expect(result.positionEvent.quantityDelta).toBe(-75);
+      expect(result.positionEvent.newQuantity).toBe(-75);
+      expect(result.position.side).toBe(PositionSide.Short);
+      expect(result.position.quantity).toBe(-75);
+      expect(result.position.avgCostPrice).toBe(48500.00);
+    });
+
+    it('accumulates sequential FO fills correctly', () => {
+      const ctx = createContext();
+
+      // First FO buy: open long 300 at 21500
+      const c1 = seedFOCandidate(ctx, { quantity: 300 });
+      ctx.ledger.writeSuccessfulPaperFill(c1, successEvaluation({
+        fillPrice: 21500.00,
+        simulatedBrokerOrderId: 'paper-fo-b1',
+      }));
+
+      // Second FO buy: add 150 at 21600 → weighted avg = (300*21500 + 150*21600) / 450 = 21533.33
+      const c2 = seedFOCandidate(ctx, { quantity: 150 });
+      const r2 = ctx.ledger.writeSuccessfulPaperFill(c2, successEvaluation({
+        fillPrice: 21600.00,
+        simulatedBrokerOrderId: 'paper-fo-b2',
+      }));
+
+      expect(r2.positionEvent.eventType).toBe(PositionEventType.Adjust);
+      expect(r2.positionEvent.previousQuantity).toBe(300);
+      expect(r2.positionEvent.newQuantity).toBe(450);
+      expect(r2.positionEvent.newAvgCost).toBeCloseTo(21533.33, 2);
+
+      const pos = ctx.positionRepo.getPosition('NFO', 'NIFTY24DECFUT', 'NRML');
+      expect(pos!.quantity).toBe(450);
+      expect(pos!.avgCostPrice).toBeCloseTo(21533.33, 2);
+
+      // Count totals: 2 attempts, 2 orders, 2 fills, 2 events, 1 position
+      expect(ctx.attemptRepo.count()).toBe(2);
+      expect(ctx.orderRepo.count()).toBe(2);
+      expect(ctx.fillRepo.count()).toBe(2);
+      expect(ctx.positionRepo.countEvents()).toBe(2);
+      expect(ctx.positionRepo.countPositions()).toBe(1);
+      expect(ctx.positionRepo.countOpenPositions()).toBe(1);
+    });
+
+    it('partially closes FO long position with correct realized PnL', () => {
+      const ctx = createContext();
+
+      // Open: buy 300 at 21500
+      const c1 = seedFOCandidate(ctx, { quantity: 300 });
+      ctx.ledger.writeSuccessfulPaperFill(c1, successEvaluation({
+        fillPrice: 21500.00,
+        simulatedBrokerOrderId: 'paper-fo-open',
+      }));
+
+      // Partial sell: 100 at 21750 → realized PnL = (21750 - 21500) * 100 = 25,000
+      const c2 = seedFOCandidate(ctx, {
+        side: 'sell',
+        quantity: 100,
+        tradingsymbol: 'NIFTY24DECFUT',
+      });
+      const r2 = ctx.ledger.writeSuccessfulPaperFill(c2, successEvaluation({
+        fillPrice: 21750.00,
+        simulatedBrokerOrderId: 'paper-fo-reduce',
+      }));
+
+      expect(r2.positionEvent.eventType).toBe(PositionEventType.Adjust);
+      expect(r2.positionEvent.quantityDelta).toBe(-100);
+      expect(r2.positionEvent.previousQuantity).toBe(300);
+      expect(r2.positionEvent.newQuantity).toBe(200);
+      expect(r2.positionEvent.realizedPnl).toBeCloseTo(25000, 2); // (21750-21500)*100
+
+      const pos = ctx.positionRepo.getPosition('NFO', 'NIFTY24DECFUT', 'NRML');
+      expect(pos!.quantity).toBe(200);
+      expect(pos!.realizedPnl).toBeCloseTo(25000, 2);
     });
   });
 });

@@ -269,4 +269,127 @@ describe('PaperExecutionPolicy', () => {
       expect(result.message).toContain('RELIANCE');
     });
   });
+
+  // -----------------------------------------------------------------------
+  // FO paper evaluation — same path, FO symbols
+  // -----------------------------------------------------------------------
+  // FO candidates flow through the same paper evaluation path as EQ.
+  // The PaperExecutionPolicy has no FO-specific logic — it evaluates
+  // any candidate against quote/instrument data regardless of execution class.
+  // These tests prove FO symbols can fill through the shared seam.
+
+  describe('FO paper evaluation', () => {
+    it('evaluates FO limit buy that crosses ask as fillable', () => {
+      // FO buy LIMIT at 50, ask at 50.00 → fills (limit >= ask)
+      const candidate = sampleCandidate({
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DEC3000CE',
+        price: 50.00,
+        orderType: 'LIMIT',
+      });
+      const quote = sampleQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DEC3000CE',
+        ask: 50.00,
+        bid: 49.80,
+        lastPrice: 49.85,
+      });
+      const result = policy.evaluate(candidate, quote, sampleInstrument());
+      expect(result.canFill).toBe(true);
+      expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+      expect(result.refusalReasons).toHaveLength(0);
+      expect(result.fillPrice).toBeCloseTo(50.00);
+    });
+
+    it('refuses FO limit buy below ask', () => {
+      // FO buy LIMIT at 48.50, ask at 50.00 → no fill
+      const candidate = sampleCandidate({
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DEC3000CE',
+        price: 48.50,
+        orderType: 'LIMIT',
+      });
+      const quote = sampleQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DEC3000CE',
+        ask: 50.00,
+      });
+      const result = policy.evaluate(candidate, quote, sampleInstrument());
+      expect(result.canFill).toBe(false);
+      expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+    });
+
+    it('evaluates FO market buy with valid ask as fillable', () => {
+      const candidate = sampleCandidate({
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY24DECFUT',
+        price: null,
+        orderType: 'MARKET',
+      });
+      const quote = sampleQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY24DECFUT',
+        ask: 21500.00,
+        bid: 21480.00,
+        lastPrice: 21490.00,
+      });
+      const result = policy.evaluate(candidate, quote, sampleInstrument());
+      expect(result.canFill).toBe(true);
+      expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+      // Market buy uses ask price
+      expect(result.fillPrice).toBeCloseTo(21500.00);
+    });
+
+    it('evaluates FO market sell with valid bid as fillable', () => {
+      const candidate = sampleCandidate({
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY24DECFUT',
+        side: 'sell',
+        price: null,
+        orderType: 'MARKET',
+      });
+      const quote = sampleQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY24DECFUT',
+        bid: 21480.00,
+        ask: 21500.00,
+        lastPrice: 21490.00,
+      });
+      const result = policy.evaluate(candidate, quote, sampleInstrument());
+      expect(result.canFill).toBe(true);
+      expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+      // Market sell uses bid price
+      expect(result.fillPrice).toBeCloseTo(21480.00);
+    });
+
+    it('refuses FO candidate when quote is missing (same as EQ)', () => {
+      const candidate = sampleCandidate({
+        exchange: 'NFO',
+        tradingsymbol: 'BANKNIFTY24DECFUT',
+      });
+      const result = policy.evaluate(candidate, null, sampleInstrument());
+      expect(result.canFill).toBe(false);
+      expect(result.refusalReasons[0].reasonCode).toBe(ExecutionRefusalCode.StaleOrMissingQuote);
+    });
+
+    it('includes FO symbol in descriptive message on successful fill', () => {
+      const candidate = sampleCandidate({
+        exchange: 'NFO',
+        tradingsymbol: 'FINNIFTY24DEC24400PE',
+        price: 150.00,
+        orderType: 'LIMIT',
+      });
+      const quote = sampleQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'FINNIFTY24DEC24400PE',
+        ask: 148.00,
+        bid: 147.50,
+        lastPrice: 147.75,
+      });
+      const result = policy.evaluate(candidate, quote, sampleInstrument());
+      expect(result.canFill).toBe(true);
+      expect(result.message).toContain('FINNIFTY24DEC24400PE');
+      expect(result.message).toContain('ask=148');
+    });
+  });
 });
