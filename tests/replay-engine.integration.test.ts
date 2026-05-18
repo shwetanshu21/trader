@@ -74,6 +74,9 @@ const BASE_CANDIDATES: BoundedCandidate[] = [
     instrumentType: 'EQ',
     lotSize: 1,
     tickSize: 0.05,
+    expiry: null,
+    strike: null,
+    freezeQuantity: null,
   },
   {
     exchange: 'NSE',
@@ -87,6 +90,9 @@ const BASE_CANDIDATES: BoundedCandidate[] = [
     instrumentType: 'EQ',
     lotSize: 1,
     tickSize: 0.05,
+    expiry: null,
+    strike: null,
+    freezeQuantity: null,
   },
   {
     exchange: 'NSE',
@@ -100,6 +106,9 @@ const BASE_CANDIDATES: BoundedCandidate[] = [
     instrumentType: 'EQ',
     lotSize: 1,
     tickSize: 0.05,
+    expiry: null,
+    strike: null,
+    freezeQuantity: null,
   },
 ];
 

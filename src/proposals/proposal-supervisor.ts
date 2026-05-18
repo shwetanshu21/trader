@@ -530,6 +530,9 @@ export class ProposalSupervisor implements TickWork {
       instrumentType: instrument.instrumentType,
       lotSize: instrument.lotSize,
       tickSize: instrument.tickSize,
+      expiry: instrument.expiry,
+      strike: instrument.strike,
+      freezeQuantity: instrument.freezeQuantity,
     };
   }
 
@@ -756,6 +759,9 @@ export class ProposalSupervisor implements TickWork {
           instrumentType: evidence.candidate.instrumentType,
           lotSize: evidence.candidate.lotSize,
           tickSize: evidence.candidate.tickSize,
+          expiry: evidence.candidate.expiry,
+          strike: evidence.candidate.strike,
+          freezeQuantity: evidence.candidate.freezeQuantity,
           side: evidence.candidate.side,
           lastPrice: evidence.candidate.lastPrice,
           bid: evidence.candidate.bid,

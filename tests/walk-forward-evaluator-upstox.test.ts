@@ -10,6 +10,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DatabaseManager } from '../src/persistence/sqlite.js';
+import { StrategyRunRepository } from '../src/persistence/strategy-run-repo.js';
 import { WalkForwardEvaluator, type WalkForwardTrialConfig } from '../src/replay/walk-forward-evaluator.js';
 import { WalkForwardRepository } from '../src/persistence/walk-forward-repo.js';
 import { UpstoxRestClient } from '../src/upstox/upstox-rest-client.js';
@@ -17,6 +18,7 @@ import { UpstoxHistoricalDataProvider } from '../src/replay/upstox-historical-da
 import { WinnerSelector } from '../src/replay/winner-selection.js';
 import { ArtifactEmitter } from '../src/replay/artifact-emitter.js';
 import { ReplayClock } from '../src/replay/replay-clock.js';
+import type { NewStrategyRun, NewStrategyRunCandidate } from '../src/types/runtime.js';
 import {
   WalkForwardSelectionStrategy,
   WalkForwardSelectionResult,
@@ -886,6 +888,211 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
       // The evaluator should complete with a reasonable result
       expect(result.run.status).toBe('completed');
       expect(result.rankedCandidates.length).toBe(1); // 1 trial config
+
+      dbManager.close();
+    });
+  });
+
+  describe('FO instrument metadata', () => {
+    const FO_INSTRUMENTS = [
+      {
+        instrument_key: 'NSE_FO|26005',
+        exchange: 'NFO',
+        trading_symbol: 'NIFTY12JUN2524000CE',
+        instrument_type: 'CE',
+        lot_size: 50,
+        tick_size: 0.05,
+        expiry: 1749772800000,
+        strike_price: 24000,
+        freeze_quantity: 1500,
+      },
+      {
+        instrument_key: 'NSE_FO|26006',
+        exchange: 'NFO',
+        trading_symbol: 'NIFTY12JUN2524500CE',
+        instrument_type: 'CE',
+        lot_size: 50,
+        tick_size: 0.05,
+        expiry: 1749772800000,
+        strike_price: 24500,
+        freeze_quantity: 1500,
+      },
+      {
+        instrument_key: 'NSE_FO|26008',
+        exchange: 'NFO',
+        trading_symbol: 'NIFTY12JUN2524000PE',
+        instrument_type: 'PE',
+        lot_size: 50,
+        tick_size: 0.05,
+        expiry: 1749772800000,
+        strike_price: 24000,
+        freeze_quantity: 1500,
+      },
+    ];
+
+    it('data provider preserves FO expiry/strike/freezeQuantity when mapping candles to candidates', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const configPath = writeConfigFile(dir, FO_INSTRUMENTS);
+      const cacheDir = path.join(dir, 'cache');
+
+      const candles = new Map<string, Array<[number, number, number, number, number, number, number]>>();
+      for (const instr of FO_INSTRUMENTS) {
+        candles.set(
+          instr.instrument_key,
+          generateDeterministicCandles(SESSION_START_MS, SESSION_END_MS, 100, 50_000),
+        );
+      }
+
+      buildMockFetch(candles);
+
+      const restClient = new UpstoxRestClient();
+      const dataProvider = new UpstoxHistoricalDataProvider({
+        restClient,
+        configPath,
+        rangeStart: SESSION_START_MS,
+        rangeEnd: SESSION_END_MS,
+        cacheDir,
+        maxInstruments: 3,
+      });
+
+      // Trigger data loading and get candidates
+      const tick = { timestamp: SESSION_START_MS + 3_600_000, index: 1, label: 'test' };
+      const candidates = await dataProvider.getCandidates(tick);
+
+      // Verify we got 3 candidates with FO metadata
+      expect(candidates.length).toBe(3);
+
+      // Verify FO metadata is preserved for each candidate
+      const niftyCe = candidates.find(c => c.tradingsymbol === 'NIFTY12JUN2524000CE');
+      expect(niftyCe).toBeDefined();
+      expect(niftyCe!.instrumentType).toBe('CE');
+      expect(niftyCe!.lotSize).toBe(50);
+      expect(niftyCe!.expiry).toBe('2025-06-13'); // 1749772800000 → 2025-06-13
+      expect(niftyCe!.strike).toBe(24000);
+      expect(niftyCe!.freezeQuantity).toBe(1500);
+      expect(niftyCe!.exchange).toBe('NFO');
+
+      const niftyPe = candidates.find(c => c.tradingsymbol === 'NIFTY12JUN2524000PE');
+      expect(niftyPe).toBeDefined();
+      expect(niftyPe!.instrumentType).toBe('PE');
+      expect(niftyPe!.expiry).toBe('2025-06-13');
+      expect(niftyPe!.strike).toBe(24000);
+      expect(niftyPe!.freezeQuantity).toBe(1500);
+
+      // Verify EQ behavior unchanged — FO fields are null for EQ
+      // (All instruments here are FO, so we verify they all have metadata)
+      for (const c of candidates) {
+        expect(c.expiry).toBe('2025-06-13');
+        expect(c.strike).not.toBeNull();
+        expect(c.freezeQuantity).not.toBeNull();
+      }
+    });
+
+    it('FO metadata survives strategy-run persistence round-trip via repository', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const configPath = writeConfigFile(dir, FO_INSTRUMENTS);
+      const cacheDir = path.join(dir, 'cache');
+
+      const candles = new Map<string, Array<[number, number, number, number, number, number, number]>>();
+      for (const instr of FO_INSTRUMENTS) {
+        candles.set(
+          instr.instrument_key,
+          generateDeterministicCandles(SESSION_START_MS, SESSION_END_MS, 100, 50_000),
+        );
+      }
+
+      buildMockFetch(candles);
+
+      const dbManager = new DatabaseManager(':memory:');
+      const repo = new StrategyRunRepository(dbManager.db);
+      const restClient = new UpstoxRestClient();
+      const dataProvider = new UpstoxHistoricalDataProvider({
+        restClient,
+        configPath,
+        rangeStart: SESSION_START_MS,
+        rangeEnd: SESSION_END_MS,
+        cacheDir,
+        maxInstruments: 3,
+      });
+
+      // Get FO candidates from the data provider
+      const tick = { timestamp: SESSION_START_MS + 3_600_000, index: 1, label: 'test' };
+      const candidates = await dataProvider.getCandidates(tick);
+
+      // Create a strategy run with these candidates
+      const newRun: NewStrategyRun = {
+        frameworkConfig: JSON.stringify({ maxCandidates: 10, parallelPlugins: true }),
+        pluginsJson: JSON.stringify([{ id: 'test-plugin', name: 'Test', version: '1.0.0' }]),
+        pluginErrorsJson: null,
+        universeSnapshotId: null,
+        totalEvaluated: candidates.length,
+        hasPluginErrors: false,
+        durationMs: 100,
+        createdAt: Date.now(),
+      };
+
+      const newCandidates: NewStrategyRunCandidate[] = candidates.map((c, idx) => ({
+        strategyRunId: 0,
+        candidateKey: `${c.exchange}:${c.tradingsymbol}`,
+        rank: idx + 1,
+        exchange: c.exchange,
+        tradingsymbol: c.tradingsymbol,
+        instrumentToken: c.instrumentToken,
+        instrumentType: c.instrumentType,
+        lotSize: c.lotSize,
+        tickSize: c.tickSize,
+        expiry: c.expiry,
+        strike: c.strike,
+        freezeQuantity: c.freezeQuantity,
+        side: c.side,
+        lastPrice: c.lastPrice,
+        bid: c.bid,
+        ask: c.ask,
+        volume: c.volume,
+        scoresJson: JSON.stringify([]),
+        deterministicScore: 0.5,
+        llmScore: null,
+        llmStatus: null,
+        llmRationale: null,
+        mergedScore: 0.5,
+        mergePolicy: null,
+        proposalParamsJson: null,
+        pluginErrorsJson: null,
+        hasPluginErrors: false,
+        emitted: false,
+        proposalAttemptId: null,
+        indiaResearchEvidence: null,
+      }));
+
+      // Insert run with candidates
+      const runWithCandidates = repo.insertRunWithCandidates(newRun, newCandidates);
+
+      // Verify the run was inserted
+      expect(runWithCandidates.id).toBeGreaterThan(0);
+      expect(runWithCandidates.candidates.length).toBe(3);
+
+      // Retrieve by id and verify FO metadata survived round-trip
+      const retrieved = repo.getRunById(runWithCandidates.id);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved!.candidates.length).toBe(3);
+
+      const retrievedCe = retrieved!.candidates.find(c => c.tradingsymbol === 'NIFTY12JUN2524000CE');
+      expect(retrievedCe).toBeDefined();
+      expect(retrievedCe!.expiry).toBe('2025-06-13');
+      expect(retrievedCe!.strike).toBe(24000);
+      expect(retrievedCe!.freezeQuantity).toBe(1500);
+      expect(retrievedCe!.instrumentType).toBe('CE');
+      expect(retrievedCe!.lotSize).toBe(50);
+      expect(retrievedCe!.exchange).toBe('NFO');
+
+      // Verify EQ-like candidates (if any) still have null FO fields — all FO here, so non-null
+      for (const c of retrieved!.candidates) {
+        expect(c.expiry).toBeTruthy();
+        expect(c.strike).not.toBeNull();
+        expect(c.freezeQuantity).not.toBeNull();
+      }
 
       dbManager.close();
     });

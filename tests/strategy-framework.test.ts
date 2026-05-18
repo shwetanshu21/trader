@@ -34,6 +34,9 @@ function makeCandidate(overrides?: Partial<BoundedCandidate>): BoundedCandidate 
     instrumentType: 'EQ',
     lotSize: 1,
     tickSize: 0.05,
+    expiry: null,
+    strike: null,
+    freezeQuantity: null,
     ...overrides,
   };
 }

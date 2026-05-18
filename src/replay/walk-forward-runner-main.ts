@@ -79,14 +79,17 @@ function createFixtureCandidates(): BoundedCandidate[] {
     {
       exchange: 'NSE', tradingsymbol: 'RELIANCE', instrumentToken: 738561, side: 'buy',
       lastPrice: 2450.5, bid: 2450, ask: 2451, volume: 1_250_000, instrumentType: 'EQ', lotSize: 1, tickSize: 0.05,
+      expiry: null, strike: null, freezeQuantity: null,
     },
     {
       exchange: 'NSE', tradingsymbol: 'TCS', instrumentToken: 2953217, side: 'buy',
       lastPrice: 3890, bid: 3889.5, ask: 3890.5, volume: 850_000, instrumentType: 'EQ', lotSize: 1, tickSize: 0.05,
+      expiry: null, strike: null, freezeQuantity: null,
     },
     {
       exchange: 'NSE', tradingsymbol: 'HDFCBANK', instrumentToken: 341249, side: 'buy',
       lastPrice: 1680.25, bid: 1680, ask: 1680.5, volume: 2_100_000, instrumentType: 'EQ', lotSize: 1, tickSize: 0.05,
+      expiry: null, strike: null, freezeQuantity: null,
     },
   ];
 }

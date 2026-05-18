@@ -472,6 +472,9 @@ CREATE TABLE IF NOT EXISTS strategy_run_candidates (
   instrument_type       TEXT    NOT NULL DEFAULT 'EQ',
   lot_size              INTEGER NOT NULL DEFAULT 1,
   tick_size             REAL    NOT NULL DEFAULT 0.05,
+  expiry                TEXT,
+  strike                REAL,
+  freeze_quantity       INTEGER,
   side                  TEXT    NOT NULL,
   last_price            REAL,
   bid                   REAL,
@@ -655,6 +658,11 @@ export class DatabaseManager {
     // Migrate S02 columns for India research evidence (idempotent — only adds if missing)
     this._migrateAddColumnIfNotExists('strategy_run_candidates', 'india_research_evidence', 'TEXT');
     this._migrateAddColumnIfNotExists('strategy_decisions', 'india_research_evidence', 'TEXT');
+
+    // Migrate S05 columns for FO instrument metadata (idempotent)
+    this._migrateAddColumnIfNotExists('strategy_run_candidates', 'expiry', 'TEXT');
+    this._migrateAddColumnIfNotExists('strategy_run_candidates', 'strike', 'REAL');
+    this._migrateAddColumnIfNotExists('strategy_run_candidates', 'freeze_quantity', 'INTEGER');
 
     // Migrate S03 columns for execution-class metadata (idempotent)
     this._migrateAddColumnIfNotExists('strategy_decisions', 'execution_class', 'TEXT NOT NULL DEFAULT \'EQ\'');

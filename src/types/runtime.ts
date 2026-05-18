@@ -1879,6 +1879,12 @@ export interface StrategyRunCandidateRow {
   lotSize: number;
   /** Tick size (minimum price increment). */
   tickSize: number;
+  /** Expiry date in YYYY-MM-DD format, or null for EQ. */
+  expiry: string | null;
+  /** Strike price, or null for EQ. */
+  strike: number | null;
+  /** Freeze quantity from broker instrument master, or null when unavailable. */
+  freezeQuantity: number | null;
   /** Trade side determined by upstream context. */
   side: string;
   /** Last traded price, or null. */
@@ -1976,6 +1982,12 @@ export interface BoundedCandidate {
   lotSize: number;
   /** Tick size (minimum price increment). */
   tickSize: number;
+  /** Expiry date in YYYY-MM-DD format, or null for EQ. */
+  expiry: string | null;
+  /** Strike price, or null for EQ. */
+  strike: number | null;
+  /** Freeze quantity from broker instrument master, or null when unavailable. */
+  freezeQuantity: number | null;
 }
 
 /**

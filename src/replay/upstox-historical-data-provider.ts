@@ -23,6 +23,12 @@ interface InstrumentRecord {
   instrument_type: string;
   lot_size: number;
   tick_size: number;
+  /** Expiry as unix timestamp ms (NFO only, null/absent for EQ). */
+  expiry?: number;
+  /** Strike price (NFO only, null/absent for EQ). */
+  strike_price?: number;
+  /** Freeze quantity from broker instrument master, or null when unavailable. */
+  freeze_quantity?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +158,9 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
         instrumentType: instrument.instrument_type,
         lotSize: instrument.lot_size,
         tickSize: instrument.tick_size,
+        expiry: instrument.expiry != null ? new Date(instrument.expiry).toISOString().slice(0, 10) : null,
+        strike: instrument.strike_price ?? null,
+        freezeQuantity: instrument.freeze_quantity ?? null,
       });
     }
 

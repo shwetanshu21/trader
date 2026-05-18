@@ -34,6 +34,9 @@ interface StrategyRunCandidateDbRow {
   instrument_type: string;
   lot_size: number;
   tick_size: number;
+  expiry: string | null;
+  strike: number | null;
+  freeze_quantity: number | null;
   side: string;
   last_price: number | null;
   bid: number | null;
@@ -105,7 +108,7 @@ export class StrategyRunRepository {
         INSERT INTO strategy_run_candidates
           (strategy_run_id, candidate_key, rank,
            exchange, tradingsymbol, instrument_token, instrument_type,
-           lot_size, tick_size, side,
+           lot_size, tick_size, expiry, strike, freeze_quantity, side,
            last_price, bid, ask, volume,
            scores_json, deterministic_score,
            llm_score, llm_status, llm_rationale,
@@ -113,7 +116,7 @@ export class StrategyRunRepository {
            proposal_params_json, plugin_errors_json,
            has_plugin_errors, emitted, proposal_attempt_id,
            india_research_evidence)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const insertedCandidates: StrategyRunCandidateRow[] = [];
@@ -129,6 +132,9 @@ export class StrategyRunRepository {
           c.instrumentType,
           c.lotSize,
           c.tickSize,
+          c.expiry,
+          c.strike,
+          c.freezeQuantity,
           c.side,
           c.lastPrice,
           c.bid,
@@ -160,6 +166,9 @@ export class StrategyRunRepository {
           instrumentType: c.instrumentType,
           lotSize: c.lotSize,
           tickSize: c.tickSize,
+          expiry: c.expiry,
+          strike: c.strike,
+          freezeQuantity: c.freezeQuantity,
           side: c.side,
           lastPrice: c.lastPrice,
           bid: c.bid,
@@ -292,7 +301,7 @@ export class StrategyRunRepository {
     const rows = this._db.prepare(`
       SELECT id, strategy_run_id, candidate_key, rank,
              exchange, tradingsymbol, instrument_token, instrument_type,
-             lot_size, tick_size, side,
+             lot_size, tick_size, expiry, strike, freeze_quantity, side,
              last_price, bid, ask, volume,
              scores_json, deterministic_score,
              llm_score, llm_status, llm_rationale,
@@ -334,6 +343,9 @@ export class StrategyRunRepository {
       instrumentType: row.instrument_type,
       lotSize: row.lot_size,
       tickSize: row.tick_size,
+      expiry: row.expiry,
+      strike: row.strike,
+      freezeQuantity: row.freeze_quantity,
       side: row.side,
       lastPrice: row.last_price,
       bid: row.bid,
