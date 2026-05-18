@@ -56,6 +56,7 @@ export class ReplayEngine {
   private readonly _sessionId: number;
   private readonly _rangeStart: number;
   private readonly _rangeEnd: number;
+  private readonly _maxCandidates: number;
   private readonly _researchBuilder: IndiaResearchBuilder;
 
   constructor(options: {
@@ -67,6 +68,8 @@ export class ReplayEngine {
     sessionId: number;
     rangeStart: number;
     rangeEnd: number;
+    /** Optional engine-level candidate cap applied before coordinator evaluation (0 = unlimited). */
+    maxCandidates?: number;
   }) {
     this._clock = options.clock;
     this._dataProvider = options.dataProvider;
@@ -76,6 +79,7 @@ export class ReplayEngine {
     this._sessionId = options.sessionId;
     this._rangeStart = options.rangeStart;
     this._rangeEnd = options.rangeEnd;
+    this._maxCandidates = options.maxCandidates ?? 0;
     this._researchBuilder = new IndiaResearchBuilder();
   }
 
@@ -205,13 +209,22 @@ export class ReplayEngine {
 
     // ── Step 1: Fetch historical candidates ──────────────────────────────
     const candidates: BoundedCandidate[] = await this._dataProvider.getCandidates(tick);
+    const preCapCount = candidates.length;
+
+    // ── Step 1b: Apply optional engine-level candidate cap ───────────────
+    // This cap trims candidates BEFORE coordinator evaluation (CPU/LLM cost
+    // control), separate from the coordinator's post-plugin output cap.
+    const candidatesForCoordinator = this._maxCandidates > 0
+      ? candidates.slice(0, this._maxCandidates)
+      : candidates;
+
     const fidelity = this._dataProvider.getEffectiveFidelity(tick);
 
     // ── Step 2: Build India research context ────────────────────────────
-    const researchEvidence = this._researchBuilder.build(candidates);
+    const researchEvidence = this._researchBuilder.build(candidatesForCoordinator);
 
     // ── Step 3: Run through strategy coordinator ─────────────────────────
-    const coordinatorResult: HybridCoordinatorResult = await this._coordinator.evaluate(candidates, researchEvidence);
+    const coordinatorResult: HybridCoordinatorResult = await this._coordinator.evaluate(candidatesForCoordinator, researchEvidence);
 
     // ── Step 3: Build and persist strategy run + candidates ──────────────
     const strategyRun = this._buildStrategyRun(coordinatorResult, candidates.length, tickStartedAt);
@@ -229,7 +242,9 @@ export class ReplayEngine {
       strategyRunId: runWithCandidates.id,
       metadataJson: JSON.stringify({
         fidelity: fidelity,
-        candidateCount: candidates.length,
+        candidateCount: candidatesForCoordinator.length,
+        appliedCap: this._maxCandidates > 0 ? this._maxCandidates : null,
+        preCapCandidateCount: preCapCount,
         runDurationMs: Date.now() - tickStartedAt,
       }),
       savedAt: Date.now(),

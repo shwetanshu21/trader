@@ -275,6 +275,8 @@ describe('ArtifactEmitter', () => {
         trialCount: 4,
         oosWindowCount: 3,
         selectedAt: NOW + 5000,
+        maxCandidates: 3,
+        preCapCandidateCount: 42,
       });
 
       expect(fs.existsSync(paths.diagnosticsPath)).toBe(true);
@@ -312,6 +314,9 @@ describe('ArtifactEmitter', () => {
       expect(diagnostics.evidenceFidelity.windowCount).toBe(5);
       expect(diagnostics.evidenceFidelity.trialCount).toBe(4);
       expect(diagnostics.evidenceFidelity.outOfSampleWindows).toBe(3);
+      // Cap evidence
+      expect(diagnostics.evidenceFidelity.maxCandidates).toBe(3);
+      expect(diagnostics.evidenceFidelity.preCapCandidateCount).toBe(42);
     });
 
     it('includes selection config in winner artifact', () => {

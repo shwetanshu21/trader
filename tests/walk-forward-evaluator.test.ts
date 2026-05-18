@@ -177,6 +177,14 @@ describe('WalkForwardEvaluator', () => {
         expect(envelope.source).toBe('replay-session');
         expect(envelope.replayEvidence.replaySessionId).toBeGreaterThan(0);
         expect(envelope.replayEvidence.replayStatus).toBe('completed');
+        // Verify cap evidence is present in replay evidence
+        expect(typeof envelope.replayEvidence.maxCandidates).toBe('number');
+        expect(typeof envelope.replayEvidence.preCapCandidateCount).toBe('number');
+        // preCapCandidateCount is 0 only when the session has no checkpoints
+        // (empty tick range, e.g. weekend). Otherwise aggregate should be positive.
+        if (envelope.replayEvidence.checkpointCount > 0) {
+          expect(envelope.replayEvidence.preCapCandidateCount).toBeGreaterThan(0);
+        }
         if (envelope.replayEvidence.topCandidateCount > 0) {
           expect(envelope.replayEvidence.firstStrategyRunId).toBeGreaterThan(0);
           expect(envelope.replayEvidence.lastStrategyRunId).toBeGreaterThan(0);

@@ -346,6 +346,8 @@ export interface WalkForwardReplayEvidence {
   firstStrategyRunId: number | null;
   lastStrategyRunId: number | null;
   topCandidateCount: number;
+  maxCandidates: number;
+  preCapCandidateCount: number;
   llmStatusCounts: Record<string, number> | Partial<Record<string, number>>;
   pluginErrorCount: number;
   errorMessage: string | null;
@@ -627,6 +629,10 @@ export interface WalkForwardDiagnosticsArtifact {
     screeningCadenceMinutes: number | null;
     executionResolutionMinutes: number | null;
     supportsFineGrainedExecution: boolean;
+    /** Configured candidate cap applied during replay (0 or omitted when unlimited). */
+    maxCandidates?: number;
+    /** Total pre-cap candidate count aggregated across all replayed ticks in windows, or null. */
+    preCapCandidateCount?: number | null;
   };
 }
 

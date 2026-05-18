@@ -718,6 +718,25 @@ export class WalkForwardEvaluator {
     const winningTicks = mergedScores.filter(score => score >= WIN_SCORE_THRESHOLD).length;
     const losingTicks = mergedScores.filter(score => score < WIN_SCORE_THRESHOLD).length;
 
+    // Extract candidate-cap evidence from checkpoint metadata
+    let sessionMaxCandidates = 0;
+    let sessionPreCapTotal = 0;
+    for (const cp of checkpoints) {
+      if (cp.metadataJson) {
+        try {
+          const meta = JSON.parse(cp.metadataJson);
+          if (typeof meta.appliedCap === 'number' && meta.appliedCap > 0) {
+            sessionMaxCandidates = Math.max(sessionMaxCandidates, meta.appliedCap);
+          }
+          if (typeof meta.preCapCandidateCount === 'number') {
+            sessionPreCapTotal += meta.preCapCandidateCount;
+          }
+        } catch {
+          // Malformed metadata — skip
+        }
+      }
+    }
+
     const replayEvidence: WalkForwardReplayEvidence = {
       replaySessionId: session.id,
       replayStatus: session.status,
@@ -731,6 +750,8 @@ export class WalkForwardEvaluator {
       firstStrategyRunId: strategyRuns[0]?.id ?? null,
       lastStrategyRunId: strategyRuns[strategyRuns.length - 1]?.id ?? null,
       topCandidateCount: topCandidates.length,
+      maxCandidates: sessionMaxCandidates,
+      preCapCandidateCount: sessionPreCapTotal,
       llmStatusCounts,
       pluginErrorCount,
       errorMessage: session.errorMessage,

@@ -70,6 +70,10 @@ export class ArtifactEmitter {
     dataRangeStart?: number;
     /** End of the historical data range evaluated (ms). When provided, used for hasData check instead of wall-clock timestamps. */
     dataRangeEnd?: number;
+    /** Configured candidate cap applied during replay (0 or omitted when unlimited). */
+    maxCandidates?: number;
+    /** Pre-cap candidate count aggregated across all replayed ticks, or null. */
+    preCapCandidateCount?: number | null;
   }): { winnerPath: string; diagnosticsPath: string; tradeLogPath: string } {
     const artifactDir = this._ensureArtifactDir(options.run.id);
 
@@ -82,7 +86,10 @@ export class ArtifactEmitter {
     this._writeJSON(winnerPath, winnerArtifact);
 
     // Build diagnostics artifact
-    const diagnosticsArtifact = this._buildDiagnosticsArtifact(options);
+    const diagnosticsArtifact = this._buildDiagnosticsArtifact({
+      ...options,
+      dataProvider: options.dataProvider,
+    });
     this._writeJSON(diagnosticsPath, diagnosticsArtifact);
 
     // Build standalone trade-log artifact
@@ -156,10 +163,13 @@ export class ArtifactEmitter {
     selectedAt: number;
     dataRangeStart?: number;
     dataRangeEnd?: number;
+    maxCandidates?: number;
+    preCapCandidateCount?: number | null;
   }): WalkForwardDiagnosticsArtifact {
     const {
       run, selection, rankedCandidates, aggregateMetrics, tradeLog,
       dataProvider, windowCount, trialCount, oosWindowCount, selectedAt,
+      maxCandidates, preCapCandidateCount,
     } = options;
 
     // Determine effective fidelity from the provider
@@ -207,6 +217,8 @@ export class ArtifactEmitter {
         screeningCadenceMinutes: resolution.screeningCadenceMinutes,
         executionResolutionMinutes: resolution.executionResolutionMinutes,
         supportsFineGrainedExecution: resolution.supportsFineGrainedExecution,
+        maxCandidates: maxCandidates ?? undefined,
+        preCapCandidateCount: preCapCandidateCount ?? undefined,
       },
     };
   }

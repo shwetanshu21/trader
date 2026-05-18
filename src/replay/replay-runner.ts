@@ -145,6 +145,7 @@ export async function runReplay(options: ReplayRunnerOptions): Promise<ReplayRun
     sessionId: session.id,
     rangeStart,
     rangeEnd,
+    maxCandidates,
   });
 
   const engineResult = await engine.run();

@@ -372,13 +372,22 @@ describe('ReplayEngine — fixture-backed single-day replay', () => {
     // Verify checkpoints
     expect(countReplayCheckpoints(db)).toBe(totalTicks);
 
-    // Verify each checkpoint has a strategy_run_id
+    // Verify each checkpoint has a strategy_run_id and cap metadata
     const checkpoints = sessionRepo.getSessionCheckpoints(session.id);
     expect(checkpoints).toHaveLength(totalTicks);
 
     for (const cp of checkpoints) {
       expect(cp.strategyRunId).not.toBeNull();
       expect(cp.tickIndex).toBeGreaterThan(0);
+      // Verify cap metadata in checkpoint
+      if (cp.metadataJson) {
+        const meta = JSON.parse(cp.metadataJson);
+        // When no engine-level cap is set (0 = unlimited), appliedCap is null
+        // but preCapCandidateCount reflects the raw candidate count
+        expect(meta.appliedCap).toBeNull();
+        expect(typeof meta.preCapCandidateCount).toBe('number');
+        expect(meta.preCapCandidateCount).toBe(3); // 3 base candidates
+      }
     }
 
     // Verify strategy runs are retrievable and ordered
@@ -496,6 +505,78 @@ describe('ReplayEngine — fixture-backed single-day replay', () => {
     expect(result.strategyRunsPersisted).toBe(totalTicks);
     expect(result.session.status).toBe(ReplaySessionStatus.Completed);
   });
+
+  it('applies engine-level candidate cap and records cap metadata in checkpoints', async () => {
+    const monday = new Date('2025-01-06T00:00:00Z');
+    const tuesday = new Date('2025-01-07T00:00:00Z');
+    const rangeStart = monday.getTime();
+    const rangeEnd = tuesday.getTime();
+
+    const clock = new ReplayClock(INDIA_NSE_EQ_MARKET, 5);
+    const totalTicks = clock.countTicks(rangeStart, rangeEnd);
+    expect(totalTicks).toBeGreaterThan(0);
+
+    const dataProvider = new FixtureHistoricalDataProvider({
+      candidates: BASE_CANDIDATES,
+      rangeStart,
+      rangeEnd,
+      priceDrift: 0.001,
+    });
+
+    // Coordinator's maxCandidates is separate from engine cap
+    const coordinator = new StrategyCoordinator([new TestPriceScreenerPlugin()], { maxCandidates: 5 });
+
+    session = sessionRepo.createSession({
+      label: 'engine-cap-test',
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      marketId: 'INDIA_NSE_EQ',
+      cadenceMinutes: 5,
+      rangeStart,
+      rangeEnd,
+      requestedFidelity: ReplayFidelity.Synthetic,
+      effectiveFidelity: null,
+      status: ReplaySessionStatus.Pending,
+      totalTicks,
+      completedTicks: 0,
+      errorMessage: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      completedAt: null,
+    });
+
+    // Engine cap = 2 (trim BEFORE coordinator)
+    const engine = new ReplayEngine({
+      clock,
+      dataProvider,
+      coordinator,
+      sessionRepo,
+      strategyRunRepo,
+      sessionId: session.id,
+      rangeStart,
+      rangeEnd,
+      maxCandidates: 2,
+    });
+
+    const result = await engine.run();
+
+    expect(result.ticksProcessed).toBe(totalTicks);
+    expect(result.strategyRunsPersisted).toBe(totalTicks);
+    expect(result.session.status).toBe(ReplaySessionStatus.Completed);
+
+    // Verify each checkpoint records the engine cap
+    const checkpoints = sessionRepo.getSessionCheckpoints(session.id);
+    expect(checkpoints).toHaveLength(totalTicks);
+
+    for (const cp of checkpoints) {
+      expect(cp.metadataJson).not.toBeNull();
+      const meta = JSON.parse(cp.metadataJson!);
+      expect(meta.appliedCap).toBe(2);
+      expect(meta.preCapCandidateCount).toBe(3); // 3 base candidates before cap
+      expect(meta.candidateCount).toBe(2);        // 2 passed to coordinator after cap
+    }
+  });
+
 });
 
 describe('ReplayEngine — checkpoint resumption', () => {
