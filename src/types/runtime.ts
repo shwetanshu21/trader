@@ -1198,6 +1198,16 @@ export enum ExecutionRefusalCode {
   RiskCheckFailed = 'risk_check_failed',
   /** Candidate was held by lifecycle governance (strategy phase caps global mode). */
   LifecycleHold = 'lifecycle_hold',
+  /** The execution class is not supported by the active execution policy. */
+  ClassNotSupported = 'class_not_supported',
+  /** FO candidate is missing required metadata (expiry, lot size). */
+  FOMetadataIncomplete = 'fo_metadata_incomplete',
+  /** FO quantity is not a valid multiple of the instrument lot size. */
+  FOLotSizeMismatch = 'fo_lot_size_mismatch',
+  /** FO quantity exceeds the broker freeze quantity for this instrument. */
+  FOFreezeQuantityBreach = 'fo_freeze_quantity_breach',
+  /** FO order price/notional exceeds market protection bounds. */
+  FOMarketProtectionBound = 'fo_market_protection_bound',
 }
 
 /** A single refusal reason attached to an execution attempt. */

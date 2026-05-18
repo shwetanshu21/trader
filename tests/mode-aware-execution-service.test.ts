@@ -88,6 +88,32 @@ function sampleInstrument(overrides?: Partial<InstrumentRecord>): InstrumentReco
   };
 }
 
+/**
+ * Quote fixture suitable for FO instrument paper evaluation.
+ * The FO candidate is a LIMIT buy at 50, so we need ask >= 50.
+ */
+function sampleFOQuote(overrides?: Partial<QuoteSnapshot>): QuoteSnapshot {
+  return {
+    exchange: 'NFO',
+    tradingsymbol: 'RELIANCE24DEC3000CE',
+    instrumentToken: 789012,
+    lastPrice: 48.50,
+    change: -1.20,
+    changePercent: -2.41,
+    volume: 250000,
+    oi: 500000,
+    high: 51.00,
+    low: 47.50,
+    open: 49.00,
+    close: 49.70,
+    bid: 48.00,
+    ask: 50.00,
+    priceTimestamp: Math.floor(NOW / 1000) - 30,
+    receivedAt: NOW - 5000,
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Mock BrokerPlacementPort for live mode tests
 // ---------------------------------------------------------------------------
@@ -170,8 +196,8 @@ function seedApprovedCandidate(
     createdAt: NOW - 120_000,
   });
 
-  // Insert approved strategy decision
-  const decision = ctx.strategyRepo.insertDecision({
+  // Build default strategy decision with EQ execution class metadata
+  const defaults: NewStrategyDecision = {
     proposalAttemptId: proposal.id,
     decisionStatus: StrategyDecisionStatus.Approved,
     strategyId: 'india-nse-eq-v1',
@@ -195,8 +221,22 @@ function seedApprovedCandidate(
     riskMaxLossRupees: 10689.38,
     riskStopDistance: null,
     riskExposureTag: 'intraday',
+    executionClass: 'EQ' as const,
+    segment: 'NSE',
+    instrumentType: 'EQ',
+    expiry: null,
+    strike: null,
+    lotSize: 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
+    // Spread remaining overrides on top of defaults
     ...overrides,
-  });
+  };
+
+  const merged: NewStrategyDecision = { ...defaults, ...overrides };
+
+  // Insert approved strategy decision
+  const decision = ctx.strategyRepo.insertDecision(merged);
 
   return {
     id: decision.id,
@@ -217,6 +257,109 @@ function seedApprovedCandidate(
     ask: decision.quoteAsk,
     notional: decision.riskNotional,
     sizingBasis: decision.riskSizingBasis,
+    executionClass: decision.executionClass as 'EQ' | 'FO',
+    segment: decision.segment,
+    instrumentType: decision.instrumentType,
+    expiry: decision.expiry,
+    strike: decision.strike,
+    lotSize: decision.lotSize,
+    tickSize: decision.tickSize,
+    freezeQuantity: decision.freezeQuantity,
+  };
+}
+
+/**
+ * Seed an FO candidate with valid defaults through the DB.
+ * The candidate carries FO execution-class metadata for class-aware
+ * safeguard testing. Overrides can be used to inject violation scenarios.
+ */
+function seedFOCandidate(
+  ctx: TestContext,
+  overrides?: Partial<NewStrategyDecision>,
+): StrategyApprovedCandidate {
+  // Insert accepted proposal
+  const proposal = ctx.proposalRepo.insertAttempt({
+    exchange: 'NFO',
+    tradingsymbol: 'RELIANCE24DEC3000CE',
+    instrumentToken: 789012,
+    side: 'buy',
+    product: 'NRML',
+    quantity: 1500,
+    price: 50.00,
+    triggerPrice: null,
+    orderType: 'LIMIT',
+    tag: null,
+    proposalStatus: ProposalStatus.Accepted,
+    createdAt: NOW - 120_000,
+  });
+
+  // Build strategy decision defaults with FO execution class metadata
+  const defaults: NewStrategyDecision = {
+    proposalAttemptId: proposal.id,
+    decisionStatus: StrategyDecisionStatus.Approved,
+    strategyId: 'india-nse-eq-v1',
+    strategyVersion: '1.0.0',
+    decidedAt: NOW - 60_000,
+    exchange: 'NFO',
+    tradingsymbol: 'RELIANCE24DEC3000CE',
+    side: 'buy',
+    product: 'NRML',
+    quantity: 1500,
+    price: 50.00,
+    triggerPrice: null,
+    orderType: 'LIMIT',
+    quoteLastPrice: 48.50,
+    quoteBid: 48.00,
+    quoteAsk: 50.00,
+    quoteVolume: 500000,
+    quoteReceivedAt: NOW - 5000,
+    riskNotional: 75000,
+    riskSizingBasis: 'last_price',
+    riskMaxLossRupees: 5000,
+    riskStopDistance: null,
+    riskExposureTag: 'intraday',
+    executionClass: 'FO' as const,
+    segment: 'NFO',
+    instrumentType: 'CE',
+    expiry: '2024-12-26',
+    strike: 3000,
+    lotSize: 100,
+    tickSize: 0.05,
+    freezeQuantity: 10000,
+  };
+
+  const merged: NewStrategyDecision = { ...defaults, ...overrides };
+
+  // Insert approved strategy decision with merged fields
+  const decision = ctx.strategyRepo.insertDecision(merged);
+
+  return {
+    id: decision.id,
+    proposalAttemptId: decision.proposalAttemptId,
+    strategyId: decision.strategyId,
+    strategyVersion: decision.strategyVersion,
+    decidedAt: decision.decidedAt,
+    exchange: decision.exchange,
+    tradingsymbol: decision.tradingsymbol,
+    side: decision.side,
+    product: decision.product,
+    quantity: decision.quantity,
+    price: decision.price,
+    triggerPrice: decision.triggerPrice,
+    orderType: decision.orderType,
+    lastPrice: decision.quoteLastPrice,
+    bid: decision.quoteBid,
+    ask: decision.quoteAsk,
+    notional: decision.riskNotional,
+    sizingBasis: decision.riskSizingBasis,
+    executionClass: decision.executionClass as 'EQ' | 'FO',
+    segment: decision.segment,
+    instrumentType: decision.instrumentType,
+    expiry: decision.expiry,
+    strike: decision.strike,
+    lotSize: decision.lotSize,
+    tickSize: decision.tickSize,
+    freezeQuantity: decision.freezeQuantity,
   };
 }
 
@@ -773,6 +916,235 @@ describe('ModeAwareExecutionService', () => {
       const row = await service.execute(candidate, sampleQuote(), null);
 
       expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+    });
+  });
+
+  describe('class-aware execution safeguards', () => {
+    it('passes EQ candidates through class safeguards with no refusal', async () => {
+      const ctx = createContext();
+      const candidate = seedApprovedCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      // EQ candidates should pass through with no class-specific refusal
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Completed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+
+      // No class-specific refusal reasons — only paper-policy success
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(0);
+    });
+
+    it('refuses FO candidate with missing expiry metadata', async () => {
+      const ctx = createContext();
+      const candidate = seedFOCandidate(ctx, { expiry: '' });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.FOMetadataIncomplete);
+      expect(reasons[0].reasonMessage).toContain('expiry');
+    });
+
+    it('refuses FO candidate with lot size mismatch', async () => {
+      const ctx = createContext();
+      // Quantity 75 is not a multiple of lot size 100
+      const candidate = seedFOCandidate(ctx, { quantity: 75 });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.FOLotSizeMismatch);
+      expect(reasons[0].reasonMessage).toContain('lot size');
+    });
+
+    it('refuses FO candidate exceeding freeze quantity', async () => {
+      const ctx = createContext();
+      // Quantity 1_500_000 exceeds freezeQuantity 10_000
+      const candidate = seedFOCandidate(ctx, { quantity: 1_500_000 });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.FOFreezeQuantityBreach);
+      expect(reasons[0].reasonMessage).toContain('freeze quantity');
+    });
+
+    it('refuses FO candidate exceeding market protection notional cap', async () => {
+      const ctx = createContext();
+      // Notional 6_000_000 exceeds 5_000_000 cap
+      const candidate = seedFOCandidate(ctx, { riskNotional: 6_000_000 });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.FOMarketProtectionBound);
+      expect(reasons[0].reasonMessage).toContain('notional');
+    });
+
+    it('passes valid FO candidate through class safeguards successfully', async () => {
+      const ctx = createContext();
+      // Valid FO: has expiry, quantity 1500 is multiple of lot 100,
+      // freeze quantity 10000 >= 1500, notional 75000 < 5M
+      const candidate = seedFOCandidate(ctx);
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      // Use FO-compatible quote so paper evaluation can complete
+      const row = await service.execute(candidate, sampleFOQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Completed);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
+
+      // Should proceed to paper evaluation (no class-specific refusal)
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(0);
+    });
+
+    it('refuses FO with multiple safeguard violations at once', async () => {
+      const ctx = createContext();
+      // Multiple violations: no expiry, wrong lot size, exceeds freeze qty, exceeds notional cap
+      const candidate = seedFOCandidate(ctx, {
+        expiry: '',
+        quantity: 123,
+        freezeQuantity: 100,
+        riskNotional: 10_000_000,
+      });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      // Should have 4 refusal reasons: FOMetadataIncomplete, FOLotSizeMismatch,
+      // FOFreezeQuantityBreach, FOMarketProtectionBound
+      expect(reasons).toHaveLength(4);
+      expect(reasons.map(r => r.reasonCode)).toContain(ExecutionRefusalCode.FOMetadataIncomplete);
+      expect(reasons.map(r => r.reasonCode)).toContain(ExecutionRefusalCode.FOLotSizeMismatch);
+      expect(reasons.map(r => r.reasonCode)).toContain(ExecutionRefusalCode.FOFreezeQuantityBreach);
+      expect(reasons.map(r => r.reasonCode)).toContain(ExecutionRefusalCode.FOMarketProtectionBound);
+    });
+
+    it('refuses FO in blocked mode with class safeguards still evaluated first', async () => {
+      const ctx = createContext();
+      // Even in blocked mode, class safeguards should be evaluated first
+      const candidate = seedFOCandidate(ctx, { expiry: '' });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Blocked,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.FOMetadataIncomplete);
+    });
+
+    it('refuses FO in live mode with class safeguards evaluated first', async () => {
+      const ctx = createContext();
+      const candidate = seedFOCandidate(ctx, {
+        quantity: 75, // not a multiple of lot size 100
+      });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Live,
+      });
+
+      const row = await service.execute(candidate, sampleQuote(), sampleInstrument());
+
+      expect(row.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(row.outcomeCode).toBe(ExecutionOutcomeCode.PaperRejected);
+
+      const reasons = ctx.attemptRepo.getRefusalReasons(row.id);
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.FOLotSizeMismatch);
+      // Must not reach LiveBrokerNotConfigured
+      expect(reasons[0].reasonCode).not.toBe(ExecutionRefusalCode.LiveBrokerNotConfigured);
+    });
+
+    it('idempotency guard still works after class safeguard evaluation', async () => {
+      const ctx = createContext();
+      const candidate = seedFOCandidate(ctx, { expiry: '' });
+      const service = new ModeAwareExecutionService({
+        attemptRepo: ctx.attemptRepo,
+        paperPolicy: ctx.paperPolicy,
+        liveAdapter: null,
+        mode: ExecutionMode.Paper,
+      });
+
+      // First call: refused by class safeguards
+      const row1 = await service.execute(candidate, sampleQuote(), sampleInstrument());
+      expect(row1.status).toBe(ExecutionAttemptStatus.Refused);
+
+      // Second call: should return existing row (idempotency)
+      const row2 = await service.execute(candidate, sampleQuote(), sampleInstrument());
+      expect(row2.id).toBe(row1.id);
+      expect(ctx.attemptRepo.count()).toBe(1);
     });
   });
 });

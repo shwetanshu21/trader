@@ -21,6 +21,7 @@ import {
   ExecutionAttemptStatus,
   ExecutionMode,
   ExecutionOutcomeCode,
+  ExecutionRefusalCode,
   type ExecutionAttemptRow,
   type ExecutionRefusalReason,
   type NewExecutionAttempt,
@@ -100,6 +101,15 @@ export class ModeAwareExecutionService {
       return existing;
     }
 
+    // ── Class-aware execution safeguards ─────────────────────────────────
+    // Evaluate class-specific constraints before mode routing. If the
+    // candidate fails class-specific checks, it is refused with machine-
+    // readable reasons independently of other candidates.
+    const classSafeguards = this._evaluateClassSafeguards(candidate);
+    if (classSafeguards.length > 0) {
+      return this._persistClassRefused(candidate, classSafeguards);
+    }
+
     // ── Mode routing ──────────────────────────────────────────────────────
     switch (this._mode) {
       case ExecutionMode.Blocked:
@@ -111,6 +121,113 @@ export class ModeAwareExecutionService {
       case ExecutionMode.Live:
         return this._handleLive(candidate);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Class-aware execution safeguards
+  // -------------------------------------------------------------------------
+
+  /**
+   * Evaluate class-specific execution safeguards for a candidate.
+   *
+   * FO (F&O/Options) candidates require additional validation:
+   *   - Metadata completeness: expiry must be present
+   *   - Lot-size validity: quantity must be a multiple of lot size
+   *   - Freeze-quantity breach: quantity must not exceed freeze quantity
+   *   - Market-protection bounds: notional must be within reasonable range
+   *
+   * EQ candidates pass through with no additional class-specific checks.
+   *
+   * @returns An array of refusal reasons if any safeguard is violated,
+   *          or an empty array if the candidate passes all checks.
+   */
+  private _evaluateClassSafeguards(candidate: StrategyApprovedCandidate): ExecutionRefusalReason[] {
+    const reasons: ExecutionRefusalReason[] = [];
+
+    if (candidate.executionClass === 'FO') {
+      // ── 1. Metadata completeness ──────────────────────────────────────
+      // FO instruments require expiry date. Without it, we cannot validate
+      // the instrument or route the order correctly.
+      if (!candidate.expiry || candidate.expiry.length === 0) {
+        reasons.push({
+          reasonCode: ExecutionRefusalCode.FOMetadataIncomplete,
+          reasonMessage:
+            `FO candidate ${candidate.exchange}:${candidate.tradingsymbol} ` +
+            `is missing required expiry metadata`,
+        });
+      }
+
+      // ── 2. Lot-size validity ──────────────────────────────────────────
+      // FO order quantity must be a valid multiple of the instrument's lot size.
+      if (candidate.lotSize > 1 && candidate.quantity % candidate.lotSize !== 0) {
+        reasons.push({
+          reasonCode: ExecutionRefusalCode.FOLotSizeMismatch,
+          reasonMessage:
+            `FO quantity ${candidate.quantity} is not a valid multiple of ` +
+            `lot size ${candidate.lotSize} for ${candidate.exchange}:${candidate.tradingsymbol}`,
+        });
+      }
+
+      // ── 3. Freeze-quantity breach ─────────────────────────────────────
+      // FO instruments have broker-defined freeze limits. Exceeding the
+      // freeze quantity risks broker rejection at placement time.
+      if (candidate.freezeQuantity !== null && candidate.freezeQuantity > 0) {
+        if (candidate.quantity > candidate.freezeQuantity) {
+          reasons.push({
+            reasonCode: ExecutionRefusalCode.FOFreezeQuantityBreach,
+            reasonMessage:
+              `FO quantity ${candidate.quantity} exceeds freeze quantity ` +
+              `${candidate.freezeQuantity} for ${candidate.exchange}:${candidate.tradingsymbol}`,
+          });
+        }
+      }
+
+      // ── 4. Market-protection bounds ───────────────────────────────────
+      // FO notional should be within reasonable bounds. Check against
+      // a conservative upper limit based on lot size and last price.
+      if (candidate.notional !== null && candidate.notional > 0) {
+        // Market protection: refuse if notional exceeds 5M INR per order
+        // for FO instruments (covers most NFO equity derivatives).
+        const FO_NOTIONAL_CAP = 5_000_000;
+        if (candidate.notional > FO_NOTIONAL_CAP) {
+          reasons.push({
+            reasonCode: ExecutionRefusalCode.FOMarketProtectionBound,
+            reasonMessage:
+              `FO notional ₹${candidate.notional.toLocaleString('en-IN')} ` +
+              `exceeds market protection cap of ₹${FO_NOTIONAL_CAP.toLocaleString('en-IN')} ` +
+              `for ${candidate.exchange}:${candidate.tradingsymbol}`,
+          });
+        }
+      }
+    }
+
+    // EQ candidates have no additional class-specific safeguards.
+    return reasons;
+  }
+
+  /**
+   * Persist a candidate that was refused by class-aware safeguards.
+   */
+  private _persistClassRefused(
+    candidate: StrategyApprovedCandidate,
+    refusalReasons: ExecutionRefusalReason[],
+  ): ExecutionAttemptRow {
+    const now = Date.now();
+    const attempt: NewExecutionAttempt = {
+      strategyDecisionId: candidate.id,
+      executionMode: this._mode,
+      status: ExecutionAttemptStatus.Refused,
+      outcomeCode: ExecutionOutcomeCode.PaperRejected,
+      brokerOrderId: null,
+      message:
+        `Class safeguard refused ${candidate.executionClass} candidate ` +
+        `${candidate.exchange}:${candidate.tradingsymbol}: ` +
+        refusalReasons.map(r => r.reasonMessage).join('; '),
+      attemptedAt: now,
+      completedAt: now,
+    };
+
+    return this._attemptRepo.insertAttemptWithRefusalReasons(attempt, refusalReasons);
   }
 
   // -------------------------------------------------------------------------
