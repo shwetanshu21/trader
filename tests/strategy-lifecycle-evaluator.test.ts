@@ -50,6 +50,7 @@ const DEFAULT_THRESHOLDS: GovernanceThresholdConfig = {
   maxDrawdown: 30,
   minWindowCount: 2,
   minOutOfSampleWindows: 1,
+  minReplayFidelity: 1.0,
 };
 
 const STRATEGY_ID = 'india-nse-eq-v1';
@@ -107,6 +108,12 @@ function seedPromotableRun(
     marketId?: string;
     winnerResult?: WalkForwardSelectionResult;
     selectedTrialId?: number | null; // null to simulate no-winner with selected_trial_id=null
+    /** metrics_json value for ALL trial-window evidence rows. When set, replay evidence is seeded. */
+    metricsJson?: string | null;
+    /** LLM consultation status counts for metrics_json. When set, builds a full envelope. */
+    llmStatusCounts?: Record<string, number>;
+    /** Cap fidelity ratio for metrics_json. Applied to all windows. */
+    capFidelity?: number; // 0–1, simulated maxCandidates/preCapCandidateCount
   },
 ): { runId: number; winnerId: number; trialId: number } {
   const sid = overrides?.strategyId ?? STRATEGY_ID;
@@ -118,6 +125,55 @@ function seedPromotableRun(
   const windowCount = overrides?.windowCount ?? 2;
   const oosWindowCount = overrides?.oosWindowCount ?? 1;
   const winnerResult = overrides?.winnerResult ?? WalkForwardSelectionResult.Selected;
+
+  // Build metrics_json for each window
+  const explicitMetrics = overrides?.metricsJson;
+  const capFidelity = overrides?.capFidelity;
+  const llmCounts = overrides?.llmStatusCounts;
+
+  function buildMetricsJson(): string | null {
+    if (explicitMetrics !== undefined) return explicitMetrics; // explicit null/string
+    // When either capFidelity or llmCounts is explicitly set, build envelope.
+    // Otherwise default to full-fidelity metrics so existing tests pass.
+    const fidelity = capFidelity ?? 1.0;
+    const useCounts = llmCounts ?? { consulted: 8, skipped: 2 };
+    // Simulate cap: maxCandidates = fidelity * preCapCount
+    const preCapCount = Math.round(100 / fidelity);
+    const maxCandidates = Math.round(preCapCount * fidelity);
+    const envelope = {
+      schemaVersion: 1,
+      source: 'replay-session',
+      replayEvidence: {
+        replaySessionId: 1,
+        replayStatus: 'completed',
+        replayLabel: 'Test replay session',
+        replayRangeStart: NOW,
+        replayRangeEnd: NOW + 86400000,
+        replayCompletedTicks: 10,
+        replayTotalTicks: 10,
+        checkpointCount: 3,
+        strategyRunCount: 5,
+        firstStrategyRunId: 1,
+        lastStrategyRunId: 5,
+        topCandidateCount: maxCandidates,
+        maxCandidates,
+        preCapCandidateCount: preCapCount,
+        llmStatusCounts: useCounts,
+        pluginErrorCount: 0,
+        errorMessage: null,
+      },
+      summary: {
+        tickCount: 10,
+        meanMergedScore: mergedScore,
+        meanDeterministicScore: mergedScore * 0.9,
+        meanLlmScore: null,
+        stdDevMergedScore: null,
+        maxMergedScore: mergedScore,
+        minMergedScore: mergedScore * 0.8,
+      },
+    };
+    return JSON.stringify(envelope);
+  }
 
   // Create run
   const run = repo.insertRun({
@@ -165,6 +221,7 @@ function seedPromotableRun(
   });
 
   // Link trial to windows
+  const resolvedMetricsJson = buildMetricsJson();
   for (let i = 0; i < windowCount; i++) {
     const isOOS = i >= windowCount - oosWindowCount;
     repo.linkTrialToWindow({
@@ -177,7 +234,7 @@ function seedPromotableRun(
       winRate: 0.65,
       tradeCount: 42,
       profitFactor: 2.1,
-      metricsJson: null,
+      metricsJson: resolvedMetricsJson,
       createdAt: NOW,
     });
   }
@@ -543,6 +600,173 @@ describe('StrategyLifecycleEvaluator', () => {
 
       expect(result.verdict).toBe(GovernanceVerdict.Hold);
       expect(result.rationale).toContain('No out-of-sample Sharpe ratio data available');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // HOLD on missing or degraded replay fidelity
+  // -----------------------------------------------------------------------
+
+  describe('hold on missing or degraded replay fidelity', () => {
+    it('promotes when full replay fidelity is present (minReplayFidelity 1.0, fidelity 1.0)', () => {
+      const { repo, evaluator } = createContext();
+      // Full fidelity: maxCandidates == preCapCandidateCount → ratio 1.0
+      const { runId } = seedPromotableRun(repo, { capFidelity: 1.0 });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      expect(result.evidenceSnapshot.replayFidelity).toBe(1.0);
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(true);
+      expect(result.evidenceSnapshot.llmConsultationRate).toBeGreaterThan(0);
+    });
+
+    it('promotes when no cap is applied (unlimited — full fidelity default)', () => {
+      const { repo, evaluator } = createContext();
+      // No cap specified → default seed includes full-fidelity metrics.
+      // With minReplayFidelity 0, the gate is disabled entirely.
+      const { runId } = seedPromotableRun(repo);
+
+      const result = evaluator.evaluate(defaultInput(runId, {
+        thresholds: { ...DEFAULT_THRESHOLDS, minReplayFidelity: 0 }, // relaxed
+      }));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      // Default seed includes full-fidelity metrics; fidelity is 1.0 not null
+      expect(result.evidenceSnapshot.replayFidelity).toBe(1.0);
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(true);
+    });
+
+    it('holds when replay fidelity is below minReplayFidelity threshold', () => {
+      const { repo, evaluator } = createContext();
+      // Degraded fidelity: cap at 3/5 = 0.6 < 1.0 threshold
+      const { runId } = seedPromotableRun(repo, { capFidelity: 0.6 });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('Replay fidelity');
+      expect(result.rationale).toContain('below minimum threshold');
+      expect(result.stateUpdated).toBe(false);
+    });
+
+    it('holds when replay fidelity is null and no metrics exist (legacy data with threshold > 0)', () => {
+      const { repo, evaluator } = createContext();
+      // Explicit null metricsJson to simulate legacy data
+      const { runId } = seedPromotableRun(repo, { metricsJson: null });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('No replay evidence available');
+      expect(result.rationale).toContain('fidelity gate');
+      expect(result.evidenceSnapshot.replayFidelity).toBeNull();
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(false);
+    });
+
+    it('passes when minReplayFidelity is 0 (gate disabled) even without metrics', () => {
+      const { repo, evaluator } = createContext();
+      const { runId } = seedPromotableRun(repo);
+
+      const result = evaluator.evaluate(defaultInput(runId, {
+        thresholds: { ...DEFAULT_THRESHOLDS, minReplayFidelity: 0 },
+      }));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+    });
+
+    it('holds when LLM consultation rate is 0 (no LLM consulted during replay)', () => {
+      const { repo, evaluator } = createContext();
+      // llmStatusCounts with zero consulted
+      const { runId } = seedPromotableRun(repo, {
+        capFidelity: 1.0,
+        llmStatusCounts: { skipped: 10 }, // all skipped, none consulted
+      });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('LLM consultation rate is 0');
+      expect(result.evidenceSnapshot.llmConsultationRate).toBe(0);
+    });
+
+    it('holds on malformed metrics_json (fail closed)', () => {
+      const { repo, evaluator } = createContext();
+      // metricsJson is invalid JSON
+      const { runId } = seedPromotableRun(repo, {
+        metricsJson: 'not valid json',
+      });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      // No replay evidence parsed → null fidelity → fail closed
+      expect(result.rationale).toContain('No replay evidence available');
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(false);
+    });
+
+    it('holds on metrics_json with missing replayEvidence field', () => {
+      const { repo, evaluator } = createContext();
+      // Valid JSON but missing replayEvidence
+      const { runId } = seedPromotableRun(repo, {
+        metricsJson: JSON.stringify({ schemaVersion: 1, source: 'other' }),
+      });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('No replay evidence available');
+    });
+
+    it('persists fidelity evidence in the evidence snapshot on promote', () => {
+      const { repo, evaluator } = createContext();
+      const { runId } = seedPromotableRun(repo, { capFidelity: 1.0 });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      const snapshot = result.evidenceSnapshot;
+      expect(snapshot.replayFidelity).toBe(1.0);
+      expect(snapshot.hasReplayEvidence).toBe(true);
+      expect(snapshot.llmConsultationRate).toBeGreaterThan(0);
+
+      // Verify persisted evidence JSON
+      const persisted = JSON.parse(result.decision.evidenceJson!);
+      expect(persisted.replayFidelity).toBe(1.0);
+      expect(persisted.hasReplayEvidence).toBe(true);
+    });
+
+    it('persists fidelity evidence in the evidence snapshot on hold (degraded fidelity)', () => {
+      const { repo, evaluator } = createContext();
+      const { runId } = seedPromotableRun(repo, { capFidelity: 0.5 });
+
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      const snapshot = result.evidenceSnapshot;
+      expect(snapshot.replayFidelity).toBe(0.5);
+      expect(snapshot.hasReplayEvidence).toBe(true);
+
+      // Verify persisted evidence JSON
+      const persisted = JSON.parse(result.decision.evidenceJson!);
+      expect(persisted.replayFidelity).toBe(0.5);
+      expect(persisted.rationale).toBeUndefined(); // rationale is top-level, not in evidence
+    });
+
+    it('persists fidelity null and hasReplayEvidence false on legacy data without metrics', () => {
+      const { repo, evaluator } = createContext();
+      // Explicit null metricsJson to simulate legacy data
+      const { runId } = seedPromotableRun(repo, { metricsJson: null });
+
+      const result = evaluator.evaluate(defaultInput(runId, {
+        thresholds: { ...DEFAULT_THRESHOLDS, minReplayFidelity: 0 },
+      }));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      const snapshot = result.evidenceSnapshot;
+      expect(snapshot.replayFidelity).toBeNull();
+      expect(snapshot.hasReplayEvidence).toBe(false);
+      expect(snapshot.llmConsultationRate).toBeNull();
     });
   });
 

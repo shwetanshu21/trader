@@ -57,8 +57,9 @@ import type { WalkForwardWinnerWithContext } from '../replay/walk-forward-types.
  * Evidence snapshot persisted with each governance evaluation.
  *
  * Captures the threshold config snapshot, the selected trial's actual scores,
- * summary stats computed from out-of-sample windows, and per-window details
- * so a future operator or agent can audit the decision without re-executing.
+ * summary stats computed from out-of-sample windows, per-window details,
+ * and replay fidelity/LLM consultation evidence so a future operator or agent
+ * can audit the decision without re-executing.
  */
 export interface PromotionEvidenceSnapshot {
   /** Threshold configuration used for this evaluation. */
@@ -87,6 +88,23 @@ export interface PromotionEvidenceSnapshot {
     totalReturn: number;
     tradeCount: number;
   }>;
+  // ── Replay fidelity evidence (S04/T02) ──
+  /**
+   * Aggregate replay fidelity (0–1) computed from window metrics_json.
+   * 1.0 = full fidelity (no cap degradation, LLM consulted).
+   * null = no replay evidence available.
+   */
+  replayFidelity: number | null;
+  /**
+   * Aggregate LLM consultation rate (0–1) across replay-backed windows.
+   * Fraction of candidates that had LLM consultation during replay.
+   * null = no replay evidence available.
+   */
+  llmConsultationRate: number | null;
+  /**
+   * Whether any window had replay evidence (metrics_json with WalkForwardWindowMetricsEnvelope).
+   */
+  hasReplayEvidence: boolean;
 }
 
 /**
@@ -139,6 +157,7 @@ const DEFAULT_THRESHOLDS: GovernanceThresholdConfig = {
   maxDrawdown: 30,
   minWindowCount: 2,
   minOutOfSampleWindows: 1,
+  minReplayFidelity: 1.0,
 };
 
 const DEFAULT_DEMOTION_THRESHOLDS_LOCAL: DemotionThresholdConfig = {
@@ -288,9 +307,10 @@ export class StrategyLifecycleEvaluator {
     }
 
     // -----------------------------------------------------------------------
-    // Step 5: Compute out-of-sample evidence from the selected trial
+    // Step 5: Compute out-of-sample evidence and replay fidelity from the selected trial
     // -----------------------------------------------------------------------
     const oosEvidence = this._computeOutOfSampleEvidence(winnerContext.selectedTrial);
+    const fidelityEvidence = this._computeReplayFidelity(winnerContext.selectedTrial);
     const totalWindowEvidenceCount = winnerContext.selectedTrial.windowEvidence.length;
 
     const evidenceSnapshot: PromotionEvidenceSnapshot = {
@@ -304,6 +324,9 @@ export class StrategyLifecycleEvaluator {
       selectedTrialLabel: winnerContext.selectedTrial.label,
       selectedTrialParamsJson: winnerContext.selectedTrial.paramsJson,
       outOfSampleDetails: oosEvidence.details,
+      replayFidelity: fidelityEvidence.replayFidelity,
+      llmConsultationRate: fidelityEvidence.llmConsultationRate,
+      hasReplayEvidence: fidelityEvidence.hasReplayEvidence,
     };
 
     // -----------------------------------------------------------------------
@@ -349,6 +372,30 @@ export class StrategyLifecycleEvaluator {
     if (oosEvidence.windowCount < thresholds.minOutOfSampleWindows) {
       failures.push(
         `Out-of-sample window count ${oosEvidence.windowCount} is below minimum ${thresholds.minOutOfSampleWindows}`,
+      );
+    }
+
+    // Minimum replay fidelity
+    const fidelityVal = fidelityEvidence.replayFidelity;
+    if (fidelityVal !== null && fidelityVal < thresholds.minReplayFidelity) {
+      failures.push(
+        `Replay fidelity ${fidelityVal.toFixed(4)} is below minimum threshold ${thresholds.minReplayFidelity}. ` +
+        `Evidence does not faithfully represent the LLM-first runtime path.`,
+      );
+    } else if (fidelityVal === null && !fidelityEvidence.hasReplayEvidence && thresholds.minReplayFidelity > 0) {
+      failures.push(
+        'No replay evidence available from window metrics_json. ' +
+        'Cannot verify that walk-forward proof represents the LLM-first runtime path. ' +
+        'Failing closed as required by replay fidelity gate.',
+      );
+    }
+
+    // LLM consultation rate gate — when replay evidence exists but LLM was not consulted
+    if (fidelityEvidence.hasReplayEvidence && fidelityEvidence.llmConsultationRate !== null &&
+        fidelityEvidence.llmConsultationRate === 0 && thresholds.minReplayFidelity > 0) {
+      failures.push(
+        'LLM consultation rate is 0 — no candidates received LLM consultation during replay. ' +
+        'Walk-forward evidence does not represent the shared LLM-first runtime path.',
       );
     }
 
@@ -725,6 +772,88 @@ export class StrategyLifecycleEvaluator {
   }
 
   /**
+   * Compute replay fidelity and LLM consultation evidence from the selected
+   * trial's window metrics_json (WalkForwardWindowMetricsEnvelope).
+   *
+   * Replay fidelity measures how faithfully the walk-forward replay evidence
+   * represents the LLM-first runtime path:
+   *
+   * - When metrics_json contains replay evidence with a candidate cap, fidelity
+   *   is the ratio of maxCandidates / preCapCandidateCount (capped at 1.0).
+   * - When no cap was applied (maxCandidates === 0 or undefined), per-window
+   *   fidelity defaults to 1.0 (full).
+   * - LLM consultation rate is the fraction of candidates that had LLM
+   *   consultation (llmStatusCounts.consulted / total status counts).
+   *
+   * Fail-closed: missing metrics_json, malformed JSON, or missing replay
+   * evidence all contribute to null fidelity (no replay evidence available),
+   * which will fail the minReplayFidelity gate when the threshold > 0.
+   */
+  private _computeReplayFidelity(trial: NonNullable<WalkForwardWinnerWithContext['selectedTrial']>): {
+    replayFidelity: number | null;
+    llmConsultationRate: number | null;
+    hasReplayEvidence: boolean;
+  } {
+    const windowsWithMetrics = trial.windowEvidence.filter(w => w.metricsJson !== null);
+
+    if (windowsWithMetrics.length === 0) {
+      return { replayFidelity: null, llmConsultationRate: null, hasReplayEvidence: false };
+    }
+
+    let totalFidelity = 0;
+    let fidelityCount = 0;
+    let totalConsulted = 0;
+    let totalCandidates = 0;
+
+    for (const w of windowsWithMetrics) {
+      let envelope: Record<string, unknown>;
+      try {
+        envelope = JSON.parse(w.metricsJson!);
+      } catch {
+        // Malformed JSON — skip this window
+        continue;
+      }
+
+      if (!envelope || envelope.source !== 'replay-session' || !envelope.replayEvidence) {
+        continue;
+      }
+
+      const ev = envelope.replayEvidence as Record<string, unknown>;
+
+      // Compute per-window fidelity based on cap degradation
+      const maxCandidates = typeof ev.maxCandidates === 'number' ? ev.maxCandidates : 0;
+      const preCapCount = typeof ev.preCapCandidateCount === 'number' ? ev.preCapCandidateCount : 0;
+
+      if (maxCandidates > 0 && preCapCount > 0) {
+        // Cap was applied — fidelity is the ratio of seen to total
+        totalFidelity += Math.min(1, maxCandidates / preCapCount);
+        fidelityCount++;
+      } else {
+        // No cap applied or unlimited → full fidelity for this window
+        totalFidelity += 1.0;
+        fidelityCount++;
+      }
+
+      // LLM consultation rate from llmStatusCounts
+      const llmCounts = ev.llmStatusCounts as Record<string, number> | null | undefined;
+      if (llmCounts && typeof llmCounts === 'object') {
+        const consulted = llmCounts['consulted'] ?? 0;
+        const totalCount = Object.values(llmCounts).reduce((a, b) => a + b, 0);
+        if (totalCount > 0) {
+          totalConsulted += consulted;
+          totalCandidates += totalCount;
+        }
+      }
+    }
+
+    const replayFidelity = fidelityCount > 0 ? totalFidelity / fidelityCount : null;
+    const llmConsultationRate = totalCandidates > 0 ? totalConsulted / totalCandidates : null;
+    const hasReplayEvidence = fidelityCount > 0;
+
+    return { replayFidelity, llmConsultationRate, hasReplayEvidence };
+  }
+
+  /**
    * Build the complete promotion evaluation result, persist the governance decision,
    * and (on PROMOTE) update the lifecycle state.
    */
@@ -770,6 +899,9 @@ export class StrategyLifecycleEvaluator {
       selectedTrialLabel: winnerContext?.selectedTrial?.label ?? null,
       selectedTrialParamsJson: winnerContext?.selectedTrial?.paramsJson ?? null,
       outOfSampleDetails: [],
+      replayFidelity: null,
+      llmConsultationRate: null,
+      hasReplayEvidence: false,
     };
 
     const decision = this._lifecycleRepo.insertDecision({

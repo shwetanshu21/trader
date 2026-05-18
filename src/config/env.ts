@@ -665,6 +665,21 @@ function parseGovernanceThresholds(
     }
   }
 
+  // ── Min replay fidelity (0–1) ─────────────────────────────────────────
+  const fidelityRaw = env.TRADER_STRATEGY_PROMOTION_MIN_REPLAY_FIDELITY;
+  if (fidelityRaw !== undefined) {
+    const val = Number(fidelityRaw);
+    if (!Number.isFinite(val) || val < 0 || val > 1) {
+      errors.push({
+        field: 'TRADER_STRATEGY_PROMOTION_MIN_REPLAY_FIDELITY',
+        message: `Must be between 0 and 1, got "${fidelityRaw}". Defaulting to ${thresholds.minReplayFidelity}.`,
+        provided: fidelityRaw,
+      });
+    } else {
+      thresholds.minReplayFidelity = val;
+    }
+  }
+
   return thresholds;
 }
 

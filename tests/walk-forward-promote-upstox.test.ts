@@ -15,6 +15,7 @@ import {
 import {
   WalkForwardSelectionResult,
   WalkForwardWindowType,
+  type WalkForwardWindowMetricsEnvelope,
 } from '../src/replay/walk-forward-types.js';
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,8 @@ function seedWinner(
     windowCount?: number;
     oosCount?: number;
     result?: WalkForwardSelectionResult;
+    /** metrics_json for trial-window rows. null = no metrics. */
+    metricsJson?: string | null;
   },
 ): number {
   const now = Date.now();
@@ -175,6 +178,48 @@ function seedWinner(
   `).run(1, 1, 0, 'Config B (5 candidates)', JSON.stringify({ maxCandidates: 5 }),
     mergedScore, 0.85, null, 'skipped', 1, now);
 
+  // Determine metricsJson value
+  const metricsOverride = overrides?.metricsJson;
+  let metricsVal: string | null;
+  if (metricsOverride !== undefined) {
+    // Explicitly set — use as-is (null for legacy simulation)
+    metricsVal = metricsOverride;
+  } else {
+    // Default: full-fidelity metrics so existing tests pass the fidelity gate
+    metricsVal = JSON.stringify({
+      schemaVersion: 1,
+      source: 'replay-session',
+      replayEvidence: {
+        replaySessionId: 1,
+        replayStatus: 'completed',
+        replayLabel: 'Test session',
+        replayRangeStart: now - 86400000,
+        replayRangeEnd: now,
+        replayCompletedTicks: 10,
+        replayTotalTicks: 10,
+        checkpointCount: 3,
+        strategyRunCount: 5,
+        firstStrategyRunId: 1,
+        lastStrategyRunId: 5,
+        topCandidateCount: 5,
+        maxCandidates: 5,
+        preCapCandidateCount: 5,
+        llmStatusCounts: { consulted: 4, skipped: 1 },
+        pluginErrorCount: 0,
+        errorMessage: null,
+      },
+      summary: {
+        tickCount: 10,
+        meanMergedScore: mergedScore,
+        meanDeterministicScore: mergedScore * 0.9,
+        meanLlmScore: null,
+        stdDevMergedScore: null,
+        maxMergedScore: mergedScore,
+        minMergedScore: mergedScore * 0.7,
+      },
+    });
+  }
+
   // Insert trial window evidence
   const sharpe = overrides?.sharpeRatio ?? 1.5;
   const dd = overrides?.maxDrawdown ?? -15;
@@ -187,7 +232,7 @@ function seedWinner(
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(1, i + 1, wType, isOos ? 0.05 : 0.12,
       isOos ? (sharpe ?? null) : 2.0, isOos ? (dd ?? -15) : -10,
-      isOos ? 0.55 : 0.60, isOos ? 15 : 25, null, null, now);
+      isOos ? 0.55 : 0.60, isOos ? 15 : 25, null, metricsVal, now);
   }
 
   // Insert winner
@@ -471,6 +516,7 @@ describe('StrategyLifecycleEvaluator — promotion pipeline', () => {
         maxDrawdown: 30,
         minWindowCount: 1,
         minOutOfSampleWindows: 1,
+        minReplayFidelity: 0, // relaxed — no metrics in seed data
       },
     });
 
@@ -493,5 +539,234 @@ describe('StrategyLifecycleEvaluator — promotion pipeline', () => {
     expect(result.rationale).toContain('identity');
     expect(result.rationale).toContain('does not match');
     expect(result.stateUpdated).toBe(false);
+  });
+
+  // -----------------------------------------------------------------------
+  // Replay fidelity gate integration tests
+  // -----------------------------------------------------------------------
+
+  describe('replay fidelity gate', () => {
+    it('should PROMOTE when full replay fidelity evidence is present', () => {
+      // Seed with full-fidelity metrics_json
+      const now = Date.now();
+      const envelope = {
+        schemaVersion: 1,
+        source: 'replay-session',
+        replayEvidence: {
+          replaySessionId: 1,
+          replayStatus: 'completed',
+          replayLabel: 'Test session',
+          replayRangeStart: now - 86400000,
+          replayRangeEnd: now,
+          replayCompletedTicks: 10,
+          replayTotalTicks: 10,
+          checkpointCount: 3,
+          strategyRunCount: 5,
+          firstStrategyRunId: 1,
+          lastStrategyRunId: 5,
+          topCandidateCount: 5,
+          maxCandidates: 5,
+          preCapCandidateCount: 5,
+          llmStatusCounts: { consulted: 4, skipped: 1 },
+          pluginErrorCount: 0,
+          errorMessage: null,
+        },
+        summary: {
+          tickCount: 10,
+          meanMergedScore: 0.85,
+          meanDeterministicScore: 0.77,
+          meanLlmScore: null,
+          stdDevMergedScore: null,
+          maxMergedScore: 0.85,
+          minMergedScore: 0.7,
+        },
+      };
+
+      seedWinner(db, {
+        mergedScore: 0.85,
+        sharpeRatio: 1.5,
+        maxDrawdown: -15,
+        metricsJson: JSON.stringify(envelope),
+      });
+
+      const result = evaluator.evaluate({
+        runId: 1,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+      });
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      expect(result.evidenceSnapshot.replayFidelity).toBe(1.0);
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(true);
+      expect(result.evidenceSnapshot.llmConsultationRate).toBe(0.8); // 4/5 consulted
+
+      // Verify evidence persisted
+      const persisted = JSON.parse(result.decision.evidenceJson!);
+      expect(persisted.replayFidelity).toBe(1.0);
+      expect(persisted.hasReplayEvidence).toBe(true);
+    });
+
+    it('should HOLD when replay fidelity is degraded by cap', () => {
+      const now = Date.now();
+      // Degraded cap: 2/5 = 0.4 fidelity
+      const envelope = {
+        schemaVersion: 1,
+        source: 'replay-session',
+        replayEvidence: {
+          replaySessionId: 1,
+          replayStatus: 'completed',
+          replayLabel: 'Test session',
+          replayRangeStart: now - 86400000,
+          replayRangeEnd: now,
+          replayCompletedTicks: 10,
+          replayTotalTicks: 10,
+          checkpointCount: 3,
+          strategyRunCount: 5,
+          firstStrategyRunId: 1,
+          lastStrategyRunId: 5,
+          topCandidateCount: 2,
+          maxCandidates: 2,
+          preCapCandidateCount: 5,
+          llmStatusCounts: { consulted: 2, skipped: 0 },
+          pluginErrorCount: 0,
+          errorMessage: null,
+        },
+        summary: {
+          tickCount: 10,
+          meanMergedScore: 0.85,
+          meanDeterministicScore: 0.77,
+          meanLlmScore: null,
+          stdDevMergedScore: null,
+          maxMergedScore: 0.85,
+          minMergedScore: 0.7,
+        },
+      };
+
+      seedWinner(db, {
+        mergedScore: 0.85,
+        sharpeRatio: 1.5,
+        maxDrawdown: -15,
+        metricsJson: JSON.stringify(envelope),
+      });
+
+      const result = evaluator.evaluate({
+        runId: 1,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+      });
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('Replay fidelity');
+      expect(result.rationale).toContain('0.40');
+      expect(result.evidenceSnapshot.replayFidelity).toBe(0.4);
+      expect(result.stateUpdated).toBe(false);
+    });
+
+    it('should HOLD when LLM consultation rate is zero during replay', () => {
+      const now = Date.now();
+      const envelope = {
+        schemaVersion: 1,
+        source: 'replay-session',
+        replayEvidence: {
+          replaySessionId: 1,
+          replayStatus: 'completed',
+          replayLabel: 'Test session',
+          replayRangeStart: now - 86400000,
+          replayRangeEnd: now,
+          replayCompletedTicks: 10,
+          replayTotalTicks: 10,
+          checkpointCount: 3,
+          strategyRunCount: 5,
+          firstStrategyRunId: 1,
+          lastStrategyRunId: 5,
+          topCandidateCount: 5,
+          maxCandidates: 5,
+          preCapCandidateCount: 5,
+          llmStatusCounts: { skipped: 5 }, // zero consulted
+          pluginErrorCount: 0,
+          errorMessage: null,
+        },
+        summary: {
+          tickCount: 10,
+          meanMergedScore: 0.85,
+          meanDeterministicScore: 0.77,
+          meanLlmScore: null,
+          stdDevMergedScore: null,
+          maxMergedScore: 0.85,
+          minMergedScore: 0.7,
+        },
+      };
+
+      seedWinner(db, {
+        mergedScore: 0.85,
+        sharpeRatio: 1.5,
+        maxDrawdown: -15,
+        metricsJson: JSON.stringify(envelope),
+      });
+
+      const result = evaluator.evaluate({
+        runId: 1,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+      });
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('LLM consultation rate is 0');
+      expect(result.evidenceSnapshot.llmConsultationRate).toBe(0);
+      expect(result.stateUpdated).toBe(false);
+    });
+
+    it('should HOLD on legacy null metrics (fail closed with default thresholds)', () => {
+      // Legacy seed without metricsJson → null metrics
+      seedWinner(db, {
+        mergedScore: 0.85,
+        sharpeRatio: 1.5,
+        maxDrawdown: -15,
+        metricsJson: null,
+      });
+
+      const result = evaluator.evaluate({
+        runId: 1,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+      });
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('No replay evidence available');
+      expect(result.evidenceSnapshot.replayFidelity).toBeNull();
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(false);
+    });
+
+    it('should PROMOTE with legacy null metrics when minReplayFidelity is 0', () => {
+      seedWinner(db, {
+        mergedScore: 0.85,
+        sharpeRatio: 1.5,
+        maxDrawdown: -15,
+        metricsJson: null,
+      });
+
+      const result = evaluator.evaluate({
+        runId: 1,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        thresholds: {
+          minMergedScore: 0.7,
+          minSharpeRatio: 1.0,
+          maxDrawdown: 30,
+          minWindowCount: 2,
+          minOutOfSampleWindows: 1,
+          minReplayFidelity: 0,
+        },
+      });
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      expect(result.evidenceSnapshot.replayFidelity).toBeNull();
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(false);
+    });
   });
 });

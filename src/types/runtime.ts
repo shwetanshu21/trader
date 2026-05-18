@@ -2360,6 +2360,17 @@ export interface GovernanceThresholdConfig {
   minWindowCount: number;
   /** Minimum number of out-of-sample windows with evidence. Default: 1. */
   minOutOfSampleWindows: number;
+  /**
+   * Minimum replay fidelity (0–1) required for promotion.
+   *
+   * Replay fidelity measures how faithfully the walk-forward replay evidence
+   * represents the LLM-first runtime path. A value of 1.0 means all candidates
+   * were presented to the LLM without cap-induced truncation and LLM consultation
+   * was active. Lower values indicate cap degradation, missing metrics, or
+   * skipped LLM consultation.
+   * Default: 1.0 (full fidelity required).
+   */
+  minReplayFidelity: number;
 }
 
 /**
@@ -2371,6 +2382,7 @@ export const DEFAULT_GOVERNANCE_THRESHOLDS: GovernanceThresholdConfig = {
   maxDrawdown: 30,
   minWindowCount: 2,
   minOutOfSampleWindows: 1,
+  minReplayFidelity: 1.0,
 };
 
 // ---------------------------------------------------------------------------
