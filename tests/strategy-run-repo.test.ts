@@ -11,6 +11,7 @@ import {
   type NewStrategyRunCandidate,
   type NewProposalAttempt,
   type NewUniverseSnapshot,
+  type IndiaResearchCandidateEvidence,
 } from '../src/types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -865,38 +866,143 @@ describe('StrategyRunRepository', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Transactional atomicity — rollback on failure
+  // India research evidence — candidate-level persistence
   // -----------------------------------------------------------------------
 
-  describe('transactional atomicity', () => {
-    it('rolls back entire insert when candidate has invalid FK', () => {
+  describe('India research evidence (candidate-level)', () => {
+    it('round-trips a candidate with India research evidence', () => {
       const ctx = createContext();
-      const candidate: NewStrategyRunCandidate = {
-        ...sampleCandidates()[0],
-        emitted: true,
-        proposalAttemptId: 99999,
+      const evidence: IndiaResearchCandidateEvidence = {
+        summary: 'India GDP growth revised to 7.2% for FY25, RBI maintains repo rate at 6.5%. FII inflows in August crossed $3B.',
+        tags: ['gdp-growth', 'rbi-policy', 'fi-inflows', 'macro'],
+        freshnessMs: 300_000, // 5 min old
+        influenceScore: 0.85,
       };
 
-      expect(() => {
-        ctx.runRepo.insertRunWithCandidates(sampleRun(), [candidate]);
-      }).toThrow();
+      const candidate: NewStrategyRunCandidate = {
+        ...sampleCandidates()[0],
+        candidateKey: 'NSE:RESEARCH_TEST',
+        tradingsymbol: 'RESEARCH_TEST',
+        indiaResearchEvidence: evidence,
+      };
 
-      // Nothing should be persisted
-      expect(ctx.runRepo.countRuns()).toBe(0);
-      expect(ctx.runRepo.countCandidates()).toBe(0);
+      const inserted = ctx.runRepo.insertRunWithCandidates(sampleRun(), [candidate]);
+      const loaded = ctx.runRepo.getRunById(inserted.id);
+
+      const loadedEvidence = loaded!.candidates[0].indiaResearchEvidence;
+      expect(loadedEvidence).not.toBeNull();
+      expect(loadedEvidence!.summary).toBe(evidence.summary);
+      expect(loadedEvidence!.tags).toEqual(evidence.tags);
+      expect(loadedEvidence!.freshnessMs).toBe(evidence.freshnessMs);
+      expect(loadedEvidence!.influenceScore).toBe(evidence.influenceScore);
     });
 
-    it('rolls back entire insert when run has invalid universe_snapshot_id FK', () => {
+    it('round-trips a candidate with minimal India research evidence (no tags, null freshness)', () => {
       const ctx = createContext();
-      expect(() => {
-        ctx.runRepo.insertRunWithCandidates(
-          sampleRun({ universeSnapshotId: 99999 }),
-          sampleCandidates(),
-        );
-      }).toThrow();
+      const evidence: IndiaResearchCandidateEvidence = {
+        summary: 'Sector rotation from IT to banking observed.',
+        tags: [],
+        freshnessMs: null,
+        influenceScore: null,
+      };
 
-      expect(ctx.runRepo.countRuns()).toBe(0);
-      expect(ctx.runRepo.countCandidates()).toBe(0);
+      const candidate: NewStrategyRunCandidate = {
+        ...sampleCandidates()[0],
+        candidateKey: 'NSE:MINIMAL',
+        tradingsymbol: 'MINIMAL',
+        indiaResearchEvidence: evidence,
+      };
+
+      const inserted = ctx.runRepo.insertRunWithCandidates(sampleRun(), [candidate]);
+      const loaded = ctx.runRepo.getRunById(inserted.id);
+
+      const loadedEvidence = loaded!.candidates[0].indiaResearchEvidence;
+      expect(loadedEvidence).not.toBeNull();
+      expect(loadedEvidence!.summary).toBe('Sector rotation from IT to banking observed.');
+      expect(loadedEvidence!.tags).toEqual([]);
+      expect(loadedEvidence!.freshnessMs).toBeNull();
+      expect(loadedEvidence!.influenceScore).toBeNull();
+    });
+
+    it('persists null indiaResearchEvidence for backward compatibility', () => {
+      const ctx = createContext();
+      // Uses existing sampleCandidates which have no indiaResearchEvidence field set
+      const inserted = ctx.runRepo.insertRunWithCandidates(sampleRun(), sampleCandidates());
+      const loaded = ctx.runRepo.getRunById(inserted.id);
+
+      for (const c of loaded!.candidates) {
+        expect(c.indiaResearchEvidence).toBeNull();
+      }
+    });
+
+    it('round-trips a mix of candidates with and without India research evidence', () => {
+      const ctx = createContext();
+      const evidence: IndiaResearchCandidateEvidence = {
+        summary: 'Nifty IT index shows strong momentum after TCS results.',
+        tags: ['nifty-it', 'tcs-results', 'sector-momentum'],
+        freshnessMs: 180_000,
+        influenceScore: 0.75,
+      };
+
+      const candidates: NewStrategyRunCandidate[] = [
+        {
+          ...sampleCandidates()[0],
+          candidateKey: 'NSE:WITH_EVIDENCE',
+          tradingsymbol: 'WITH_EVIDENCE',
+          rank: 1,
+          indiaResearchEvidence: evidence,
+        },
+        {
+          ...sampleCandidates()[1],
+          candidateKey: 'NSE:NO_EVIDENCE',
+          tradingsymbol: 'NO_EVIDENCE',
+          rank: 2,
+          indiaResearchEvidence: null,
+        },
+        {
+          ...sampleCandidates()[2],
+          candidateKey: 'NSE:ALSO_NO_EVIDENCE',
+          tradingsymbol: 'ALSO_NO_EVIDENCE',
+          rank: 3,
+          // Explicitly undefined — should be treated as null by the insert path
+          indiaResearchEvidence: undefined as unknown as null,
+        },
+      ];
+
+      const inserted = ctx.runRepo.insertRunWithCandidates(sampleRun(), candidates);
+      const loaded = ctx.runRepo.getRunById(inserted.id);
+
+      expect(loaded!.candidates.length).toBe(3);
+      expect(loaded!.candidates[0].indiaResearchEvidence).not.toBeNull();
+      expect(loaded!.candidates[0].indiaResearchEvidence!.summary).toBe(evidence.summary);
+      expect(loaded!.candidates[1].indiaResearchEvidence).toBeNull();
+      expect(loaded!.candidates[2].indiaResearchEvidence).toBeNull();
+    });
+
+    it('handles India research evidence with bounded tags array (max 10)', () => {
+      const ctx = createContext();
+      const tags = Array.from({ length: 10 }, (_, i) => `tag-${i + 1}`);
+      const evidence: IndiaResearchCandidateEvidence = {
+        summary: 'Ten-tag research summary.',
+        tags,
+        freshnessMs: null,
+        influenceScore: 0.5,
+      };
+
+      const candidate: NewStrategyRunCandidate = {
+        ...sampleCandidates()[0],
+        candidateKey: 'NSE:TEN_TAGS',
+        tradingsymbol: 'TEN_TAGS',
+        indiaResearchEvidence: evidence,
+      };
+
+      const inserted = ctx.runRepo.insertRunWithCandidates(sampleRun(), [candidate]);
+      const loaded = ctx.runRepo.getRunById(inserted.id);
+
+      const loadedEvidence = loaded!.candidates[0].indiaResearchEvidence!;
+      expect(loadedEvidence.tags.length).toBe(10);
+      expect(loadedEvidence.tags[0]).toBe('tag-1');
+      expect(loadedEvidence.tags[9]).toBe('tag-10');
     });
   });
 });

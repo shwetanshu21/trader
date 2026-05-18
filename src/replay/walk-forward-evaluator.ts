@@ -736,22 +736,22 @@ export class WalkForwardEvaluator {
       errorMessage: session.errorMessage,
     };
 
-    const extendedMetrics: WalkForwardWindowMetricsEnvelope = {
-      schemaVersion: 1,
-      source: 'replay-session',
-      replayEvidence,
-      summary: {
-        tickCount: mergedScores.length,
-        meanMergedScore: mergedMean,
-        meanDeterministicScore: this._average(deterministicScores),
-        meanLlmScore: this._average(llmScores),
-        stdDevMergedScore: mergedStd,
-        maxMergedScore: mergedMax,
-        minMergedScore: mergedMin,
-      },
-    };
-
     if (mergedScores.length === 0) {
+      const extendedMetrics: WalkForwardWindowMetricsEnvelope = {
+        schemaVersion: 1,
+        source: 'replay-session',
+        replayEvidence,
+        summary: {
+          tickCount: 0,
+          meanMergedScore: null,
+          meanDeterministicScore: this._average(deterministicScores),
+          meanLlmScore: this._average(llmScores),
+          stdDevMergedScore: null,
+          maxMergedScore: null,
+          minMergedScore: null,
+        },
+      };
+
       return {
         totalReturn: 0,
         sharpeRatio: null,
@@ -768,15 +768,33 @@ export class WalkForwardEvaluator {
       };
     }
 
+    const extendedMetrics: WalkForwardWindowMetricsEnvelope = {
+      schemaVersion: 1,
+      source: 'replay-session',
+      replayEvidence,
+      summary: {
+        tickCount: mergedScores.length,
+        meanMergedScore: mergedMean,
+        meanDeterministicScore: this._average(deterministicScores),
+        meanLlmScore: this._average(llmScores),
+        stdDevMergedScore: mergedStd,
+        maxMergedScore: mergedMax,
+        minMergedScore: mergedMin,
+      },
+    };
+
+    const mergedMeanValue = mergedMean ?? 0;
+    const mergedStdValue = mergedStd ?? 0;
+
     return {
-      totalReturn: +mergedMean.toFixed(4),
-      sharpeRatio: mergedStd > 1e-10 ? +(mergedMean / mergedStd).toFixed(4) : null,
-      maxDrawdown: mergedMin != null && mergedMin < mergedMean ? +(mergedMean - mergedMin).toFixed(4) : 0,
+      totalReturn: +mergedMeanValue.toFixed(4),
+      sharpeRatio: mergedStdValue > 1e-10 ? +(mergedMeanValue / mergedStdValue).toFixed(4) : null,
+      maxDrawdown: mergedMin != null && mergedMin < mergedMeanValue ? +(mergedMeanValue - mergedMin).toFixed(4) : 0,
       winRate: +(winningTicks / mergedScores.length).toFixed(4),
       tradeCount: mergedScores.length,
       profitFactor: losingTicks > 0 ? +(winningTicks / losingTicks).toFixed(4) : (winningTicks > 0 ? 999 : null),
       deterministicScore: this._average(deterministicScores),
-      mergedScore: +mergedMean.toFixed(4),
+      mergedScore: +mergedMeanValue.toFixed(4),
       extendedMetrics,
       llmStatus: this._summarizeLlmStatus(llmStatuses),
       llmScore: this._average(llmScores),

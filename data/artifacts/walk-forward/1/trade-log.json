@@ -3,7 +3,7 @@
   "artifactType": "trade-log",
   "runId": 1,
   "runLabel": "int-test-winner",
-  "generatedAt": "2026-05-17T21:28:39.995Z",
+  "generatedAt": "2026-05-18T07:08:43.133Z",
   "entries": [
     {
       "trialId": 1,
@@ -12,8 +12,8 @@
       "tradeCount": 2,
       "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 69487.4419,
-      "maxDrawdown": 0
+      "sharpeRatio": 17119.0476,
+      "maxDrawdown": 0.0001
     },
     {
       "trialId": 1,
@@ -22,7 +22,7 @@
       "tradeCount": 2,
       "totalReturn": 0.7189,
       "winRate": 1,
-      "sharpeRatio": 409619.4939,
+      "sharpeRatio": 23190.3226,
       "maxDrawdown": 0
     },
     {
@@ -32,8 +32,8 @@
       "tradeCount": 2,
       "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 27037.3421,
-      "maxDrawdown": 0
+      "sharpeRatio": 14673.4694,
+      "maxDrawdown": 0.0001
     },
     {
       "trialId": 1,
@@ -42,7 +42,7 @@
       "tradeCount": 2,
       "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 62761.3798,
+      "sharpeRatio": 21787.8788,
       "maxDrawdown": 0
     },
     {
@@ -52,8 +52,8 @@
       "tradeCount": 2,
       "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 69487.4419,
-      "maxDrawdown": 0
+      "sharpeRatio": 17119.0476,
+      "maxDrawdown": 0.0001
     },
     {
       "trialId": 2,
@@ -62,7 +62,7 @@
       "tradeCount": 2,
       "totalReturn": 0.7189,
       "winRate": 1,
-      "sharpeRatio": 409619.4939,
+      "sharpeRatio": 23190.3226,
       "maxDrawdown": 0
     },
     {
@@ -72,8 +72,8 @@
       "tradeCount": 2,
       "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 27037.3421,
-      "maxDrawdown": 0
+      "sharpeRatio": 14673.4694,
+      "maxDrawdown": 0.0001
     },
     {
       "trialId": 2,
@@ -82,7 +82,7 @@
       "tradeCount": 2,
       "totalReturn": 0.719,
       "winRate": 1,
-      "sharpeRatio": 62761.3798,
+      "sharpeRatio": 21787.8788,
       "maxDrawdown": 0
     }
   ]

@@ -10,6 +10,7 @@ import {
   type NewProposalAttempt,
   type NewStrategyDecision,
   type StrategyDecisionReason,
+  type IndiaResearchDecisionEvidence,
 } from '../src/types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -598,6 +599,136 @@ describe('StrategyDecisionRepository', () => {
       expect(() => {
         strategyRepo.insertDecision(decision);
       }).toThrow();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // India research evidence — decision-level persistence
+  // -----------------------------------------------------------------------
+
+  describe('India research evidence (decision-level)', () => {
+    it('round-trips a decision with India research evidence', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo);
+      const evidence: IndiaResearchDecisionEvidence = {
+        summary: 'India Q3 GDP expanded 7.6% vs 7.0% expected, driven by manufacturing and construction. FIIs net buyers in financials.',
+        tags: ['gdp-surprise', 'manufacturing', 'fi-inflows', 'financials'],
+        freshnessMs: 600_000,
+        influenceContext: 'Positive GDP surprise supported bullish outlook on financial sector candidates.',
+      };
+
+      const decision = sampleApprovedDecision(paId, {
+        tradingsymbol: 'RESEARCH_DECISION',
+        indiaResearchEvidence: evidence,
+      });
+
+      const inserted = strategyRepo.insertDecision(decision);
+      const loaded = strategyRepo.getDecisionById(inserted.id);
+
+      const loadedEvidence = loaded!.indiaResearchEvidence;
+      expect(loadedEvidence).not.toBeNull();
+      expect(loadedEvidence!.summary).toBe(evidence.summary);
+      expect(loadedEvidence!.tags).toEqual(evidence.tags);
+      expect(loadedEvidence!.freshnessMs).toBe(evidence.freshnessMs);
+      expect(loadedEvidence!.influenceContext).toBe(evidence.influenceContext);
+    });
+
+    it('round-trips a decision with minimal India research evidence', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo);
+      const evidence: IndiaResearchDecisionEvidence = {
+        summary: 'Rupee depreciated 0.3% against USD.',
+        tags: [],
+        freshnessMs: null,
+        influenceContext: null,
+      };
+
+      const decision = sampleApprovedDecision(paId, {
+        tradingsymbol: 'MINIMAL_EVIDENCE',
+        indiaResearchEvidence: evidence,
+      });
+
+      const inserted = strategyRepo.insertDecision(decision);
+      const loaded = strategyRepo.getDecisionById(inserted.id);
+
+      const loadedEvidence = loaded!.indiaResearchEvidence;
+      expect(loadedEvidence).not.toBeNull();
+      expect(loadedEvidence!.summary).toBe('Rupee depreciated 0.3% against USD.');
+      expect(loadedEvidence!.tags).toEqual([]);
+      expect(loadedEvidence!.freshnessMs).toBeNull();
+      expect(loadedEvidence!.influenceContext).toBeNull();
+    });
+
+    it('persists null indiaResearchEvidence for backward compatibility', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo);
+
+      // Insert without research evidence (legacy behavior)
+      const inserted = strategyRepo.insertDecision(sampleApprovedDecision(paId, { tradingsymbol: 'NO_EVIDENCE' }));
+      const loaded = strategyRepo.getDecisionById(inserted.id);
+
+      expect(loaded!.indiaResearchEvidence).toBeNull();
+    });
+
+    it('preserves India research evidence through getDecisionByProposalAttemptId', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo, { tradingsymbol: 'BY_PA_ID' });
+      const evidence: IndiaResearchDecisionEvidence = {
+        summary: 'Sector-specific research evidence.',
+        tags: ['sector-analysis'],
+        freshnessMs: 120_000,
+        influenceContext: null,
+      };
+
+      strategyRepo.insertDecision(sampleApprovedDecision(paId, {
+        tradingsymbol: 'BY_PA_ID',
+        indiaResearchEvidence: evidence,
+      }));
+
+      const loaded = strategyRepo.getDecisionByProposalAttemptId(paId);
+      expect(loaded!.indiaResearchEvidence).not.toBeNull();
+      expect(loaded!.indiaResearchEvidence!.summary).toBe('Sector-specific research evidence.');
+      expect(loaded!.indiaResearchEvidence!.tags).toEqual(['sector-analysis']);
+    });
+
+    it('preserves India research evidence through getRecentDecisions', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo, { tradingsymbol: 'RECENT_DECISION' });
+      const evidence: IndiaResearchDecisionEvidence = {
+        summary: 'Recent research evidence.',
+        tags: ['recent'],
+        freshnessMs: 0,
+        influenceContext: 'Fresh data.',
+      };
+
+      strategyRepo.insertDecision(sampleApprovedDecision(paId, {
+        tradingsymbol: 'RECENT_DECISION',
+        decidedAt: Date.now(),
+        indiaResearchEvidence: evidence,
+      }));
+
+      const decisions = strategyRepo.getRecentDecisions(1);
+      expect(decisions.length).toBe(1);
+      expect(decisions[0].indiaResearchEvidence).not.toBeNull();
+      expect(decisions[0].indiaResearchEvidence!.summary).toBe('Recent research evidence.');
+      expect(decisions[0].indiaResearchEvidence!.influenceContext).toBe('Fresh data.');
+    });
+
+    it('treats undefined indiaResearchEvidence as null in insert', () => {
+      const { strategyRepo, proposalRepo } = createRepos();
+      const paId = insertAcceptedProposal(proposalRepo);
+
+      const decision = sampleApprovedDecision(paId, {
+        tradingsymbol: 'UNDEFINED_EVIDENCE',
+        // Explicitly setting undefined — the ternary check in the insert handles null vs defined
+      });
+      // Ensure indiaResearchEvidence is not set
+      delete (decision as any).indiaResearchEvidence;
+
+      const inserted = strategyRepo.insertDecision(decision as any);
+      const loaded = strategyRepo.getDecisionById(inserted.id);
+
+      expect(loaded!.indiaResearchEvidence).toBeNull();
     });
   });
 });

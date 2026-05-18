@@ -21,6 +21,7 @@ import type {
   HybridCoordinatorResult,
   PluginScoreEvidence,
 } from '../types/runtime.js';
+import { IndiaResearchBuilder } from '../strategy/india-research.js';
 
 // ---------------------------------------------------------------------------
 // ReplayEngineResult
@@ -55,6 +56,7 @@ export class ReplayEngine {
   private readonly _sessionId: number;
   private readonly _rangeStart: number;
   private readonly _rangeEnd: number;
+  private readonly _researchBuilder: IndiaResearchBuilder;
 
   constructor(options: {
     clock: ReplayClock;
@@ -74,6 +76,7 @@ export class ReplayEngine {
     this._sessionId = options.sessionId;
     this._rangeStart = options.rangeStart;
     this._rangeEnd = options.rangeEnd;
+    this._researchBuilder = new IndiaResearchBuilder();
   }
 
   /**
@@ -204,8 +207,11 @@ export class ReplayEngine {
     const candidates: BoundedCandidate[] = await this._dataProvider.getCandidates(tick);
     const fidelity = this._dataProvider.getEffectiveFidelity(tick);
 
-    // ── Step 2: Run through strategy coordinator ─────────────────────────
-    const coordinatorResult: HybridCoordinatorResult = await this._coordinator.evaluate(candidates);
+    // ── Step 2: Build India research context ────────────────────────────
+    const researchEvidence = this._researchBuilder.build(candidates);
+
+    // ── Step 3: Run through strategy coordinator ─────────────────────────
+    const coordinatorResult: HybridCoordinatorResult = await this._coordinator.evaluate(candidates, researchEvidence);
 
     // ── Step 3: Build and persist strategy run + candidates ──────────────
     const strategyRun = this._buildStrategyRun(coordinatorResult, candidates.length, tickStartedAt);
@@ -298,6 +304,7 @@ export class ReplayEngine {
         hasPluginErrors: evidence.hasPluginErrors,
         emitted: false,
         proposalAttemptId: null,
+        indiaResearchEvidence: evidence.indiaResearchEvidence,
       };
     });
   }

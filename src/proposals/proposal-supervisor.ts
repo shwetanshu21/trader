@@ -41,6 +41,7 @@ import { IndiaProposalValidator, type ValidatorInput } from './india-validator.j
 import { UniverseService, type UniverseCoverageSummary } from '../universe/universe-service.js';
 import { StrategyCoordinator } from '../strategy/framework.js';
 import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
+import { IndiaResearchBuilder } from '../strategy/india-research.js';
 
 // ---------------------------------------------------------------------------
 // ProposalSupervisor
@@ -65,6 +66,8 @@ export class ProposalSupervisor implements TickWork {
   private readonly _hybridScoreRepo: HybridScoreRepository | null;
   /** Optional strategy run repository for append-only screening-round artifacts. */
   private readonly _strategyRunRepo: StrategyRunRepository | null;
+  /** India research context builder — produces bounded research evidence for each candidate. */
+  private readonly _researchBuilder: IndiaResearchBuilder;
 
   /** Local in-flight guard — true while a proposal generation is active. */
   private _inFlight: boolean = false;
@@ -104,6 +107,7 @@ export class ProposalSupervisor implements TickWork {
     this._universeService = options.universeService ?? null;
     this._hybridScoreRepo = options.hybridScoreRepo ?? null;
     this._strategyRunRepo = options.strategyRunRepo ?? null;
+    this._researchBuilder = new IndiaResearchBuilder();
 
     // Use externally-constructed coordinator when provided (production path).
     // Otherwise build one via the shared factory (backward compatibility for tests).
@@ -249,8 +253,11 @@ export class ProposalSupervisor implements TickWork {
       return;
     }
 
-    // ── Phase 5: Run through the pluggable strategy pipeline ────────────
-    const coordinatorResult = await this._coordinator.evaluate(candidates);
+    // ── Phase 5: Build India research context ──────────────────────────
+    const researchEvidence = this._researchBuilder.build(candidates, phase);
+
+    // ── Phase 6: Run through the pluggable strategy pipeline ────────────
+    const coordinatorResult = await this._coordinator.evaluate(candidates, researchEvidence);
 
     if (coordinatorResult.candidates.length === 0) {
       // Coordinator returned nothing (all plugins declined) — persist refusal
@@ -777,6 +784,7 @@ export class ProposalSupervisor implements TickWork {
           hasPluginErrors: evidence.hasPluginErrors,
           emitted: isEmitted,
           proposalAttemptId,
+          indiaResearchEvidence: evidence.indiaResearchEvidence,
         };
       });
 

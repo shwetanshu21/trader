@@ -36,8 +36,9 @@ export class StrategyDecisionRepository {
         (proposal_attempt_id, decision_status, strategy_id, strategy_version, decided_at,
          exchange, tradingsymbol, side, product, quantity, price, trigger_price, order_type,
          quote_last_price, quote_bid, quote_ask, quote_volume, quote_received_at,
-         risk_notional, risk_sizing_basis, risk_max_loss_rupees, risk_stop_distance, risk_exposure_tag)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         risk_notional, risk_sizing_basis, risk_max_loss_rupees, risk_stop_distance, risk_exposure_tag,
+         india_research_evidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -64,6 +65,7 @@ export class StrategyDecisionRepository {
       decision.riskMaxLossRupees,
       decision.riskStopDistance,
       decision.riskExposureTag,
+      decision.indiaResearchEvidence ? JSON.stringify(decision.indiaResearchEvidence) : null,
     );
 
     return {
@@ -91,6 +93,7 @@ export class StrategyDecisionRepository {
       riskMaxLossRupees: decision.riskMaxLossRupees,
       riskStopDistance: decision.riskStopDistance,
       riskExposureTag: decision.riskExposureTag,
+      indiaResearchEvidence: decision.indiaResearchEvidence,
     };
   }
 
@@ -388,6 +391,7 @@ interface StrategyDecisionDbRow {
   risk_max_loss_rupees: number | null;
   risk_stop_distance: number | null;
   risk_exposure_tag: string | null;
+  india_research_evidence: string | null;
 }
 
 function mapDecisionRow(row: StrategyDecisionDbRow): StrategyDecisionRow {
@@ -416,5 +420,8 @@ function mapDecisionRow(row: StrategyDecisionDbRow): StrategyDecisionRow {
     riskMaxLossRupees: row.risk_max_loss_rupees,
     riskStopDistance: row.risk_stop_distance,
     riskExposureTag: row.risk_exposure_tag,
+    indiaResearchEvidence: row.india_research_evidence
+      ? JSON.parse(row.india_research_evidence)
+      : null,
   };
 }

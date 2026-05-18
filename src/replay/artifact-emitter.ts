@@ -190,6 +190,7 @@ export class ArtifactEmitter {
         mergedScore: c.mergedScore,
         deterministicScore: c.deterministicScore,
         llmScore: c.llmScore,
+        llmStatus: c.llmStatus,
         windowCount: c.windowCount,
       })),
       tradeLog,

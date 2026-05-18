@@ -651,6 +651,18 @@ export class DatabaseManager {
 
     // Run migrations
     this._db.exec(SCHEMA_SQL);
+
+    // Migrate S02 columns for India research evidence (idempotent — only adds if missing)
+    this._migrateAddColumnIfNotExists('strategy_run_candidates', 'india_research_evidence', 'TEXT');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'india_research_evidence', 'TEXT');
+  }
+
+  /** Add a column to a table only if it does not already exist. */
+  private _migrateAddColumnIfNotExists(table: string, column: string, def: string): void {
+    const cols = this._db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!cols.find(c => c.name === column)) {
+      this._db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+    }
   }
 
   /** Expose the underlying better-sqlite3 Database handle. */

@@ -51,6 +51,7 @@ interface StrategyRunCandidateDbRow {
   has_plugin_errors: number;
   emitted: number;
   proposal_attempt_id: number | null;
+  india_research_evidence: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,8 +111,9 @@ export class StrategyRunRepository {
            llm_score, llm_status, llm_rationale,
            merged_score, merge_policy,
            proposal_params_json, plugin_errors_json,
-           has_plugin_errors, emitted, proposal_attempt_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           has_plugin_errors, emitted, proposal_attempt_id,
+           india_research_evidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const insertedCandidates: StrategyRunCandidateRow[] = [];
@@ -144,6 +146,7 @@ export class StrategyRunRepository {
           c.hasPluginErrors ? 1 : 0,
           c.emitted ? 1 : 0,
           c.proposalAttemptId,
+          c.indiaResearchEvidence ? JSON.stringify(c.indiaResearchEvidence) : null,
         );
 
         insertedCandidates.push({
@@ -174,6 +177,7 @@ export class StrategyRunRepository {
           hasPluginErrors: c.hasPluginErrors,
           emitted: c.emitted,
           proposalAttemptId: c.proposalAttemptId,
+          indiaResearchEvidence: c.indiaResearchEvidence,
         });
       }
 
@@ -294,7 +298,8 @@ export class StrategyRunRepository {
              llm_score, llm_status, llm_rationale,
              merged_score, merge_policy,
              proposal_params_json, plugin_errors_json,
-             has_plugin_errors, emitted, proposal_attempt_id
+             has_plugin_errors, emitted, proposal_attempt_id,
+             india_research_evidence
       FROM strategy_run_candidates
       WHERE strategy_run_id = ?
       ORDER BY rank ASC
@@ -346,6 +351,9 @@ export class StrategyRunRepository {
       hasPluginErrors: row.has_plugin_errors === 1,
       emitted: row.emitted === 1,
       proposalAttemptId: row.proposal_attempt_id,
+      indiaResearchEvidence: row.india_research_evidence
+        ? JSON.parse(row.india_research_evidence)
+        : null,
     };
   }
 }

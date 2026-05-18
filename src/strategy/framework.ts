@@ -79,6 +79,11 @@ export class StrategyCoordinator {
    * Evaluate bounded candidates through all registered plugins and produce
    * grouped hybrid scoring evidence.
    *
+   * Optionally accepts a pre-built research evidence map (candidateKey →
+   * IndiaResearchCandidateEvidence) provided by the caller. When provided,
+   * research evidence is attached to each HybridCandidateEvidence entry so
+   * persistence and operator surfaces can audit India-specific influence.
+   *
    * Algorithm:
    * 1. Run each sync plugin's evaluate() on the full candidate set.
    * 2. Run async evaluate on plugins that support it (e.g. LLM ranking).
@@ -88,6 +93,7 @@ export class StrategyCoordinator {
    *    - Aggregated deterministic score (mean of non-LLM scores)
    *    - LLM status/score/rationale (if an LLM plugin participated)
    *    - Final merged score using policy (Average if LLM consulted, DeterministicOnly otherwise)
+   *    - India research evidence (if provided)
    * 5. Sort by mergedScore descending.
    * 6. Cap to maxCandidates.
    * 7. Return HybridCoordinatorResult.
@@ -103,7 +109,10 @@ export class StrategyCoordinator {
    * Plugin errors: caught individually, logged in pluginErrors,
    * evaluation continues with remaining plugins.
    */
-  async evaluate(candidates: BoundedCandidate[]): Promise<HybridCoordinatorResult> {
+  async evaluate(
+    candidates: BoundedCandidate[],
+    researchEvidence?: Map<string, import('../types/runtime.js').IndiaResearchCandidateEvidence>,
+  ): Promise<HybridCoordinatorResult> {
     const startedAt = Date.now();
     const pluginErrors: Record<string, string> = {};
     const allRanked: RankedCandidate[] = [];
@@ -169,7 +178,7 @@ export class StrategyCoordinator {
     const groups = this._groupByCandidateKey(allRanked, llmResult);
 
     // ── Phase 4: Build hybrid evidence for each group ──
-    const evidenceList = this._buildHybridEvidence(groups, llmResult);
+    const evidenceList = this._buildHybridEvidence(groups, llmResult, researchEvidence);
 
     // ── Phase 5: Sort by mergedScore descending, exchange, symbol ──
     evidenceList.sort((a, b) => {
@@ -226,6 +235,7 @@ export class StrategyCoordinator {
   private _buildHybridEvidence(
     groups: Map<string, RankedCandidate[]>,
     llmResult: LlmEvaluationResult | null,
+    researchEvidence?: Map<string, import('../types/runtime.js').IndiaResearchCandidateEvidence>,
   ): HybridCandidateEvidence[] {
     const evidenceList: HybridCandidateEvidence[] = [];
 
@@ -320,6 +330,9 @@ export class StrategyCoordinator {
         mergePolicy = MergePolicy.DeterministicOnly;
       }
 
+      // Look up India research evidence for this candidate (null when not provided)
+      const indiaResearchEvidence = researchEvidence?.get(candidateKey) ?? null;
+
       evidenceList.push({
         candidate,
         candidateKey,
@@ -333,6 +346,7 @@ export class StrategyCoordinator {
         proposalParams,
         hasPluginErrors: false, // Plugin errors are tracked at coordinator level
         pluginErrors: {},
+        indiaResearchEvidence,
       });
     }
 

@@ -3,7 +3,7 @@
   "artifactType": "winner-selection",
   "runId": 1,
   "runLabel": "int-test-winner",
-  "selectionTimestamp": "2026-05-17T21:28:39.995Z",
+  "selectionTimestamp": "2026-05-18T07:08:43.133Z",
   "selectionConfig": {
     "strategy": "composite",
     "minMergedScore": 0.5,
@@ -20,7 +20,7 @@
     "deterministicScore": 0.719,
     "llmScore": null
   },
-  "rationale": "Selected Config A (3 candidates) (rank 1) via composite selection with merged score 0.7190 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=236190.44, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (5 candidates) (score=0.7190, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
+  "rationale": "Selected Config A (3 candidates) (rank 1) via composite selection with merged score 0.7190 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=22489.10, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (5 candidates) (score=0.7190, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
   "comparisons": [
     {
       "trialId": 1,
@@ -32,7 +32,7 @@
         "Top-ranked qualifying candidate by selection criteria"
       ],
       "evidenceScores": {
-        "avgSharpe": 236190.43685,
+        "avgSharpe": 22489.1007,
         "maxDrawdown": 0,
         "avgWinRate": 1,
         "outOfSampleWindowCount": 2
@@ -46,7 +46,7 @@
       "outcome": "runner_up",
       "reasons": [],
       "evidenceScores": {
-        "avgSharpe": 236190.43685,
+        "avgSharpe": 22489.1007,
         "maxDrawdown": 0,
         "avgWinRate": 1,
         "outOfSampleWindowCount": 2

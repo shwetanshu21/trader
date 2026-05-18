@@ -16,6 +16,7 @@ import { StrategyCoordinator } from './framework.js';
 import { DeterministicScreenerPlugin } from './deterministic-screener-plugin.js';
 import { LlmRankingStrategy } from './llm-ranking-strategy.js';
 import type { ProposalEngine } from '../proposals/proposal-engine.js';
+import type { StrategyPlugin } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
 // CoordinatorFactoryOptions
@@ -61,7 +62,7 @@ export function createStrategyCoordinator(
     parallelPlugins = true,
   } = options ?? {};
 
-  const plugins = [new DeterministicScreenerPlugin()];
+  const plugins: StrategyPlugin[] = [new DeterministicScreenerPlugin()];
 
   if (proposalEngine) {
     plugins.push(new LlmRankingStrategy(proposalEngine));

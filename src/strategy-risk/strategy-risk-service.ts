@@ -19,6 +19,7 @@ import type {
 import { BrokerRepository } from '../persistence/broker-repo.js';
 import { ProposalRepository } from '../persistence/proposal-repo.js';
 import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
+import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { UniverseService } from '../universe/universe-service.js';
 import {
   type IndiaStrategyPolicyConfig,
@@ -35,6 +36,7 @@ export interface StrategyRiskServiceOptions {
   brokerRepo: BrokerRepository;
   universeService: UniverseService;
   proposalRepo?: ProposalRepository;
+  strategyRunRepo?: StrategyRunRepository;
   policy?: IndiaStrategyPolicyConfig;
 }
 
@@ -47,6 +49,7 @@ export class StrategyRiskService implements StrategyRiskPort {
   private readonly _brokerRepo: BrokerRepository;
   private readonly _universeService: UniverseService;
   private readonly _proposalRepo?: ProposalRepository;
+  private readonly _strategyRunRepo?: StrategyRunRepository;
   private readonly _policy: IndiaStrategyPolicyConfig;
 
   constructor(options: StrategyRiskServiceOptions) {
@@ -54,6 +57,7 @@ export class StrategyRiskService implements StrategyRiskPort {
     this._brokerRepo = options.brokerRepo;
     this._universeService = options.universeService;
     this._proposalRepo = options.proposalRepo;
+    this._strategyRunRepo = options.strategyRunRepo;
     this._policy = options.policy ?? INDIA_NSE_EQ_STRATEGY;
   }
 
@@ -79,6 +83,9 @@ export class StrategyRiskService implements StrategyRiskPort {
 
     // Check universe eligibility via the bounded universe service
     const isUniverseEligible = this._universeService.isSymbolEligible(tradingsymbol, exchange);
+
+    // Recover India research evidence from the strategy run artifact
+    const researchEvidence = this._recoverResearchEvidence(input.proposalAttemptId);
 
     // Call deterministic policy evaluation
     const evaluation = evaluateProposal({
@@ -122,6 +129,7 @@ export class StrategyRiskService implements StrategyRiskPort {
           riskMaxLossRupees: null,
           riskStopDistance: null,
           riskExposureTag: null,
+          indiaResearchEvidence: researchEvidence,
         },
         reasons: evaluation.reasons,
       };
@@ -152,6 +160,7 @@ export class StrategyRiskService implements StrategyRiskPort {
         riskMaxLossRupees: evaluation.riskMaxLossRupees,
         riskStopDistance: evaluation.riskStopDistance,
         riskExposureTag: evaluation.riskExposureTag,
+        indiaResearchEvidence: researchEvidence,
       },
       reasons: [],
     };
@@ -241,6 +250,45 @@ export class StrategyRiskService implements StrategyRiskPort {
   // ── Private ─────────────────────────────────────────────────────────────
 
   /**
+   * Recover India research evidence for a proposal from its strategy run
+   * candidate, if a strategy run repo is wired.
+   *
+   * Looks up the strategy run that contains a candidate linked to this
+   * proposal attempt, and returns the research evidence if present.
+   * Returns null when the run repo is not wired, no run is found, or
+   * no research evidence exists.
+   */
+  private _recoverResearchEvidence(
+    proposalAttemptId: number,
+  ): import('../types/runtime.js').IndiaResearchDecisionEvidence | null {
+    if (!this._strategyRunRepo) return null;
+
+    try {
+      const run = this._strategyRunRepo.getRunByProposalAttemptId(proposalAttemptId);
+      if (!run) return null;
+
+      // Find the candidate linked to this proposal attempt
+      const candidate = run.candidates.find(c => c.proposalAttemptId === proposalAttemptId);
+      if (!candidate || !candidate.indiaResearchEvidence) return null;
+
+      const candEvidence = candidate.indiaResearchEvidence;
+
+      // Convert candidate-level evidence to decision-level evidence
+      return {
+        summary: candEvidence.summary,
+        tags: candEvidence.tags,
+        freshnessMs: candEvidence.freshnessMs,
+        influenceContext: candEvidence.influenceScore != null
+          ? `Research influence score: ${candEvidence.influenceScore.toFixed(3)}`
+          : null,
+      };
+    } catch {
+      // Best-effort — recovery failure should not crash the decision pipeline
+      return null;
+    }
+  }
+
+  /**
    * Synchronous version of evaluateProposal that also persists.
    * Used by processAllPendingProposals for batch processing.
    */
@@ -255,6 +303,9 @@ export class StrategyRiskService implements StrategyRiskPort {
       input.tradingsymbol,
       input.exchange,
     );
+
+    // Recover India research evidence from the strategy run artifact
+    const researchEvidence = this._recoverResearchEvidence(input.proposalAttemptId);
 
     const evaluation = evaluateProposal({
       exchange: input.exchange,
@@ -296,6 +347,7 @@ export class StrategyRiskService implements StrategyRiskPort {
         riskMaxLossRupees: null,
         riskStopDistance: null,
         riskExposureTag: null,
+        indiaResearchEvidence: researchEvidence,
       };
 
       return this._strategyRepo.insertDecisionWithReasons(decision, evaluation.reasons);
@@ -325,6 +377,7 @@ export class StrategyRiskService implements StrategyRiskPort {
       riskMaxLossRupees: evaluation.riskMaxLossRupees,
       riskStopDistance: evaluation.riskStopDistance,
       riskExposureTag: evaluation.riskExposureTag,
+      indiaResearchEvidence: researchEvidence,
     };
 
     return this._strategyRepo.insertDecisionWithReasons(decision, []);

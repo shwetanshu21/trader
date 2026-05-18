@@ -407,6 +407,117 @@ describe('StrategyCoordinator — bounds enforcement', () => {
 });
 
 // ---------------------------------------------------------------------------
+// StrategyCoordinator — India research evidence threading
+// ---------------------------------------------------------------------------
+
+describe('StrategyCoordinator — India research evidence threading', () => {
+  it('attaches India research evidence to HybridCandidateEvidence when provided', async () => {
+    const plugin = makePlugin('test-v1', 'Test', '1.0.0', () => 0.5);
+    const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const researchEvidence = new Map<string, import('../src/types/runtime.js').IndiaResearchCandidateEvidence>();
+    researchEvidence.set('NSE:TCS', {
+      summary: 'India equity listed on NSE | last @ INR 2500.50 | moderate liquidity | tight spread',
+      tags: ['type:eq', 'liquidity:moderate', 'spread:tight'],
+      freshnessMs: null,
+      influenceScore: 0.9,
+    });
+
+    const result = await coordinator.evaluate(candidates, researchEvidence);
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].indiaResearchEvidence).not.toBeNull();
+    expect(result.candidates[0].indiaResearchEvidence!.summary).toContain('India equity');
+    expect(result.candidates[0].indiaResearchEvidence!.tags).toContain('type:eq');
+    expect(result.candidates[0].indiaResearchEvidence!.influenceScore).toBe(0.9);
+  });
+
+  it('sets indiaResearchEvidence to null when no research evidence is provided', async () => {
+    const plugin = makePlugin('test-v1', 'Test', '1.0.0', () => 0.5);
+    const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const result = await coordinator.evaluate(candidates); // No research evidence
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].indiaResearchEvidence).toBeNull();
+  });
+
+  it('sets indiaResearchEvidence to null for candidates not in the research map', async () => {
+    const plugin = makePlugin('test-v1', 'Test', '1.0.0', () => 0.5);
+    const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 5 });
+
+    const candidates = [
+      makeAlphaCandidate('TCS'),
+      makeAlphaCandidate('INFY'),
+    ];
+
+    // Only provide evidence for TCS
+    const researchEvidence = new Map();
+    researchEvidence.set('NSE:TCS', {
+      summary: 'India equity',
+      tags: ['type:eq'],
+      freshnessMs: null,
+      influenceScore: 0.8,
+    });
+
+    const result = await coordinator.evaluate(candidates, researchEvidence);
+
+    expect(result.candidates).toHaveLength(2);
+    // INFY is first alphabetically, TCS is second
+    expect(result.candidates[0].candidate.tradingsymbol).toBe('INFY');
+    expect(result.candidates[0].indiaResearchEvidence).toBeNull(); // INFY doesn't have evidence
+    expect(result.candidates[1].candidate.tradingsymbol).toBe('TCS');
+    expect(result.candidates[1].indiaResearchEvidence).not.toBeNull(); // TCS has evidence
+  });
+
+  it('research evidence survives through multi-plugin evaluation', async () => {
+    const pluginA = makePlugin('a-v1', 'A', '1.0.0', () => 0.6);
+    const pluginB = makePlugin('b-v1', 'B', '1.0.0', () => 0.9);
+    const coordinator = new StrategyCoordinator([pluginA, pluginB], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const researchEvidence = new Map();
+    researchEvidence.set('NSE:TCS', {
+      summary: 'India equity with strong fundamentals',
+      tags: ['type:eq', 'liquidity:high'],
+      freshnessMs: null,
+      influenceScore: 0.95,
+    });
+
+    const result = await coordinator.evaluate(candidates, researchEvidence);
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].indiaResearchEvidence).not.toBeNull();
+    expect(result.candidates[0].indiaResearchEvidence!.influenceScore).toBe(0.95);
+    expect(result.candidates[0].pluginScores).toHaveLength(2); // Both plugins contributed
+  });
+
+  it('research evidence does not affect merged score computation', async () => {
+    const plugin = makePlugin('test-v1', 'Test', '1.0.0', () => 0.5);
+    const coordinator = new StrategyCoordinator([plugin], { maxCandidates: 5 });
+
+    const candidates = [makeAlphaCandidate('TCS')];
+    const researchEvidence = new Map();
+    researchEvidence.set('NSE:TCS', {
+      summary: 'Some research',
+      tags: ['type:eq'],
+      freshnessMs: null,
+      influenceScore: 0.9,
+    });
+
+    // With research evidence
+    const resultWith = await coordinator.evaluate(candidates, researchEvidence);
+    // Without
+    const resultWithout = await coordinator.evaluate(candidates);
+
+    expect(resultWith.candidates[0].mergedScore).toBe(resultWithout.candidates[0].mergedScore);
+    expect(resultWith.candidates[0].deterministicScore).toBe(resultWithout.candidates[0].deterministicScore);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // StrategyCoordinator — empty and refusal behavior
 // ---------------------------------------------------------------------------
 

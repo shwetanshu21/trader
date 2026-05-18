@@ -991,6 +991,8 @@ export interface StrategyDecisionRow {
   riskMaxLossRupees: number | null;
   riskStopDistance: number | null;
   riskExposureTag: string | null;
+  /** India research evidence — null when no research evidence influenced this decision. */
+  indiaResearchEvidence: IndiaResearchDecisionEvidence | null;
 }
 
 /** Shape for inserting a new strategy decision (without id). */
@@ -1824,6 +1826,8 @@ export interface StrategyRunCandidateRow {
   emitted: boolean;
   /** FK → proposal_attempts(id). Non-null when emitted. */
   proposalAttemptId: number | null;
+  /** India research evidence — null when no research was evaluated for this candidate. */
+  indiaResearchEvidence: IndiaResearchCandidateEvidence | null;
 }
 
 /** Shape for inserting a new strategy run candidate (without id). */
@@ -2106,6 +2110,11 @@ export interface HybridCandidateEvidence {
   hasPluginErrors: boolean;
   /** Plugin errors keyed by plugin ID, if any. */
   pluginErrors: Record<string, string>;
+  /** India research evidence — null when no research was evaluated for this candidate.
+   *  Carries bounded summary, semantic tags, freshness markers, and per-candidate
+   *  influence so runtime, replay, and operator surfaces can inspect why India-specific
+   *  context changed rankings. */
+  indiaResearchEvidence: IndiaResearchCandidateEvidence | null;
 }
 
 /**
@@ -2124,6 +2133,8 @@ export interface HybridCoordinatorResult {
   totalEvaluated: number;
   /** Whether any plugin errors occurred across all candidates. */
   hasPluginErrors: boolean;
+  /** Plugin-level error messages captured during evaluation, keyed by plugin id. */
+  pluginErrors: Record<string, string>;
   /** Total wall-clock duration of the evaluation round in ms. */
   durationMs: number;
 }
@@ -2274,6 +2285,53 @@ export const DEFAULT_GOVERNANCE_THRESHOLDS: GovernanceThresholdConfig = {
   minWindowCount: 2,
   minOutOfSampleWindows: 1,
 };
+
+// ---------------------------------------------------------------------------
+// India research evidence — bounded DTOs for S02 M009
+// ---------------------------------------------------------------------------
+
+/**
+ * Bounded India research evidence attached to a strategy run candidate.
+ *
+ * Captures the India-specific research summary, semantic tags, freshness
+ * metadata, and per-candidate influence so runtime, replay, and operator
+ * surfaces can inspect why India-specific context changed rankings without
+ * reconstructing prompt text from logs.
+ *
+ * All text fields are bounded by character limits to prevent oversized
+ * operator payloads. Null/absent evidence is valid — legacy candidates
+ * without research evidence load cleanly.
+ */
+export interface IndiaResearchCandidateEvidence {
+  /** Bounded summary text (max 500 chars) of India-specific research findings. */
+  summary: string;
+  /** Bounded semantic tags — max 10, each max 80 chars. */
+  tags: string[];
+  /** Freshness metadata — staleness in ms, or null if unknown. */
+  freshnessMs: number | null;
+  /** Per-candidate influence score (0–1) indicating how much India research affected the ranking. */
+  influenceScore: number | null;
+}
+
+/**
+ * Bounded India research evidence attached to a strategy decision.
+ *
+ * Compact operator summary so evidence of India-specific influence is visible
+ * on the dashboard without reconstructing prompt text from logs.
+ *
+ * All text fields are bounded. Null/absent evidence is valid for backward
+ * compatibility with decisions made before research evidence was tracked.
+ */
+export interface IndiaResearchDecisionEvidence {
+  /** Bounded summary text (max 800 chars). */
+  summary: string;
+  /** Bounded semantic tags — max 10, each max 80 chars. */
+  tags: string[];
+  /** Freshness metadata — staleness in ms, or null if unknown. */
+  freshnessMs: number | null;
+  /** Per-decision influence context explaining how research affected the decision. */
+  influenceContext: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Strategy lifecycle demotion — DTOs for M006/S02 demotion governance
