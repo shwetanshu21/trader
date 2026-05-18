@@ -85,6 +85,10 @@ export interface RuntimeAppHandles {
   clock: MarketClock;
   brokerSupervisor: BrokerSupervisor | null;
   zerodhaSupervisor: BrokerSupervisor | null;
+  /** Repo-backed instrument catalog service, available even in degraded broker mode. */
+  instrumentsService: InstrumentsService | null;
+  /** Repo-backed quote stream facade, available even in degraded broker mode. */
+  marketDataStream: import('../integrations/broker/ports.js').QuoteStreamPort | null;
   proposalSupervisor: ProposalSupervisor | null;
   executionGateSupervisor: ExecutionGateSupervisor | null;
   strategyRiskSupervisor: StrategyRiskSupervisor | null;
@@ -123,6 +127,7 @@ class LazyStrategyRiskPort implements StrategyRiskPort {
     private readonly _strategyRepo: StrategyDecisionRepository,
     private readonly _brokerRepo: BrokerRepository,
     private readonly _universeService: UniverseService,
+    private readonly _strategyRunRepo: StrategyRunRepository | null,
   ) {}
 
   async evaluateProposal(input: StrategyEvaluationInput): Promise<StrategyEvaluationResult> {
@@ -135,6 +140,7 @@ class LazyStrategyRiskPort implements StrategyRiskPort {
           strategyRepo: this._strategyRepo,
           brokerRepo: this._brokerRepo,
           universeService: this._universeService,
+          strategyRunRepo: this._strategyRunRepo ?? undefined,
         });
       } catch {
         throw new Error(
@@ -201,8 +207,11 @@ export class RuntimeApp {
     // ── Phase 4: initialise broker services ───────────────────────────────
     let brokerSupervisor: BrokerSupervisor | null = null;
     let sessionService: SessionService | null = null;
-    let instrumentsService: InstrumentsService | null = null;
-    let marketDataStream: import('../integrations/broker/ports.js').QuoteStreamPort | null = null;
+    // Keep repo-backed catalog/quote services available even without a live
+    // broker transport so local proofs and integration tests can exercise the
+    // canonical runtime proposal path against seeded brokerRepo state.
+    let instrumentsService: InstrumentsService | null = new InstrumentsService(brokerRepo);
+    let marketDataStream: import('../integrations/broker/ports.js').QuoteStreamPort | null = new MarketDataStream(brokerRepo);
 
     let brokerConfig = this.config.broker ?? this.config.zerodha;
 
@@ -366,6 +375,7 @@ export class RuntimeApp {
         strategyDecisionRepo,
         brokerRepo,
         universeService,
+        strategyRunRepo,
       );
       strategyRiskSupervisor = new StrategyRiskSupervisor({
         strategyRepo: strategyDecisionRepo,
@@ -447,6 +457,8 @@ export class RuntimeApp {
       clock,
       brokerSupervisor,
       zerodhaSupervisor: brokerSupervisor,
+      instrumentsService,
+      marketDataStream,
       proposalSupervisor,
       executionGateSupervisor,
       strategyRiskSupervisor,

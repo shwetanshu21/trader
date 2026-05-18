@@ -3,7 +3,7 @@
   "artifactType": "winner-diagnostics",
   "runId": 1,
   "runLabel": "int-test-fo-winner",
-  "generatedAt": "2026-05-18T11:33:24.195Z",
+  "generatedAt": "2026-05-18T11:51:19.631Z",
   "selection": {
     "result": "selected",
     "rationale": "Selected Config A (FO 3 candidates) (rank 1) via composite selection with merged score 0.6690 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=41201.03, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (FO 5 candidates) (score=0.6690, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",

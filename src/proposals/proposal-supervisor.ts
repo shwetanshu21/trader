@@ -124,7 +124,7 @@ export class ProposalSupervisor implements TickWork {
 
   // ── TickWork ────────────────────────────────────────────────────────────
 
-  async doWork(_now: Date, _health: HealthStatus): Promise<void> {
+  async doWork(now: Date, _health: HealthStatus): Promise<void> {
     // ── Check 1: In-flight guard ──────────────────────────────────────────
     if (this._inFlight) {
       this._persistOverlapSkip();
@@ -135,7 +135,7 @@ export class ProposalSupervisor implements TickWork {
     this._inFlight = true;
 
     try {
-      await this._runTick();
+      await this._runTick(now);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`[proposal-supervisor] Tick error: ${errorMsg}`);
@@ -189,12 +189,12 @@ export class ProposalSupervisor implements TickWork {
 
   // ── Internal: single tick execution ────────────────────────────────────
 
-  private async _runTick(): Promise<void> {
-    const now = Date.now();
+  private async _runTick(nowDate: Date): Promise<void> {
+    const now = nowDate.getTime();
     this._lastTickAt = now;
 
     // ── Phase 1: Read market phase ──────────────────────────────────────
-    const phase = this._clock.getPhase(new Date(now));
+    const phase = this._clock.getPhase(nowDate);
 
     // ── Phase 2: Read session state ─────────────────────────────────────
     let sessionHealth: { state: string; expiresAt: number } | null = null;
