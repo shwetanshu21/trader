@@ -68,7 +68,11 @@ function deriveExecutionClassMeta(instrument: import('../types/runtime.js').Inst
     };
   }
 
-  const executionClass: ExecutionClass = instrument.segment === 'NFO' ? 'FO' : 'EQ';
+  // Execution class is FO when the exchange or segment is NFO.
+  // Check both exchange and segment to handle instrument master where
+  // segment may be 'NFO' or 'NFO_FUT' depending on the source.
+  const isFo = instrument.exchange === 'NFO' || instrument.segment === 'NFO' || instrument.segment.startsWith('NFO');
+  const executionClass: ExecutionClass = isFo ? 'FO' : 'EQ';
 
   return {
     executionClass,
@@ -120,7 +124,7 @@ export class StrategyRiskService implements StrategyRiskPort {
     const { exchange, tradingsymbol, quote, instrument } = input;
 
     const instrumentMeta = instrument
-      ? { lotSize: instrument.lotSize, tickSize: instrument.tickSize }
+      ? { lotSize: instrument.lotSize, tickSize: instrument.tickSize, segment: instrument.segment, expiry: instrument.expiry }
       : null;
 
     // Check universe eligibility via the bounded universe service
@@ -342,7 +346,7 @@ export class StrategyRiskService implements StrategyRiskPort {
     const { instrument, quote } = input;
 
     const instrumentMeta = instrument
-      ? { lotSize: instrument.lotSize, tickSize: instrument.tickSize }
+      ? { lotSize: instrument.lotSize, tickSize: instrument.tickSize, segment: instrument.segment, expiry: instrument.expiry }
       : null;
 
     const isUniverseEligible = this._universeService.isSymbolEligible(

@@ -34,7 +34,7 @@ export const INDIA_NSE_EQ_STRATEGY: IndiaStrategyPolicyConfig = {
   version: '1.0.0',
   minNotional: 10_000,
   maxLossPercent: 5,
-  supportedSegments: ['NSE'],
+  supportedSegments: ['NSE', 'NFO'],
 };
 
 // ---------------------------------------------------------------------------
@@ -96,6 +96,10 @@ export type StrategyEvaluation = StrategyApprovedEvaluation | StrategyRefusedEva
 export interface StrategyInstrumentMeta {
   lotSize: number;
   tickSize: number | null;
+  /** Market segment (e.g. 'NSE', 'NFO'). Used for execution-class derivation. */
+  segment?: string;
+  /** Expiry date string (YYYY-MM-DD), or null for EQ instruments. */
+  expiry?: string | null;
 }
 
 /** Parameters for the evaluateProposal function. */
@@ -177,6 +181,15 @@ export function evaluateProposal(params: EvaluateProposalParams): StrategyEvalua
     return refused(
       StrategyDecisionReasonCode.MissingInstrumentMetadata,
       `Missing or invalid lot size for ${params.tradingsymbol}`,
+    );
+  }
+
+  // 5b. Class-specific metadata check: FO instruments require expiry
+  const segment = params.instrumentMeta.segment;
+  if (segment === 'NFO' && !params.instrumentMeta.expiry) {
+    return refused(
+      StrategyDecisionReasonCode.MissingInstrumentMetadata,
+      `F&O instrument ${params.tradingsymbol} is missing expiry context — required for FO execution class`,
     );
   }
 

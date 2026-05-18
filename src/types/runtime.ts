@@ -945,6 +945,8 @@ export enum StrategyDecisionReasonCode {
   InsufficientLiquidity = 'insufficient_liquidity',
   /** Strategy-specific constraint not covered by other codes. */
   PolicyConstraint = 'policy_constraint',
+  /** The derived execution class is not supported by the active policy. */
+  ExecutionClassNotSupported = 'execution_class_not_supported',
 }
 
 /** A single strategy decision reason (code + human-readable message). */

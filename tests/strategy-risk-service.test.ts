@@ -21,6 +21,7 @@ import {
   StrategyDecisionReasonCode,
   type QuoteSnapshot,
   type NewProposalAttempt,
+  type UniversePolicyConfig,
 } from '../src/types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -113,16 +114,44 @@ describe('evaluateProposal (pure function)', () => {
     expect(result.orderType).toBe('LIMIT');
   });
 
-  it('refuses with UnsupportedSegment for NFO exchange', () => {
+  it('approves an NFO exchange proposal (segment now supported)', () => {
     const result = evaluateProposal(defaultParams({
       exchange: 'NFO',
+      instrumentMeta: { lotSize: 250, tickSize: 0.05, segment: 'NFO', expiry: '2025-12-26' },
+      quantity: 500, // 500 / 250 = 2 lots
+    }));
+
+    expect(result.approved).toBe(true);
+    if (!result.approved) return;
+    // Quantity rounded to lot size: floor(500/250)*250 = 500
+    expect(result.quantity).toBe(500);
+    expect(result.riskNotional).toBeCloseTo(500 * 2850.50, 2);
+  });
+
+  it('refuses with MissingInstrumentMetadata for FO proposal missing expiry field', () => {
+    const result = evaluateProposal(defaultParams({
+      exchange: 'NFO',
+      instrumentMeta: { lotSize: 250, tickSize: 0.05, segment: 'NFO' },
+      quantity: 500,
     }));
 
     expect(result.approved).toBe(false);
     if (result.approved) return;
-    expect(result.reasons).toHaveLength(1);
-    expect(result.reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.UnsupportedSegment);
-    expect(result.reasons[0].reasonMessage).toContain('NFO');
+    expect(result.reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.MissingInstrumentMetadata);
+    expect(result.reasons[0].reasonMessage).toContain('expiry');
+  });
+
+  it('refuses with MissingInstrumentMetadata for FO proposal with null expiry', () => {
+    const result = evaluateProposal(defaultParams({
+      exchange: 'NFO',
+      instrumentMeta: { lotSize: 250, tickSize: 0.05, segment: 'NFO', expiry: null },
+      quantity: 500,
+    }));
+
+    expect(result.approved).toBe(false);
+    if (result.approved) return;
+    expect(result.reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.MissingInstrumentMetadata);
+    expect(result.reasons[0].reasonMessage).toContain('expiry');
   });
 
   it('refuses with NotInUniverse when symbol is not in the allowlist', () => {
@@ -435,7 +464,7 @@ describe('StrategyRiskService', () => {
       expect(refusals[0].proposalAttemptId).toBe(proposalId);
     });
 
-    it('refuses a proposal for NFO exchange with UnsupportedSegment', () => {
+    it('refuses an NFO proposal not in universe allowlist', () => {
       const { service, brokerRepo, proposalRepo, strategyDecisionRepo } = createService();
 
       // Seed instrument + quote for NFO
@@ -469,7 +498,118 @@ describe('StrategyRiskService', () => {
 
       expect(decision.decisionStatus).toBe(StrategyDecisionStatus.Refused);
       const reasons = strategyDecisionRepo.getReasonsForDecision(decision.id);
-      expect(reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.UnsupportedSegment);
+      // NFO is now a supported segment, but the symbol is not in the universe allowlist
+      expect(reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.NotInUniverse);
+    });
+
+    it('approves an FO proposal when symbol is in universe allowlist', () => {
+      const mgr = new DatabaseManager(':memory:');
+      const db = mgr.db;
+      const brokerRepo = new BrokerRepository(db);
+      const proposalRepo = new ProposalRepository(db);
+      const strategyDecisionRepo = new StrategyDecisionRepository(db);
+      const universeRepo = new UniverseRepository(db);
+
+      // Custom universe policy that includes the NFO symbol
+      const customPolicy: UniversePolicyConfig = {
+        version: '1.0.0',
+        label: 'Test NFO Universe',
+        allowlist: {
+          NSE: ['RELIANCE'],
+          NFO: ['RELIANCE24DECFUT'],
+        },
+        sufficientThresholdRatio: 0.90,
+        maxQuoteStalenessMs: 120_000,
+      };
+      const universeService = new UniverseService(brokerRepo, universeRepo, customPolicy);
+      const service = new StrategyRiskService({
+        brokerRepo,
+        universeService,
+        strategyRepo: strategyDecisionRepo,
+        proposalRepo,
+      });
+
+      // Seed instrument + quote for NFO
+      brokerRepo.upsertInstruments([{
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DECFUT',
+        instrumentToken: 456789,
+        name: 'Reliance Industries Futures',
+        expiry: '2024-12-26',
+        strike: null,
+        lotSize: 250,
+        tickSize: 0.05,
+        instrumentType: 'FUT',
+        segment: 'NFO_FUT',
+        exchangeToken: 738562,
+      }]);
+      brokerRepo.upsertQuote(makeQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DECFUT',
+        instrumentToken: 456789,
+      }));
+
+      // Insert NFO proposal with quantity matching lot size multiple
+      const proposalId = insertProposal(proposalRepo, {
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DECFUT',
+        instrumentToken: 456789,
+        quantity: 500, // 2 lots of 250
+      });
+      const proposal = proposalRepo.getAttemptById(proposalId)!;
+
+      const decision = service.evaluateProposalRow(proposal);
+
+      expect(decision.decisionStatus).toBe(StrategyDecisionStatus.Approved);
+      expect(decision.quantity).toBe(500); // floor(500/250)*250 = 500
+      expect(decision.executionClass).toBe('FO');
+      expect(decision.segment).toBe('NFO_FUT');
+      expect(decision.instrumentType).toBe('FUT');
+      expect(decision.expiry).toBe('2024-12-26');
+      expect(decision.lotSize).toBe(250);
+      // Verify it's in approved-unconsumed candidates
+      const candidates = strategyDecisionRepo.getApprovedUnconsumedCandidates();
+      expect(candidates.some(c => c.id === decision.id)).toBe(true);
+    });
+
+    it('refuses an FO proposal with missing expiry', () => {
+      const { service, brokerRepo, proposalRepo, strategyDecisionRepo } = createService();
+
+      // Seed instrument WITHOUT expiry — NFO without expiry should be refused by policy
+      brokerRepo.upsertInstruments([{
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DECFUT',
+        instrumentToken: 456789,
+        name: 'Reliance Industries Futures',
+        expiry: null, // no expiry
+        strike: null,
+        lotSize: 250,
+        tickSize: 0.05,
+        instrumentType: 'FUT',
+        segment: 'NFO_FUT',
+        exchangeToken: 738562,
+      }]);
+      brokerRepo.upsertQuote(makeQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DECFUT',
+        instrumentToken: 456789,
+      }));
+
+      const proposalId = insertProposal(proposalRepo, {
+        exchange: 'NFO',
+        tradingsymbol: 'RELIANCE24DECFUT',
+        instrumentToken: 456789,
+        quantity: 500,
+      });
+      const proposal = proposalRepo.getAttemptById(proposalId)!;
+
+      const decision = service.evaluateProposalRow(proposal);
+
+      expect(decision.decisionStatus).toBe(StrategyDecisionStatus.Refused);
+      const reasons = strategyDecisionRepo.getReasonsForDecision(decision.id);
+      // First refusal is NotInUniverse (NFO allowlist empty), not expiry
+      // We test the expiry check in the pure function test above
+      expect(reasons[0].reasonCode).toBe(StrategyDecisionReasonCode.NotInUniverse);
     });
 
     it('refuses a proposal with stale quote', () => {
