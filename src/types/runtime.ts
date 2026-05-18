@@ -780,6 +780,16 @@ export interface DashboardStrategyDecision {
   reasons: string[];
   /** Hybrid scoring evidence, or null when no persisted hybrid evidence exists. */
   hybrid: DashboardHybridEvidence | null;
+  /**
+   * Compact India research evidence — null when no research evidence influenced
+   * this decision. Carries bounded summary, semantic tags, freshness marker,
+   * and influence context so operators can see why India-specific context
+   * changed rankings without reconstructing prompt text from logs.
+   *
+   * All fields are bounded per IndiaResearchDecisionEvidence contract.
+   * Null-safe: older decisions without evidence render cleanly.
+   */
+  indiaResearchEvidence: IndiaResearchDecisionEvidence | null;
 }
 
 export type ZerodhaConfig = BrokerConfig;

@@ -1217,6 +1217,371 @@ describe('Health server — strategy evidence routes', () => {
     });
   });
 
+  // ── India research evidence on /health/strategy ──────────────────────
+
+  describe('/health/strategy — India research evidence', () => {
+    it('returns null indiaResearchEvidence when no research evidence exists', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      expect(data.recentDecisions[0]).toHaveProperty('indiaResearchEvidence');
+      expect(data.recentDecisions[0].indiaResearchEvidence).toBeNull();
+    });
+
+    it('includes compact India research evidence on approved decisions', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      ctx.strategyDecisionRepo.insertDecisionWithReasons(
+        {
+          proposalAttemptId: proposal.id,
+          decisionStatus: StrategyDecisionStatus.Approved,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'TCS',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 75,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: 3500,
+          quoteBid: 3499,
+          quoteAsk: 3501,
+          quoteVolume: 500000,
+          quoteReceivedAt: Date.now(),
+          riskNotional: 262500,
+          riskSizingBasis: 'last_price',
+          riskMaxLossRupees: 13125,
+          riskStopDistance: null,
+          riskExposureTag: 'intraday',
+          indiaResearchEvidence: {
+            summary: 'TCS strong India IT demand, Q3 beat estimates',
+            tags: ['it-services', 'earnings-beat'],
+            freshnessMs: 3_600_000,
+            influenceContext: 'India IT outlook elevated TCS rank',
+          },
+        },
+        [],
+      );
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const decision = data.recentDecisions[0];
+      expect(decision.indiaResearchEvidence).not.toBeNull();
+      expect(decision.indiaResearchEvidence.summary).toContain('TCS strong India');
+      expect(decision.indiaResearchEvidence.tags).toContain('earnings-beat');
+      expect(decision.indiaResearchEvidence.freshnessMs).toBe(3_600_000);
+      expect(decision.indiaResearchEvidence.influenceContext).toContain('elevated TCS');
+    });
+
+    it('includes India research evidence on refused decisions', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'INFY' });
+      ctx.strategyDecisionRepo.insertDecisionWithReasons(
+        {
+          proposalAttemptId: proposal.id,
+          decisionStatus: StrategyDecisionStatus.Refused,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'INFY',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 0,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: null,
+          quoteBid: null,
+          quoteAsk: null,
+          quoteVolume: null,
+          quoteReceivedAt: null,
+          riskNotional: null,
+          riskSizingBasis: 'last_price',
+          riskMaxLossRupees: null,
+          riskStopDistance: null,
+          riskExposureTag: null,
+          indiaResearchEvidence: {
+            summary: 'INFY weak India BFSI exposure, risk-off',
+            tags: ['it-services', 'bfsi-headwind'],
+            freshnessMs: null,
+            influenceContext: 'India macro weakness contributed to refusal',
+          },
+        },
+        [
+          { reasonCode: 'missing_quote_data' as any, reasonMessage: 'No quote available' },
+        ],
+      );
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const data = JSON.parse(res.body);
+      const decision = data.recentDecisions[0];
+      expect(decision.decisionStatus).toBe('refused');
+      expect(decision.indiaResearchEvidence).not.toBeNull();
+      expect(decision.indiaResearchEvidence.summary).toContain('INFY weak India');
+      expect(decision.indiaResearchEvidence.influenceContext).toContain('contributed to refusal');
+    });
+
+    it('does NOT include access tokens or secret material with research evidence', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'HDFC' });
+      ctx.strategyDecisionRepo.insertDecisionWithReasons(
+        {
+          proposalAttemptId: proposal.id,
+          decisionStatus: StrategyDecisionStatus.Approved,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'HDFC',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 1,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: 1600,
+          quoteBid: 1599,
+          quoteAsk: 1601,
+          quoteVolume: 200000,
+          quoteReceivedAt: Date.now(),
+          riskNotional: 1600,
+          riskSizingBasis: 'last_price',
+          riskMaxLossRupees: 80,
+          riskStopDistance: null,
+          riskExposureTag: 'intraday',
+          indiaResearchEvidence: {
+            summary: 'HDFC Bank India strength',
+            tags: ['banking'],
+            freshnessMs: null,
+            influenceContext: null,
+          },
+        },
+        [],
+      );
+
+      const res = await fetchUrl(ctx.server, '/health/strategy');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+    });
+  });
+
+  // ── Dashboard India research evidence in HTML ─────────────────────────
+
+  describe('Dashboard India research evidence in HTML', () => {
+    it('shows "—" when research evidence is null in strategy decisions table', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).toContain('India Research');
+      expect(res.body).toContain('&mdash;');
+    });
+
+    it('shows compact research evidence in the India Research column', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      ctx.strategyDecisionRepo.insertDecisionWithReasons(
+        {
+          proposalAttemptId: proposal.id,
+          decisionStatus: StrategyDecisionStatus.Approved,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'TCS',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 75,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: 3500,
+          quoteBid: 3499,
+          quoteAsk: 3501,
+          quoteVolume: 500000,
+          quoteReceivedAt: Date.now(),
+          riskNotional: 262500,
+          riskSizingBasis: 'last_price',
+          riskMaxLossRupees: 13125,
+          riskStopDistance: null,
+          riskExposureTag: 'intraday',
+          indiaResearchEvidence: {
+            summary: 'TCS strong India IT demand, Q3 beat estimates',
+            tags: ['it-services', 'earnings-beat'],
+            freshnessMs: 3_600_000,
+            influenceContext: 'India IT outlook elevated TCS rank',
+          },
+        },
+        [],
+      );
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      // HTML should contain the research summary text (escaped)
+      expect(res.body).toContain('TCS strong India IT demand');
+      expect(res.body).toContain('it-services');
+      expect(res.body).toContain('earnings-beat');
+      // Should show 1h freshness (3_600_000 ms = 1.0h)
+      expect(res.body).toContain('1.0h');
+      // Influence context should be visible
+      expect(res.body).toContain('India IT outlook');
+    });
+
+    it('does NOT include secret material in HTML with research evidence', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'HDFC' });
+      ctx.strategyDecisionRepo.insertDecisionWithReasons(
+        {
+          proposalAttemptId: proposal.id,
+          decisionStatus: StrategyDecisionStatus.Approved,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'HDFC',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 1,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: 1600,
+          quoteBid: 1599,
+          quoteAsk: 1601,
+          quoteVolume: 200000,
+          quoteReceivedAt: Date.now(),
+          riskNotional: 1600,
+          riskSizingBasis: 'last_price',
+          riskMaxLossRupees: 80,
+          riskStopDistance: null,
+          riskExposureTag: 'intraday',
+          indiaResearchEvidence: {
+            summary: 'HDFC India banking strength',
+            tags: ['banking'],
+            freshnessMs: null,
+            influenceContext: null,
+          },
+        },
+        [],
+      );
+
+      const res = await fetchUrl(ctx.server, '/dashboard');
+      expect(res.body).not.toContain('accessToken');
+      expect(res.body).not.toContain('apiKey');
+    });
+  });
+
+  describe('Dashboard India research evidence in JSON', () => {
+    it('includes null indiaResearchEvidence when none exists', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'TCS' });
+      seedStrategyDecision(ctx.strategyDecisionRepo, proposal.id, {
+        tradingsymbol: 'TCS',
+        decisionStatus: StrategyDecisionStatus.Approved,
+      });
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      expect(data.recentStrategyDecisions[0].indiaResearchEvidence).toBeNull();
+    });
+
+    it('includes compact research evidence in recentStrategyDecisions JSON', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'RELIANCE' });
+      ctx.strategyDecisionRepo.insertDecisionWithReasons(
+        {
+          proposalAttemptId: proposal.id,
+          decisionStatus: StrategyDecisionStatus.Approved,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'RELIANCE',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 1,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: 3000,
+          quoteBid: 2999,
+          quoteAsk: 3001,
+          quoteVolume: 100000,
+          quoteReceivedAt: Date.now(),
+          riskNotional: 3000,
+          riskSizingBasis: 'last_price',
+          riskMaxLossRupees: 150,
+          riskStopDistance: null,
+          riskExposureTag: 'intraday',
+          indiaResearchEvidence: {
+            summary: 'RELIANCE India energy and retail strength',
+            tags: ['energy', 'retail', 'nifty-50'],
+            freshnessMs: 1_800_000,
+            influenceContext: 'India consumption story boosted ranking',
+          },
+        },
+        [],
+      );
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const data = JSON.parse(res.body);
+      const d = data.recentStrategyDecisions[0];
+      expect(d.indiaResearchEvidence).not.toBeNull();
+      expect(d.indiaResearchEvidence.summary).toContain('RELIANCE India');
+      expect(d.indiaResearchEvidence.tags).toContain('energy');
+      expect(d.indiaResearchEvidence.freshnessMs).toBe(1_800_000);
+      expect(d.indiaResearchEvidence.influenceContext).toContain('India consumption');
+    });
+
+    it('does NOT include secret material in JSON with research evidence', async () => {
+      const proposal = seedProposal(ctx.proposalRepo, { tradingsymbol: 'ICICI' });
+      ctx.strategyDecisionRepo.insertDecisionWithReasons(
+        {
+          proposalAttemptId: proposal.id,
+          decisionStatus: StrategyDecisionStatus.Approved,
+          strategyId: 'test-strategy',
+          strategyVersion: '1.0.0',
+          decidedAt: Date.now(),
+          exchange: 'NSE',
+          tradingsymbol: 'ICICI',
+          side: 'buy',
+          product: 'MIS',
+          quantity: 1,
+          price: null,
+          triggerPrice: null,
+          orderType: 'MARKET',
+          quoteLastPrice: 1100,
+          quoteBid: 1099,
+          quoteAsk: 1101,
+          quoteVolume: 300000,
+          quoteReceivedAt: Date.now(),
+          riskNotional: 1100,
+          riskSizingBasis: 'last_price',
+          riskMaxLossRupees: 55,
+          riskStopDistance: null,
+          riskExposureTag: 'intraday',
+          indiaResearchEvidence: {
+            summary: 'ICICI India banking growth',
+            tags: ['banking'],
+            freshnessMs: null,
+            influenceContext: null,
+          },
+        },
+        [],
+      );
+
+      const res = await fetchUrl(ctx.server, '/dashboard.json');
+      const body = res.body;
+      expect(body).not.toContain('accessToken');
+      expect(body).not.toContain('apiKey');
+    });
+  });
+
   describe('Dashboard strategy decisions in HTML', () => {
     it('shows "No strategy decisions recorded" when none exist', async () => {
       const res = await fetchUrl(ctx.server, '/dashboard');
@@ -2119,6 +2484,7 @@ describe('Dashboard renderer — HTML escaping', () => {
             product: 'MIS', quantity: 75, price: null, triggerPrice: null,
             orderType: 'MARKET', notional: 213787.50, sizingBasis: 'last_price',
             exposureTag: 'intraday', lastPrice: 2850.50, reasons: [],
+            indiaResearchEvidence: null,
             hybrid: {
               deterministicScore: 0.80,
               llmScore: 0.70,
@@ -2173,6 +2539,7 @@ describe('Dashboard renderer — HTML escaping', () => {
             product: 'MIS', quantity: 1, price: null, triggerPrice: null,
             orderType: 'MARKET', notional: 3000, sizingBasis: 'last_price',
             exposureTag: 'intraday', lastPrice: 3000, reasons: [],
+            indiaResearchEvidence: null,
             hybrid: {
               deterministicScore: 0.75,
               llmScore: null,
@@ -2228,6 +2595,7 @@ describe('Dashboard renderer — HTML escaping', () => {
             product: 'MIS', quantity: 1, price: null, triggerPrice: null,
             orderType: 'MARKET', notional: 1500, sizingBasis: 'last_price',
             exposureTag: 'intraday', lastPrice: 1500, reasons: [],
+            indiaResearchEvidence: null,
             hybrid: {
               deterministicScore: 0.80,
               llmScore: 0.70,
@@ -2276,6 +2644,7 @@ describe('Dashboard renderer — HTML escaping', () => {
             product: 'MIS', quantity: 1, price: null, triggerPrice: null,
             orderType: 'MARKET', notional: 3000, sizingBasis: 'last_price',
             exposureTag: 'intraday', lastPrice: 3000, reasons: [],
+            indiaResearchEvidence: null,
             hybrid: null,
           },
         ],
@@ -2314,6 +2683,7 @@ describe('Dashboard renderer — HTML escaping', () => {
             product: 'MIS', quantity: 1, price: null, triggerPrice: null,
             orderType: 'MARKET', notional: 600, sizingBasis: 'last_price',
             exposureTag: 'intraday', lastPrice: 600, reasons: [],
+            indiaResearchEvidence: null,
             hybrid: {
               deterministicScore: 0.90,
               llmScore: 0.50,

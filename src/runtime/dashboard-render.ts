@@ -64,6 +64,21 @@ function maybeValue(val: string | null): string {
   return val ?? '—';
 }
 
+/** Truncate text in the middle, keeping head and tail visible. */
+function truncateMid(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const half = Math.floor((maxLen - 3) / 2);
+  return text.slice(0, half) + '...' + text.slice(text.length - half);
+}
+
+/** Format staleness in ms to a human-readable string. */
+function formatStaleness(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(0)}s`;
+  if (ms < 3_600_000) return `${(ms / 60_000).toFixed(0)}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
@@ -146,7 +161,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
       </tr>`).join('');
 
   const strategyRows = recentStrategyDecisions.length === 0
-    ? '<tr><td colspan="8" class="muted">No strategy decisions recorded</td></tr>'
+    ? '<tr><td colspan="9" class="muted">No strategy decisions recorded</td></tr>'
     : recentStrategyDecisions.map(d => {
       const reasons = d.reasons.length > 0
         ? `<div class="reasons">${d.reasons.map(r => `<span class="reason">${escapeHtml(r)}</span>`).join('')}</div>`
@@ -163,6 +178,14 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
             ${d.hybrid.downgradeContext && !d.hybrid.isDowngraded ? `<div class="hybrid-note">${escapeHtml(d.hybrid.downgradeContext)}</div>` : ''}
           </div>`
         : '<span class="muted">—</span>';
+      const researchCell = d.indiaResearchEvidence
+        ? `<div class="research-block">
+            <span class="research-summary" title="${escapeHtml(d.indiaResearchEvidence.summary)}">${escapeHtml(truncateMid(d.indiaResearchEvidence.summary, 80))}</span>
+            ${d.indiaResearchEvidence.tags.length > 0 ? `<div class="research-tags">${d.indiaResearchEvidence.tags.map(t => `<span class="research-tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+            ${d.indiaResearchEvidence.freshnessMs != null ? `<span class="research-freshness">${formatStaleness(d.indiaResearchEvidence.freshnessMs)}</span>` : ''}
+            ${d.indiaResearchEvidence.influenceContext ? `<div class="research-context">${escapeHtml(d.indiaResearchEvidence.influenceContext)}</div>` : ''}
+          </div>`
+        : '<span class="muted">—</span>';
       return `<tr>
         <td>${escapeHtml(d.exchange)}</td>
         <td>${escapeHtml(d.tradingsymbol)}</td>
@@ -171,6 +194,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         <td>${d.notional != null ? d.notional.toFixed(0) : '—'}</td>
         <td>${reasons}</td>
         <td>${hybridCell}</td>
+        <td>${researchCell}</td>
       </tr>`;
     }).join('');
 
@@ -366,6 +390,12 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
   .hybrid-comps .comp { display: inline-block; padding: 0.05rem 0.3rem; border-radius: 0.2rem; font-size: 0.65rem; background: #1e293b; color: #94a3b8; }
   .hybrid-rationale { font-size: 0.7rem; color: #a78bfa; margin-top: 0.1rem; }
   .hybrid-note { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.7rem; background: #1e3a5f; color: #93c5fd; }
+  .research-block { display: flex; flex-wrap: wrap; gap: 0.2rem; align-items: flex-start; }
+  .research-summary { display: inline-block; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.7rem; background: #2d1b4e; color: #d8b4fe; cursor: help; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .research-tags { display: flex; flex-wrap: wrap; gap: 0.15rem; margin-top: 0.1rem; }
+  .research-tag { display: inline-block; padding: 0.05rem 0.3rem; border-radius: 0.2rem; font-size: 0.6rem; background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+  .research-freshness { display: inline-block; padding: 0.05rem 0.3rem; border-radius: 0.2rem; font-size: 0.65rem; background: #1a3a2a; color: #6ee7b7; }
+  .research-context { font-size: 0.65rem; color: #a78bfa; margin-top: 0.1rem; }
   code { background: #0f172a; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.8rem; }
   ul { list-style: none; padding: 0; }
   li { margin: 0.25rem 0; }
@@ -440,7 +470,7 @@ ${universeSection}
 <div class="section">
   <h2>Strategy Decisions (${recentStrategyDecisions.length})</h2>
   <table>
-    <thead><tr><td>Exchange</td><td>Symbol</td><td>Side</td><td>Status</td><td>Notional</td><td>Reasons</td><td>Hybrid</td></tr></thead>
+    <thead><tr><td>Exchange</td><td>Symbol</td><td>Side</td><td>Status</td><td>Notional</td><td>Reasons</td><td>Hybrid</td><td>India Research</td></tr></thead>
     <tbody>${strategyRows}</tbody>
   </table>
 </div>

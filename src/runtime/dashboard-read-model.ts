@@ -288,6 +288,7 @@ export class DashboardReadModel {
           lastPrice: d.quoteLastPrice,
           reasons: reasons.map(r => r.reasonMessage),
           hybrid: hybrid ? this._toHybridEvidence(hybrid) : null,
+          indiaResearchEvidence: d.indiaResearchEvidence,
         };
       });
     } catch {
