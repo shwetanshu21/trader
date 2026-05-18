@@ -769,4 +769,167 @@ describe('StrategyLifecycleEvaluator — promotion pipeline', () => {
       expect(result.evidenceSnapshot.hasReplayEvidence).toBe(false);
     });
   });
+
+  describe('FO promotion flow', () => {
+    it('should PROMOTE FO strategy when all thresholds are met with FO market identity', () => {
+      // Seed an FO-style winner run
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO walk_forward_runs
+          (id, label, strategy_id, strategy_version, market_id,
+           replay_session_id, window_count, total_trials,
+           status, created_at, started_at, completed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        100, 'fo-test-run', 'india-nse-fo-v1', '1.0.0', 'INDIA_NSE_FO',
+        null, 4, 2, 'completed', now, null, null,
+      );
+
+      // Insert windows
+      for (let i = 0; i < 4; i++) {
+        const wType = i < 2 ? 'in_sample' : 'out_of_sample';
+        db.prepare(`
+          INSERT INTO walk_forward_windows (id, run_id, window_index, range_start, range_end, window_label, trial_count_optimized, trial_count_tested, status, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(100 + i, 100, i, now - (4 - i) * 86_400_000, now - (4 - i - 1) * 86_400_000, '', 0, 0, 'completed', now);
+      }
+
+      // Insert FO trial
+      db.prepare(`
+        INSERT INTO walk_forward_trials
+          (id, run_id, trial_index, label, params_json, merged_score, deterministic_score,
+           llm_score, llm_status, rank, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(100, 100, 0, 'Config A (FO 3 candidates)', JSON.stringify({ maxCandidates: 3 }),
+        0.85, 0.85, null, 'skipped', 1, now);
+
+      // Insert trial window evidence with full-fidelity metrics
+      const metricsVal = JSON.stringify({
+        schemaVersion: 1,
+        source: 'replay-session',
+        replayEvidence: {
+          replaySessionId: 100,
+          replayStatus: 'completed',
+          replayLabel: 'FO test session',
+          replayRangeStart: now - 86400000,
+          replayRangeEnd: now,
+          replayCompletedTicks: 10,
+          replayTotalTicks: 10,
+          checkpointCount: 3,
+          strategyRunCount: 5,
+          firstStrategyRunId: 1,
+          lastStrategyRunId: 5,
+          topCandidateCount: 3,
+          maxCandidates: 3,
+          preCapCandidateCount: 3,
+          llmStatusCounts: { consulted: 3, skipped: 0 },
+          pluginErrorCount: 0,
+          errorMessage: null,
+        },
+        summary: {
+          tickCount: 10,
+          meanMergedScore: 0.85,
+          meanDeterministicScore: 0.77,
+          meanLlmScore: null,
+          stdDevMergedScore: null,
+          maxMergedScore: 0.85,
+          minMergedScore: 0.7,
+        },
+      });
+
+      for (let i = 0; i < 4; i++) {
+        const wType = i < 2 ? WalkForwardWindowType.InSample : WalkForwardWindowType.OutOfSample;
+        const isOos = wType === WalkForwardWindowType.OutOfSample;
+        db.prepare(`
+          INSERT INTO walk_forward_trial_windows
+            (trial_id, window_id, window_type, total_return, sharpe_ratio, max_drawdown, win_rate, trade_count, profit_factor, metrics_json, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(100, 100 + i, wType, isOos ? 0.05 : 0.12,
+          isOos ? 1.5 : 2.0, isOos ? -15 : -10,
+          isOos ? 0.55 : 0.60, isOos ? 15 : 25, null, metricsVal, now);
+      }
+
+      // Insert FO winner
+      db.prepare(`
+        INSERT INTO walk_forward_winners
+          (run_id, result, selected_trial_id, selection_strategy, selection_config_json, rationale, artifact_paths_json, selected_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(100, WalkForwardSelectionResult.Selected, 100,
+        'composite', '{"strategy":"composite"}', 'All FO thresholds met', '[]', now, now);
+
+      // Evaluate with FO identity
+      const result = evaluator.evaluate({
+        runId: 100,
+        strategyId: 'india-nse-fo-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_FO',
+      });
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      expect(result.previousPhase).toBe(StrategyLifecyclePhase.Backtest);
+      expect(result.newPhase).toBe(StrategyLifecyclePhase.Paper);
+      expect(result.stateUpdated).toBe(true);
+      expect(result.evidenceSnapshot.replayFidelity).toBe(1.0);
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(true);
+
+      // Verify FO lifecycle state was created
+      const state = lifecycleRepo.getCurrentState(
+        'india-nse-fo-v1', '1.0.0', 'INDIA_NSE_FO',
+      );
+      expect(state).not.toBeNull();
+      expect(state.phase).toBe(StrategyLifecyclePhase.Paper);
+    });
+
+    it('should HOLD FO strategy when identity mismatch exists', () => {
+      // Seed FO data within this test (each test gets a fresh DB from beforeEach)
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO walk_forward_runs
+          (id, label, strategy_id, strategy_version, market_id,
+           replay_session_id, window_count, total_trials,
+           status, created_at, started_at, completed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        200, 'fo-test-run-mismatch', 'india-nse-fo-v1', '1.0.0', 'INDIA_NSE_FO',
+        null, 2, 1, 'completed', now, null, null,
+      );
+
+      // Insert windows
+      for (let i = 0; i < 2; i++) {
+        db.prepare(`
+          INSERT INTO walk_forward_windows (id, run_id, window_index, range_start, range_end, window_label, trial_count_optimized, trial_count_tested, status, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(200 + i, 200, i, now - (2 - i) * 86_400_000, now - (2 - i - 1) * 86_400_000, '', 0, 0, 'completed', now);
+      }
+
+      // Insert FO trial
+      db.prepare(`
+        INSERT INTO walk_forward_trials
+          (id, run_id, trial_index, label, params_json, merged_score, deterministic_score,
+           llm_score, llm_status, rank, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(200, 200, 0, 'Config A (FO)', JSON.stringify({ maxCandidates: 3 }),
+        0.85, 0.85, null, 'skipped', 1, now);
+
+      // Insert FO winner
+      db.prepare(`
+        INSERT INTO walk_forward_winners
+          (run_id, result, selected_trial_id, selection_strategy, selection_config_json, rationale, artifact_paths_json, selected_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(200, WalkForwardSelectionResult.Selected, 200,
+        'composite', '{"strategy":"composite"}', 'All FO thresholds met', '[]', now, now);
+
+      // Query with EQ market — market ID mismatch with run's FO market
+      const result = evaluator.evaluate({
+        runId: 200,
+        strategyId: 'india-nse-fo-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ', // EQ market — mismatch with run's FO market
+      });
+
+      expect(result.verdict).toBe(GovernanceVerdict.Hold);
+      expect(result.rationale).toContain('does not match target');
+      expect(result.stateUpdated).toBe(false);
+    });
+  });
 });

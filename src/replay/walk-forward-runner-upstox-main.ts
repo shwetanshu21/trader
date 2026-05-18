@@ -8,7 +8,7 @@ import { WalkForwardEvaluator, WalkForwardInterruptionError, type WalkForwardTri
 import { UpstoxRestClient } from '../upstox/upstox-rest-client.js';
 import { UpstoxHistoricalDataProvider } from './upstox-historical-data-provider.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
-import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
+import { resolveIndiaMarketProfile, resolveIndiaMarketConfigPath } from '../market/india-profile.js';
 import { createOptionalProposalEngine } from './proposal-engine-factory.js';
 import { parseCliDateEnd, parseCliDateStart } from './upstox-date-range.js';
 
@@ -31,6 +31,10 @@ interface RunnerOptions {
   cacheDir?: string;
   fromDate?: string;
   toDate?: string;
+  marketId: string;
+  strategyId: string;
+  strategyVersion: string;
+  configPath: string;
 }
 
 function parseArgs(argv: string[]): RunnerOptions {
@@ -43,6 +47,10 @@ function parseArgs(argv: string[]): RunnerOptions {
     dbPath: ':memory:',
     label: 'cli-walk-forward-upstox',
     maxInstruments: 20,
+    marketId: 'INDIA_NSE_EQ',
+    strategyId: 'india-nse-eq-v1',
+    strategyVersion: '1.0.0',
+    configPath: 'data/nifty-500.json',
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -63,6 +71,10 @@ function parseArgs(argv: string[]): RunnerOptions {
       case '--cache-dir': options.cacheDir = value; i++; break;
       case '--from-date': options.fromDate = value; i++; break;
       case '--to-date': options.toDate = value; i++; break;
+      case '--market-id': options.marketId = value; i++; break;
+      case '--strategy-id': options.strategyId = value; i++; break;
+      case '--strategy-version': options.strategyVersion = value; i++; break;
+      case '--config-path': options.configPath = value; i++; break;
       default:
         throw new Error(`Unknown option: ${arg}`);
     }
@@ -118,6 +130,13 @@ function computeDateRange(options: RunnerOptions): { rangeStart: number; rangeEn
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const { rangeStart, rangeEnd } = computeDateRange(options);
+
+  // Resolve market profile and config path
+  const marketProfile = resolveIndiaMarketProfile(options.marketId);
+  const resolvedConfigPath = options.configPath === 'data/nifty-500.json'
+    ? resolveIndiaMarketConfigPath(options.marketId)
+    : options.configPath;
+
   const dbManager = new DatabaseManager(options.dbPath);
   const repo = new WalkForwardRepository(dbManager.db);
 
@@ -125,7 +144,7 @@ async function main(): Promise<void> {
   const restClient = new UpstoxRestClient();
   const dataProvider = new UpstoxHistoricalDataProvider({
     restClient,
-    configPath: 'data/nifty-500.json',
+    configPath: resolvedConfigPath,
     rangeStart,
     rangeEnd,
     cacheDir: options.cacheDir ?? './data/cache/upstox-candles',
@@ -137,7 +156,7 @@ async function main(): Promise<void> {
 
   const evaluator = new WalkForwardEvaluator({
     db: dbManager.db,
-    marketProfile: INDIA_NSE_EQ_MARKET,
+    marketProfile,
     dataProvider,
     proposalEngine: createOptionalProposalEngine(),
   });
@@ -159,6 +178,9 @@ async function main(): Promise<void> {
   console.log(`  Resume run id:   ${options.resumeRunId ?? 'new run'}`);
   console.log(`  Exec fidelity:   ${options.executionResolutionMinutes != null ? `${options.executionResolutionMinutes}m` : 'synthetic only'}`);
   console.log(`  Data provider:   ${dataProvider.label}`);
+  console.log(`  Config path:     ${resolvedConfigPath}`);
+  console.log(`  Market:          ${options.marketId}`);
+  console.log(`  Strategy:        ${options.strategyId}@${options.strategyVersion}`);
   console.log(`  Max instruments: ${options.maxInstruments ?? 'unlimited (default 20)'}`);
   console.log(`  Cache dir:       ${options.cacheDir ?? './data/cache/upstox-candles'}`);
   console.log(`  Range:           ${new Date(rangeStart).toISOString().slice(0, 10)} → ${new Date(rangeEnd).toISOString().slice(0, 10)}`);
@@ -172,9 +194,9 @@ async function main(): Promise<void> {
       stepSizeMs,
       inSampleRatio: options.ratio,
       label: options.label,
-      strategyId: 'india-nse-eq-v1',
-      strategyVersion: '1.0.0',
-      marketId: 'INDIA_NSE_EQ',
+      strategyId: options.strategyId,
+      strategyVersion: options.strategyVersion,
+      marketId: options.marketId,
       trialConfigs,
       resumeRunId: options.resumeRunId,
       stopAfterTrialCount: options.interruptAfterTrial,

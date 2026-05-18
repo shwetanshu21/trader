@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "artifactType": "winner-diagnostics",
   "runId": 1,
-  "runLabel": "int-test-winner",
-  "generatedAt": "2026-05-18T07:08:43.133Z",
+  "runLabel": "int-test-fo-winner",
+  "generatedAt": "2026-05-18T10:12:13.004Z",
   "selection": {
     "result": "selected",
-    "rationale": "Selected Config A (3 candidates) (rank 1) via composite selection with merged score 0.7190 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=22489.10, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (5 candidates) (score=0.7190, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
+    "rationale": "Selected Config A (FO 3 candidates) (rank 1) via composite selection with merged score 0.6690 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=41201.03, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (FO 5 candidates) (score=0.6690, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
     "comparisonsCount": 2
   },
   "aggregateMetrics": {
@@ -19,10 +19,10 @@
     {
       "trialId": 1,
       "rank": 1,
-      "label": "Config A (3 candidates)",
-      "paramsJson": "{\"label\":\"Config A (3 candidates)\",\"params\":{\"maxCandidates\":3}}",
-      "mergedScore": 0.719,
-      "deterministicScore": 0.719,
+      "label": "Config A (FO 3 candidates)",
+      "paramsJson": "{\"label\":\"Config A (FO 3 candidates)\",\"params\":{\"maxCandidates\":3}}",
+      "mergedScore": 0.669,
+      "deterministicScore": 0.669,
       "llmScore": null,
       "llmStatus": "skipped",
       "windowCount": 4
@@ -30,10 +30,10 @@
     {
       "trialId": 2,
       "rank": 2,
-      "label": "Config B (5 candidates)",
-      "paramsJson": "{\"label\":\"Config B (5 candidates)\",\"params\":{\"maxCandidates\":5}}",
-      "mergedScore": 0.719,
-      "deterministicScore": 0.719,
+      "label": "Config B (FO 5 candidates)",
+      "paramsJson": "{\"label\":\"Config B (FO 5 candidates)\",\"params\":{\"maxCandidates\":5}}",
+      "mergedScore": 0.669,
+      "deterministicScore": 0.669,
       "llmScore": null,
       "llmStatus": "skipped",
       "windowCount": 4
@@ -45,9 +45,9 @@
       "windowIndex": 0,
       "windowType": "in_sample",
       "tradeCount": 2,
-      "totalReturn": 0.719,
+      "totalReturn": 0.669,
       "winRate": 1,
-      "sharpeRatio": 17119.0476,
+      "sharpeRatio": 15928.5714,
       "maxDrawdown": 0.0001
     },
     {
@@ -55,9 +55,9 @@
       "windowIndex": 0,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.7189,
+      "totalReturn": 0.669,
       "winRate": 1,
-      "sharpeRatio": 23190.3226,
+      "sharpeRatio": 60818.1818,
       "maxDrawdown": 0
     },
     {
@@ -65,19 +65,19 @@
       "windowIndex": 1,
       "windowType": "in_sample",
       "tradeCount": 2,
-      "totalReturn": 0.719,
+      "totalReturn": 0.669,
       "winRate": 1,
-      "sharpeRatio": 14673.4694,
-      "maxDrawdown": 0.0001
+      "sharpeRatio": 14543.4783,
+      "maxDrawdown": 0
     },
     {
       "trialId": 1,
       "windowIndex": 1,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.719,
+      "totalReturn": 0.6691,
       "winRate": 1,
-      "sharpeRatio": 21787.8788,
+      "sharpeRatio": 21583.871,
       "maxDrawdown": 0
     },
     {
@@ -85,9 +85,9 @@
       "windowIndex": 0,
       "windowType": "in_sample",
       "tradeCount": 2,
-      "totalReturn": 0.719,
+      "totalReturn": 0.669,
       "winRate": 1,
-      "sharpeRatio": 17119.0476,
+      "sharpeRatio": 15928.5714,
       "maxDrawdown": 0.0001
     },
     {
@@ -95,9 +95,9 @@
       "windowIndex": 0,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.7189,
+      "totalReturn": 0.669,
       "winRate": 1,
-      "sharpeRatio": 23190.3226,
+      "sharpeRatio": 60818.1818,
       "maxDrawdown": 0
     },
     {
@@ -105,19 +105,19 @@
       "windowIndex": 1,
       "windowType": "in_sample",
       "tradeCount": 2,
-      "totalReturn": 0.719,
+      "totalReturn": 0.669,
       "winRate": 1,
-      "sharpeRatio": 14673.4694,
-      "maxDrawdown": 0.0001
+      "sharpeRatio": 14543.4783,
+      "maxDrawdown": 0
     },
     {
       "trialId": 2,
       "windowIndex": 1,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.719,
+      "totalReturn": 0.6691,
       "winRate": 1,
-      "sharpeRatio": 21787.8788,
+      "sharpeRatio": 21583.871,
       "maxDrawdown": 0
     }
   ],

@@ -159,7 +159,23 @@ function seedStrategyDecision(
   side: string,
   price: number,
   status: StrategyDecisionStatus,
+  overrides?: Partial<{
+    executionClass: string;
+    segment: string;
+    instrumentType: string;
+    expiry: string | null;
+    strike: number | null;
+    lotSize: number;
+    tickSize: number;
+    freezeQuantity: number | null;
+    indiaResearchEvidence: any;
+  }>,
 ): number {
+  const ec = overrides?.executionClass ?? 'EQ';
+  const seg = overrides?.segment ?? 'NSE';
+  const it = overrides?.instrumentType ?? 'EQ';
+  const ls = overrides?.lotSize ?? 1;
+  const ts = overrides?.tickSize ?? 0.05;
   const d = handles.strategyDecisionRepo.insertDecisionWithReasons(
     {
       proposalAttemptId,
@@ -185,6 +201,15 @@ function seedStrategyDecision(
       riskMaxLossRupees: 75 * price * 0.05,
       riskStopDistance: null,
       riskExposureTag: 'intraday',
+      indiaResearchEvidence: overrides?.indiaResearchEvidence ?? null,
+      executionClass: ec,
+      segment: seg,
+      instrumentType: it,
+      expiry: overrides?.expiry ?? null,
+      strike: overrides?.strike ?? null,
+      lotSize: ls,
+      tickSize: ts,
+      freezeQuantity: overrides?.freezeQuantity ?? null,
     },
     status === StrategyDecisionStatus.Refused
       ? [{ reasonCode: 'missing_quote_data' as any, reasonMessage: 'Refused by strategy' }]
@@ -238,8 +263,25 @@ describe('S06 Runtime — paper-trading witness and restart safety', () => {
     seedQuote(h1, 'NSE', 'RELIANCE', 2850.50);
 
     // Seed proposal + approved strategy decision (buy RELIANCE, MARKET)
+    // Includes India research evidence and EQ execution-class metadata for
+    // operator-surface visibility assertions.
     const p1Id = seedProposal(h1, 'NSE', 'RELIANCE', 'buy', ProposalStatus.Accepted);
-    seedStrategyDecision(h1, p1Id, 'NSE', 'RELIANCE', 'buy', 2850.50, StrategyDecisionStatus.Approved);
+    seedStrategyDecision(h1, p1Id, 'NSE', 'RELIANCE', 'buy', 2850.50, StrategyDecisionStatus.Approved, {
+      indiaResearchEvidence: {
+        summary: 'India research flagged RELIANCE as high-conviction buy based on Q4 earnings beat and positive management commentary',
+        tags: ['earnings-beat', 'management-guidance', 'high-conviction'],
+        freshnessMs: 120000,
+        influenceContext: 'India research committee upgraded rating from Hold to Buy after Q4 earnings review',
+      },
+      executionClass: 'EQ',
+      segment: 'NSE',
+      instrumentType: 'EQ',
+      expiry: null,
+      strike: null,
+      lotSize: 1,
+      tickSize: 0.05,
+      freezeQuantity: null,
+    });
 
     // Drive ExecutionGateSupervisor with an in-session weekday timestamp
     // Wednesday, May 13, 2026 at 10:00 AM IST (= 04:30 UTC)
@@ -277,12 +319,48 @@ describe('S06 Runtime — paper-trading witness and restart safety', () => {
     expect(dash1.body.execution.totalFills).toBe(1);
     expect(dash1.body.execution.openPositionCount).toBe(1);
 
-    // /health/strategy — 1 decision, approved
+    // India research evidence visible on /dashboard.json
+    expect(dash1.body.recentStrategyDecisions.length).toBe(1);
+    const dashSd1 = dash1.body.recentStrategyDecisions[0];
+    expect(dashSd1.indiaResearchEvidence).not.toBeNull();
+    expect(dashSd1.indiaResearchEvidence.summary).toContain('high-conviction buy');
+    expect(dashSd1.indiaResearchEvidence.tags).toContain('earnings-beat');
+    expect(dashSd1.indiaResearchEvidence.freshnessMs).toBe(120000);
+    expect(dashSd1.indiaResearchEvidence.influenceContext).toContain('Hold to Buy');
+    // Execution-class metadata on /dashboard.json
+    expect(dashSd1.executionClass).toBe('EQ');
+    expect(dashSd1.segment).toBe('NSE');
+    expect(dashSd1.instrumentType).toBe('EQ');
+    expect(dashSd1.lotSize).toBe(1);
+    expect(dashSd1.tickSize).toBe(0.05);
+    expect(dashSd1.expiry).toBeNull();
+    expect(dashSd1.strike).toBeNull();
+
+    // /health/strategy — 1 decision, approved, with India research evidence and execution class
     const strat1 = await fetchJson(h1.server, '/health/strategy');
     expect(strat1.status).toBe(200);
     expect(strat1.body.totalDecisions).toBe(1);
     expect(strat1.body.approvedCount).toBe(1);
     expect(strat1.body.refusedCount).toBe(0);
+    expect(strat1.body.recentDecisions.length).toBe(1);
+
+    // India research evidence visible on /health/strategy
+    const sd1 = strat1.body.recentDecisions[0];
+    expect(sd1.indiaResearchEvidence).not.toBeNull();
+    expect(sd1.indiaResearchEvidence.summary).toContain('high-conviction buy');
+    expect(sd1.indiaResearchEvidence.tags).toContain('earnings-beat');
+    expect(sd1.indiaResearchEvidence.tags).toContain('management-guidance');
+    expect(sd1.indiaResearchEvidence.freshnessMs).toBe(120000);
+    expect(sd1.indiaResearchEvidence.influenceContext).toContain('Hold to Buy');
+
+    // Execution-class metadata visible on /health/strategy
+    expect(sd1.executionClass).toBe('EQ');
+    expect(sd1.segment).toBe('NSE');
+    expect(sd1.instrumentType).toBe('EQ');
+    expect(sd1.lotSize).toBe(1);
+    expect(sd1.tickSize).toBe(0.05);
+    expect(sd1.expiry).toBeNull();
+    expect(sd1.strike).toBeNull();
 
     // ═════════════════════════════════════════════════════════════════════
     // PHASE 2 — Refusal/halt through the real risk boundary

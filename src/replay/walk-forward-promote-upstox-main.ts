@@ -28,6 +28,7 @@ interface PromoteOptions {
   maxDrawdown: number;
   minWindowCount: number;
   minOutOfSampleWindows: number;
+  minReplayFidelity: number;
 }
 
 function parseArgs(argv: string[]): PromoteOptions {
@@ -42,6 +43,7 @@ function parseArgs(argv: string[]): PromoteOptions {
     maxDrawdown: 30,
     minWindowCount: 2,
     minOutOfSampleWindows: 1,
+    minReplayFidelity: 1.0,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -72,6 +74,8 @@ function parseArgs(argv: string[]): PromoteOptions {
         options.minWindowCount = Number(value); i++; break;
       case '--min-oos-windows':
         options.minOutOfSampleWindows = Number(value); i++; break;
+      case '--min-replay-fidelity':
+        options.minReplayFidelity = Number(value); i++; break;
       default:
         console.error(`Unknown option: ${arg}`);
         printUsage();
@@ -99,6 +103,7 @@ Options:
   --max-drawdown <n>        Maximum drawdown % threshold (default: 30)
   --min-windows <n>         Minimum total window count (default: 2)
   --min-oos-windows <n>     Minimum out-of-sample window count (default: 1)
+  --min-replay-fidelity <n>  Minimum replay fidelity 0–1 (default: 1.0)
   --help, -h                Show this help
 `);
 }
@@ -139,6 +144,7 @@ async function main(): Promise<void> {
     maxDrawdown: options.maxDrawdown,
     minWindowCount: options.minWindowCount,
     minOutOfSampleWindows: options.minOutOfSampleWindows,
+    minReplayFidelity: options.minReplayFidelity ?? 1.0,
   };
 
   // Run evaluation

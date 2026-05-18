@@ -121,3 +121,50 @@ export const INDIA_MARKETS: readonly MarketProfile[] = [
   INDIA_NSE_EQ_MARKET,
   INDIA_NSE_FO_MARKET,
 ];
+
+// ---------------------------------------------------------------------------
+// Market resolution helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Default config path for NSE EQ instruments.
+ * Used when no explicit --config-path is provided and market is INDIA_NSE_EQ.
+ */
+export const INDIA_EQ_CONFIG_PATH = 'data/nifty-500.json';
+
+/**
+ * Default config path for NSE FO instruments.
+ * Used when no explicit --config-path is provided and market is INDIA_NSE_FO.
+ */
+export const INDIA_FO_CONFIG_PATH = 'data/nifty-fo.json';
+
+/**
+ * Resolve a MarketProfile for a known India market ID.
+ *
+ * @returns The matching MarketProfile.
+ * @throws If the marketId is not in INDIA_MARKETS.
+ */
+export function resolveIndiaMarketProfile(marketId: string): MarketProfile {
+  const profile = INDIA_MARKETS.find(m => m.marketId === marketId);
+  if (!profile) {
+    throw new Error(
+      `Unknown India market ID "${marketId}". Known markets: ${INDIA_MARKETS.map(m => m.marketId).join(', ')}`,
+    );
+  }
+  return profile;
+}
+
+/**
+ * Resolve the default config path for a given India market ID.
+ *
+ * Returns the sensible default for the market segment, which callers can
+ * override with an explicit --config-path CLI option.
+ */
+export function resolveIndiaMarketConfigPath(marketId: string): string {
+  switch (marketId) {
+    case 'INDIA_NSE_FO':
+      return INDIA_FO_CONFIG_PATH;
+    default:
+      return INDIA_EQ_CONFIG_PATH;
+  }
+}

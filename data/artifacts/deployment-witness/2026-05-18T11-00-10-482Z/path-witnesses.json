@@ -1,0 +1,992 @@
+[
+  {
+    "label": "SQLite database",
+    "path": "./data/production.db",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "SQLite WAL",
+    "path": "./data/production.db-wal",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "SQLite SHM",
+    "path": "./data/production.db-shm",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "Log directory: ./tmp/upstox/logs",
+    "path": "./tmp/upstox/logs",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1778582246306.5945,
+    "children": [
+      {
+        "name": "bridge.log",
+        "isDirectory": false,
+        "sizeBytes": 2003
+      },
+      {
+        "name": "notifier.log",
+        "isDirectory": false,
+        "sizeBytes": 382
+      },
+      {
+        "name": "runtime.log",
+        "isDirectory": false,
+        "sizeBytes": 5168
+      },
+      {
+        "name": "tunnel.log",
+        "isDirectory": false,
+        "sizeBytes": 49
+      }
+    ]
+  },
+  {
+    "label": "Log directory: ./logs",
+    "path": "./logs",
+    "exists": false,
+    "sizeBytes": 0,
+    "mtimeMs": 0
+  },
+  {
+    "label": "Artifact directory: ./data/artifacts",
+    "path": "./data/artifacts",
+    "exists": true,
+    "sizeBytes": 4096,
+    "mtimeMs": 1779101984991.8125,
+    "children": [
+      {
+        "name": "deployment-witness",
+        "isDirectory": true,
+        "sizeBytes": 12288
+      },
+      {
+        "name": "paper-proof",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "walk-forward",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      }
+    ]
+  },
+  {
+    "label": "Deployment witness artifacts root",
+    "path": "data/artifacts/deployment-witness",
+    "exists": true,
+    "sizeBytes": 12288,
+    "mtimeMs": 1779102010479.8257,
+    "children": [
+      {
+        "name": "2026-05-17T06-27-46-461Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-27-46-469Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-43-17-110Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-43-17-640Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-43-48-166Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-44-15-011Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-55-010Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-45-55-018Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-46-50-985Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-46-51-442Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-10-210Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-10-218Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-49-983Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-50-50-453Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-57-01-704Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-57-02-301Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-58-31-870Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-58-31-882Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-58-45-132Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T06-58-45-535Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-27-47-360Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-27-47-368Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-28-13-848Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-28-13-857Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-28-21-467Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-28-21-920Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-30-05-264Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-30-05-322Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-30-18-157Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-30-18-166Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-30-25-726Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-30-26-154Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-53-33-666Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-53-33-675Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-54-19-544Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-54-19-553Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-54-54-309Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T07-54-54-319Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T09-33-15-995Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T09-33-16-003Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T09-33-16-010Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T09-33-16-017Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T09-33-16-025Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T09-33-16-036Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-04-55-913Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-04-55-930Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-04-55-941Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-04-55-952Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-04-55-970Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-04-55-994Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-23-240Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-23-256Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-23-266Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-23-277Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-23-289Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-23-308Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-52-121Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-52-133Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-52-142Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-52-152Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-52-166Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-17T21-08-52-184Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-04-32-414Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-04-32-440Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-04-32-448Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-04-32-459Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-04-32-479Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-04-32-502Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-58-36-866Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-58-36-877Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-58-36-885Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-58-36-895Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-58-36-906Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T06-58-36-919Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-08-42-074Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-08-42-086Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-08-42-094Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-08-42-108Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-08-42-119Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-08-42-133Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-21-40-778Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-21-40-790Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-21-40-799Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-21-40-808Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-21-40-819Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T07-21-40-833Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-05-21-470Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-05-21-483Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-05-21-492Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-05-21-502Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-05-21-515Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-05-21-529Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-43-35-922Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-43-35-965Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-43-35-987Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-43-35-999Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-43-36-022Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T08-43-36-045Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-46-39-763Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-46-39-810Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-46-39-821Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-46-39-834Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-46-39-848Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-46-39-871Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-47-18-319Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-47-18-333Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-47-18-343Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-47-18-352Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-47-18-366Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T09-47-18-384Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-24-51-099Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-24-51-117Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-24-51-127Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-24-51-139Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-24-51-158Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-24-51-184Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-28-54-289Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-28-54-305Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-28-54-314Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-28-54-323Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-28-54-335Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-28-54-359Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-34-16-110Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-34-16-143Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-34-16-160Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-34-16-193Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-34-16-210Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T10-34-16-227Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T11-00-10-455Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T11-00-10-465Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T11-00-10-474Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "2026-05-18T11-00-10-482Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T07-28-22-190Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T07-30-26-444Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T09-18-24-530Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T09-33-16-083Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T09-33-18-110Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T09-33-20-132Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-04-56-069Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-04-58-099Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-05-00-143Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-08-23-387Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-08-25-442Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-08-27-483Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-08-52-267Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-08-54-314Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-17T21-08-56-372Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T06-04-32-586Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T06-04-34-621Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T06-04-36-647Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T06-58-36-979Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T06-58-39-021Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T06-58-41-049Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T07-08-42-206Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T07-08-44-245Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T07-08-46-285Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T07-21-40-917Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T07-21-42-956Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T07-21-44-993Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T08-05-21-595Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T08-05-23-633Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T08-05-25-663Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T08-43-36-158Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T08-43-38-202Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T08-43-40-231Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T09-46-39-975Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T09-46-42-030Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T09-46-44-063Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T09-47-18-454Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T09-47-20-530Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T09-47-22-582Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-24-51-260Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-24-53-294Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-24-55-316Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-28-54-436Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-28-56-474Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-28-58-495Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-34-16-408Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-34-18-489Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      },
+      {
+        "name": "steady-2026-05-18T10-34-20-564Z",
+        "isDirectory": true,
+        "sizeBytes": 4096
+      }
+    ]
+  }
+]

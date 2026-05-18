@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-05-18T11:00:10.492Z",
+  "runId": "2026-05-18T11-00-10-492Z",
+  "label": "CAX11 blocked-mode witness — 2026-05-18T11:00:10.492Z",
+  "schemaVersion": 1,
+  "hostname": "rspi-358ffa",
+  "httpTimeoutMs": 5000,
+  "endpoints": {
+    "runtimeHealth": "http://127.0.0.1:33325/health",
+    "runtimeDashboard": "http://127.0.0.1:33325/dashboard.json",
+    "notifierHealth": "http://127.0.0.1:33325/health",
+    "bridgeHealth": "http://127.0.0.1:33325/health"
+  }
+}

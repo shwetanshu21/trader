@@ -24,9 +24,10 @@ import {
   WalkForwardSelectionResult,
   WalkForwardWindowType,
   type WalkForwardSelectionConfig,
+  type WalkForwardTrialWindowRow,
   type WalkForwardWindowMetricsEnvelope,
 } from '../src/replay/walk-forward-types.js';
-import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
+import { INDIA_NSE_EQ_MARKET, INDIA_NSE_FO_MARKET } from '../src/market/india-profile.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1093,6 +1094,285 @@ describe('WalkForwardEvaluator (Upstox integration)', () => {
         expect(c.strike).not.toBeNull();
         expect(c.freezeQuantity).not.toBeNull();
       }
+
+      dbManager.close();
+    });
+  });
+
+  describe('FO walk-forward integration', () => {
+    const FO_INSTRUMENTS = [
+      {
+        instrument_key: 'NSE_FO|26005',
+        exchange: 'NFO',
+        trading_symbol: 'NIFTY12JUN2524000CE',
+        instrument_type: 'CE',
+        lot_size: 50,
+        tick_size: 0.05,
+        expiry: 1749772800000,
+        strike_price: 24000,
+        freeze_quantity: 1500,
+      },
+      {
+        instrument_key: 'NSE_FO|26006',
+        exchange: 'NFO',
+        trading_symbol: 'NIFTY12JUN2524500CE',
+        instrument_type: 'CE',
+        lot_size: 50,
+        tick_size: 0.05,
+        expiry: 1749772800000,
+        strike_price: 24500,
+        freeze_quantity: 1500,
+      },
+    ];
+
+    it('completes walk-forward evaluation using INDIA_NSE_FO_MARKET and FO instruments', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const configPath = writeConfigFile(dir, FO_INSTRUMENTS);
+      const cacheDir = path.join(dir, 'cache');
+
+      const candles = new Map<string, Array<[number, number, number, number, number, number, number]>>();
+      for (const instr of FO_INSTRUMENTS) {
+        candles.set(
+          instr.instrument_key,
+          generateDeterministicCandles(SESSION_START_MS, SESSION_END_MS, 100, 50_000),
+        );
+      }
+
+      buildMockFetch(candles);
+
+      const dbManager = new DatabaseManager(':memory:');
+      const restClient = new UpstoxRestClient();
+      const dataProvider = new UpstoxHistoricalDataProvider({
+        restClient,
+        configPath,
+        rangeStart: SESSION_START_MS,
+        rangeEnd: SESSION_END_MS,
+        cacheDir,
+        maxInstruments: 2,
+        options: { screeningCadenceMinutes: 5, executionResolutionMinutes: null },
+      });
+
+      // Use INDIA_NSE_FO_MARKET instead of EQ
+      const clock = new ReplayClock(INDIA_NSE_FO_MARKET, 60);
+      const evaluator = new WalkForwardEvaluator({
+        db: dbManager.db,
+        marketProfile: INDIA_NSE_FO_MARKET,
+        dataProvider,
+        clock,
+      });
+
+      const trialConfigs: WalkForwardTrialConfig[] = [
+        { label: 'Config A (FO 3 candidates)', params: { maxCandidates: 3 } },
+      ];
+
+      const result = await evaluator.evaluate({
+        rangeStart: SESSION_START_MS,
+        rangeEnd: SESSION_END_MS,
+        windowSizeMs: 3 * 3_600_000,
+        stepSizeMs: 3 * 3_600_000,
+        inSampleRatio: 0.5,
+        label: 'int-test-fo',
+        strategyId: 'india-nse-fo-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_FO',
+        trialConfigs,
+      });
+
+      // Verify evaluation completed under FO market
+      expect(result.run.status).toBe('completed');
+      expect(result.run.marketId).toBe('INDIA_NSE_FO');
+      expect(result.run.strategyId).toBe('india-nse-fo-v1');
+      expect(result.windows.length).toBeGreaterThanOrEqual(1);
+      expect(result.trials.length).toBe(1);
+      expect(result.rankedCandidates.length).toBe(1);
+
+      // Verify FO metadata is present in the candidates via replay evidence
+      const candidate = result.rankedCandidates[0];
+      expect(candidate.deterministicScore).toBeGreaterThanOrEqual(0);
+      expect(candidate.deterministicScore).toBeLessThanOrEqual(1);
+      expect(candidate.mergedScore).toBeGreaterThanOrEqual(0);
+      expect(candidate.mergedScore).toBeLessThanOrEqual(1);
+
+      // Verify replay evidence carries FO market context
+      for (const trial of result.trials) {
+        for (const evidence of trial.windowEvidence) {
+          const envelope = JSON.parse(evidence.metricsJson ?? 'null') as WalkForwardWindowMetricsEnvelope | null;
+          expect(envelope).not.toBeNull();
+          expect(envelope!.source).toBe('replay-session');
+          expect(envelope!.replayEvidence.replaySessionId).toBeGreaterThan(0);
+        }
+      }
+
+      dbManager.close();
+    });
+
+    it('winner selection with FO data produces SELECTED verdict and artifacts carry FO market identity', async () => {
+      const dir = makeTempDir();
+      writeTokenFile(dir);
+      const configPath = writeConfigFile(dir, FO_INSTRUMENTS);
+      const cacheDir = path.join(dir, 'cache');
+
+      const candles = new Map<string, Array<[number, number, number, number, number, number, number]>>();
+      for (const instr of FO_INSTRUMENTS) {
+        candles.set(
+          instr.instrument_key,
+          generateDeterministicCandles(SESSION_START_MS, SESSION_END_MS, 100, 50_000),
+        );
+      }
+
+      buildMockFetch(candles);
+
+      const dbManager = new DatabaseManager(':memory:');
+      const repo = new WalkForwardRepository(dbManager.db);
+      const restClient = new UpstoxRestClient();
+      const dataProvider = new UpstoxHistoricalDataProvider({
+        restClient,
+        configPath,
+        rangeStart: SESSION_START_MS,
+        rangeEnd: SESSION_END_MS,
+        cacheDir,
+        maxInstruments: 2,
+      });
+
+      const clock = new ReplayClock(INDIA_NSE_FO_MARKET, 60);
+      const evaluator = new WalkForwardEvaluator({
+        db: dbManager.db,
+        marketProfile: INDIA_NSE_FO_MARKET,
+        dataProvider,
+        clock,
+      });
+
+      // Run evaluation under FO market
+      const result = await evaluator.evaluate({
+        rangeStart: SESSION_START_MS,
+        rangeEnd: SESSION_END_MS,
+        windowSizeMs: 3 * 3_600_000,
+        stepSizeMs: 3 * 3_600_000,
+        inSampleRatio: 0.5,
+        label: 'int-test-fo-winner',
+        strategyId: 'india-nse-fo-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_FO',
+        trialConfigs: [
+          { label: 'Config A (FO 3 candidates)', params: { maxCandidates: 3 } },
+          { label: 'Config B (FO 5 candidates)', params: { maxCandidates: 5 } },
+        ],
+      });
+
+      // ── Winner selection ──
+      const selector = new WinnerSelector();
+      const selectionConfig: WalkForwardSelectionConfig = {
+        strategy: WalkForwardSelectionStrategy.Composite,
+        minMergedScore: 0.5,
+        minWindowCount: 1,
+        minSharpeRatio: 0.5,
+        maxDrawdown: 50,
+      };
+
+      const trialEvidence = new Map<number, WalkForwardTrialWindowRow[]>();
+      for (const trial of result.trials) {
+        trialEvidence.set(trial.trialId, trial.windowEvidence);
+      }
+
+      const selection = selector.selectWinner(
+        result.rankedCandidates,
+        selectionConfig,
+        trialEvidence,
+      );
+
+      // Verify selection produced a verdict
+      expect([WalkForwardSelectionResult.Selected, WalkForwardSelectionResult.NoWinner]).toContain(selection.result);
+      expect(selection.rationale).toBeTruthy();
+      expect(selection.comparisons.length).toBeGreaterThanOrEqual(1);
+
+      // ── Artifact emission ──
+      let oosWindowCount = 0;
+      for (const evidence of trialEvidence.values()) {
+        const count = evidence.filter(
+          item => item.windowType === WalkForwardWindowType.OutOfSample,
+        ).length;
+        oosWindowCount = Math.max(oosWindowCount, count);
+      }
+
+      const tradeLog = result.trials.flatMap(trial =>
+        trial.windowEvidence.map(evidence => {
+          const window = result.windows.find(w => w.id === evidence.windowId);
+          return {
+            trialId: trial.trialId,
+            windowIndex: window?.windowIndex ?? -1,
+            windowType: evidence.windowType,
+            tradeCount: evidence.tradeCount,
+            totalReturn: evidence.totalReturn,
+            winRate: evidence.winRate,
+            sharpeRatio: evidence.sharpeRatio,
+            maxDrawdown: evidence.maxDrawdown,
+          };
+        }),
+      );
+
+      const emitter = new ArtifactEmitter({ dataProvider });
+      const artifactPaths = emitter.emitWinnerArtifacts({
+        run: result.run,
+        selection,
+        selectionConfig,
+        rankedCandidates: result.rankedCandidates,
+        aggregateMetrics: {
+          scoreStability: result.aggregateMetrics.scoreStability,
+          topKOverlap: result.aggregateMetrics.topKOverlap,
+          llmConsultationRate: result.aggregateMetrics.llmConsultationRate,
+          llmDivergence: result.aggregateMetrics.llmDivergence,
+        },
+        tradeLog,
+        dataProvider,
+        windowCount: result.windows.length,
+        trialCount: result.trials.length,
+        oosWindowCount,
+        selectedAt: Date.now(),
+        dataRangeStart: result.windows[0]?.rangeStart ?? SESSION_START_MS,
+        dataRangeEnd: result.windows[result.windows.length - 1]?.rangeEnd ?? SESSION_END_MS,
+      });
+
+      // Verify artifacts exist and carry FO market identity
+      expect(fs.existsSync(artifactPaths.winnerPath)).toBe(true);
+      expect(fs.existsSync(artifactPaths.diagnosticsPath)).toBe(true);
+      expect(fs.existsSync(artifactPaths.tradeLogPath)).toBe(true);
+
+      // Winner artifact should reflect FO market run
+      const winnerArtifact = JSON.parse(fs.readFileSync(artifactPaths.winnerPath, 'utf8'));
+      expect(winnerArtifact.artifactType).toBe('winner-selection');
+      expect(winnerArtifact.runId).toBe(result.run.id);
+
+      // Diagnostics artifact carries FO metadata via evidenceFidelity
+      const diagnosticsArtifact = JSON.parse(fs.readFileSync(artifactPaths.diagnosticsPath, 'utf8'));
+      expect(diagnosticsArtifact.artifactType).toBe('winner-diagnostics');
+      expect(diagnosticsArtifact.rankedCandidates.length).toBe(2);
+
+      // Trade log artifact
+      const tradeLogArtifact = JSON.parse(fs.readFileSync(artifactPaths.tradeLogPath, 'utf8'));
+      expect(tradeLogArtifact.artifactType).toBe('trade-log');
+
+      // ── DB persistence ──
+      repo.insertWinner({
+        runId: result.run.id,
+        result: selection.result,
+        selectedTrialId: selection.selectedTrialId,
+        selectionStrategy: selection.selectionStrategy,
+        selectionConfigJson: selection.selectionConfigJson,
+        rationale: selection.rationale,
+        artifactPathsJson: JSON.stringify([
+          artifactPaths.winnerPath,
+          artifactPaths.diagnosticsPath,
+          artifactPaths.tradeLogPath,
+        ]),
+        selectedAt: Date.now(),
+      });
+
+      // Verify winner was persisted
+      const winner = repo.getWinnerForRun(result.run.id);
+      expect(winner).not.toBeNull();
+      expect(winner!.runId).toBe(result.run.id);
+      expect(winner!.result).toBe(selection.result);
 
       dbManager.close();
     });
