@@ -15,6 +15,7 @@ import { IndiaProposalValidator } from '../src/proposals/india-validator.js';
 import { ProposalSupervisor } from '../src/proposals/proposal-supervisor.js';
 import { StrategyRunRepository } from '../src/persistence/strategy-run-repo.js';
 import { RuntimeApp } from '../src/runtime/runtime-app.js';
+import { INDIA_NSE_EQ_STRATEGY } from '../src/strategy-risk/policy.js';
 import {
   ProposalStatus,
   ValidationReasonCode,
@@ -182,14 +183,14 @@ describe('S03 Runtime — Proposal composition', () => {
       const attempts = repo.getRecentAttemptsWithReasons(10);
       expect(attempts.length).toBe(2);
 
-      // NSE EQ → MIS, lotSize=1, MARKET
+      // NSE EQ → MIS, policy-aware fallback sizing, MARKET
       const nse = attempts.find(a => a.tradingsymbol === 'RELIANCE');
       expect(nse).toBeDefined();
       expect(nse!.proposalStatus).toBe(ProposalStatus.Accepted);
       expect(nse!.exchange).toBe('NSE');
       expect(nse!.side).toBe('buy');
       expect(nse!.product).toBe('MIS');
-      expect(nse!.quantity).toBe(1);
+      expect(nse!.quantity).toBe(Math.ceil(INDIA_NSE_EQ_STRATEGY.minNotional / 2950));
       expect(nse!.orderType).toBe('MARKET');
       expect(nse!.instrumentToken).toBe(123456);
       expect(nse!.reasons).toEqual([]);
@@ -252,6 +253,58 @@ describe('S03 Runtime — Proposal composition', () => {
       // The error is captured as LLMStatus.Error evidence (not silent),
       // and proposals still flow from deterministic fallback.
       expect(globalThis.fetch).toHaveBeenCalled();
+    });
+
+    it('sizes fallback EQ proposals to clear minNotional while preserving FO lot size', async () => {
+      const { supervisor, repo } = createSupervisor();
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+
+      await supervisor.doWork(new Date(), minimalHealth());
+
+      const attempts = repo.getRecentAttemptsWithReasons(10);
+      const nse = attempts.find(a => a.tradingsymbol === 'RELIANCE');
+      const nfo = attempts.find(a => a.tradingsymbol === 'BANKNIFTY24DEC50000CE');
+
+      expect(nse).toBeDefined();
+      expect(nse!.quantity).toBe(Math.ceil(INDIA_NSE_EQ_STRATEGY.minNotional / 2950));
+      expect(nse!.quantity * 2950).toBeGreaterThanOrEqual(INDIA_NSE_EQ_STRATEGY.minNotional);
+
+      expect(nfo).toBeDefined();
+      expect(nfo!.quantity).toBe(25);
+    });
+
+    it('preserves explicit provider quantity when proposalParams are present', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({
+          rankings: [
+            {
+              tradingsymbol: 'RELIANCE',
+              exchange: 'NSE',
+              score: 0.95,
+              rationale: 'High conviction',
+              proposal: {
+                exchange: 'NSE',
+                tradingsymbol: 'RELIANCE',
+                side: 'buy',
+                product: 'MIS',
+                quantity: 7,
+                price: null,
+                triggerPrice: null,
+                orderType: 'MARKET',
+              },
+            },
+          ],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+
+      const { supervisor, repo } = createSupervisor();
+      await supervisor.doWork(new Date(), minimalHealth());
+
+      const attempts = repo.getRecentAttemptsWithReasons(10);
+      const nse = attempts.find(a => a.tradingsymbol === 'RELIANCE');
+
+      expect(nse).toBeDefined();
+      expect(nse!.quantity).toBe(7);
     });
 
     it('caps proposals at maxProposals', async () => {

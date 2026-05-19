@@ -60,7 +60,16 @@ const PLUGIN_IDENTITY = {
 const DEFAULT_FALLBACK_SCORE = 0.5;
 
 /** Maximum candidates to include in the LLM prompt (to stay within token limits). */
-const MAX_LLM_CANDIDATES = 30;
+const MAX_LLM_CANDIDATES = 10;
+
+type RawLlmRanking = {
+  tradingsymbol?: unknown;
+  exchange?: unknown;
+  score?: unknown;
+  rationale?: unknown;
+  proposal?: unknown;
+  rank?: unknown;
+};
 
 // ---------------------------------------------------------------------------
 // LlmRankingStrategy
@@ -382,33 +391,96 @@ export class LlmRankingStrategy implements StrategyPlugin {
       response = await this._engine.sendRequest(payload);
     }
 
-    // The response uses the ProviderProposalResponse shape which has
-    // a "proposals" array. For ranking, we expect a "rankings" array.
-    // Check both "rankings" and fallback to "proposals".
-    const rankings = (response as unknown as Record<string, unknown>).rankings as
-      Array<{
-        tradingsymbol: string;
-        exchange: string;
-        score: number;
-        rationale: string;
-        proposal?: Record<string, unknown>;
-      }> | undefined;
+    return this._extractRankings(response);
+  }
 
-    if (rankings && Array.isArray(rankings) && rankings.length > 0) {
-      return rankings;
+  private _extractRankings(
+    response: ProviderProposalResponse | unknown,
+  ): Array<{
+    tradingsymbol: string;
+    exchange: string;
+    score: number;
+    rationale: string;
+    proposal?: Record<string, unknown>;
+  }> | null {
+    const rankingCollections: unknown[] = [];
+
+    if (Array.isArray(response)) {
+      rankingCollections.push(response);
+    } else if (response && typeof response === 'object') {
+      const record = response as Record<string, unknown>;
+      rankingCollections.push(
+        record.rankings,
+        record.ranking,
+        record.ranked,
+        record.ranks,
+      );
+
+      const proposals = Array.isArray(record.proposals)
+        ? record.proposals as Array<Record<string, unknown>>
+        : null;
+      if (proposals && proposals.length > 0) {
+        return proposals.flatMap(p => {
+          const tradingsymbol = typeof p.tradingsymbol === 'string' ? p.tradingsymbol : null;
+          const exchange = typeof p.exchange === 'string' ? p.exchange : null;
+          if (!tradingsymbol || !exchange) return [];
+          return [{
+            tradingsymbol,
+            exchange,
+            score: 0.8,
+            rationale: 'Selected by LLM proposal generation',
+            proposal: p,
+          }];
+        });
+      }
     }
 
-    // Fallback: treat the "proposals" array as candidates that were selected (= high score)
-    if (response.proposals && Array.isArray(response.proposals) && response.proposals.length > 0) {
-      return response.proposals.map(p => ({
-        tradingsymbol: p.tradingsymbol,
-        exchange: p.exchange,
-        score: 0.8,
-        rationale: 'Selected by LLM proposal generation',
-        proposal: p as unknown as Record<string, unknown>,
-      }));
+    for (const collection of rankingCollections) {
+      const normalized = this._normalizeRankingCollection(collection);
+      if (normalized && normalized.length > 0) {
+        return normalized;
+      }
     }
 
     return null;
+  }
+
+  private _normalizeRankingCollection(
+    collection: unknown,
+  ): Array<{
+    tradingsymbol: string;
+    exchange: string;
+    score: number;
+    rationale: string;
+    proposal?: Record<string, unknown>;
+  }> | null {
+    if (!Array.isArray(collection) || collection.length === 0) {
+      return null;
+    }
+
+    const total = collection.length;
+    const normalized = collection.flatMap((entry, index) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const raw = entry as RawLlmRanking;
+      const tradingsymbol = typeof raw.tradingsymbol === 'string' ? raw.tradingsymbol : null;
+      const exchange = typeof raw.exchange === 'string' ? raw.exchange : null;
+      if (!tradingsymbol || !exchange) return [];
+
+      const explicitScore = Number(raw.score);
+      const explicitRank = Number(raw.rank);
+      const inferredRank = Number.isFinite(explicitRank) && explicitRank > 0 ? explicitRank : index + 1;
+      const fallbackScore = total === 1 ? 1 : Math.max(0, 1 - ((inferredRank - 1) / (total - 1)));
+      const score = Number.isFinite(explicitScore) ? explicitScore : fallbackScore;
+      const rationale = typeof raw.rationale === 'string' && raw.rationale.trim().length > 0
+        ? raw.rationale
+        : 'LLM-ranked candidate';
+      const proposal = raw.proposal && typeof raw.proposal === 'object'
+        ? raw.proposal as Record<string, unknown>
+        : undefined;
+
+      return [{ tradingsymbol, exchange, score, rationale, proposal }];
+    });
+
+    return normalized.length > 0 ? normalized : null;
   }
 }

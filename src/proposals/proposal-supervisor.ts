@@ -42,6 +42,28 @@ import { UniverseService, type UniverseCoverageSummary } from '../universe/unive
 import { StrategyCoordinator } from '../strategy/framework.js';
 import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
 import { IndiaResearchBuilder } from '../strategy/india-research.js';
+import { INDIA_NSE_EQ_STRATEGY } from '../strategy-risk/policy.js';
+
+function computeFallbackProposalQuantity(
+  candidate: import('../types/runtime.js').HybridCandidateEvidence['candidate'],
+): number {
+  const lotSize = Math.max(1, candidate.lotSize);
+
+  // Preserve existing deterministic default for FO/options/futures.
+  if (candidate.instrumentType !== 'EQ') {
+    return lotSize;
+  }
+
+  const lastPrice = candidate.lastPrice ?? null;
+  if (!lastPrice || lastPrice <= 0) {
+    return lotSize;
+  }
+
+  // Size degraded/default EQ proposals to clear the strategy min-notional floor
+  // without weakening the downstream policy guard.
+  const minLots = Math.ceil(INDIA_NSE_EQ_STRATEGY.minNotional / (lastPrice * lotSize));
+  return Math.max(1, minLots) * lotSize;
+}
 
 // ---------------------------------------------------------------------------
 // ProposalSupervisor
@@ -587,8 +609,8 @@ export class ProposalSupervisor implements TickWork {
       if (!proposalParams) {
         // For F&O, use NRML; for EQ, use MIS
         product = c.instrumentType === 'EQ' ? 'MIS' : 'NRML';
-        // Default quantity: lot size for F&O, 1 for EQ
-        quantity = Math.max(1, c.lotSize);
+        // Default quantity: FO uses lot size; EQ sizes to clear minNotional when quote is present.
+        quantity = computeFallbackProposalQuantity(c);
         // Default side: buy
         side = 'buy';
         // Default order: MARKET

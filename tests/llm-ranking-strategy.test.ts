@@ -454,6 +454,87 @@ describe('LlmRankingStrategy', () => {
       expect(result.llmStatus).toBe(LLMStatus.Consulted);
     });
 
+    it('accepts alternate ranking keys from provider responses', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          ranking: [
+            {
+              tradingsymbol: 'INFY',
+              exchange: 'NSE',
+              score: 0.91,
+              rationale: 'Returned under ranking key',
+            },
+          ],
+        }),
+      );
+
+      const engine = new ProposalEngine(makeConfig());
+      const plugin = new LlmRankingStrategy(engine);
+      const result = await plugin.evaluateAsync([
+        makeCandidate({ tradingsymbol: 'TCS' }),
+        makeCandidate({ tradingsymbol: 'INFY' }),
+      ]);
+
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
+      expect(result.rankings[0].candidate.tradingsymbol).toBe('INFY');
+      expect(result.rankings[0].score).toBe(0.91);
+    });
+
+    it('accepts array-root ranking responses and infers scores from rank order', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        jsonResponse([
+          {
+            tradingsymbol: 'TCS',
+            exchange: 'NSE',
+            rank: 1,
+          },
+          {
+            tradingsymbol: 'INFY',
+            exchange: 'NSE',
+            rank: 2,
+          },
+        ]),
+      );
+
+      const engine = new ProposalEngine(makeConfig());
+      const plugin = new LlmRankingStrategy(engine);
+      const result = await plugin.evaluateAsync([
+        makeCandidate({ tradingsymbol: 'TCS' }),
+        makeCandidate({ tradingsymbol: 'INFY' }),
+      ]);
+
+      expect(result.llmStatus).toBe(LLMStatus.Consulted);
+      expect(result.rankings[0].candidate.tradingsymbol).toBe('TCS');
+      expect(result.rankings[0].score).toBe(1);
+      expect(result.rankings[1].candidate.tradingsymbol).toBe('INFY');
+      expect(result.rankings[1].score).toBe(0);
+    });
+
+    it('caps the LLM prompt to 10 candidates', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+
+      globalThis.fetch = vi.fn().mockImplementation((_: string, options?: RequestInit) => {
+        capturedBody = JSON.parse(String(options?.body ?? '{}'));
+        return Promise.resolve(jsonResponse({ rankings: [] }));
+      });
+
+      const engine = new ProposalEngine(makeConfig({
+        providerMode: 'openai-compatible',
+        providerUrl: 'https://crof.ai/v1/chat/completions',
+        providerModel: 'kimi-k2.6-precision',
+      }));
+      const plugin = new LlmRankingStrategy(engine);
+      const candidates = Array.from({ length: 20 }, (_, i) => makeCandidate({ tradingsymbol: `SYM${i}` }));
+
+      await plugin.evaluateAsync(candidates);
+
+      const messages = capturedBody?.messages as Array<{ role: string; content: string }>;
+      const userMessage = messages.find(m => m.role === 'user');
+      const prompt = JSON.parse(userMessage!.content) as { candidates: unknown[]; maxRanked: number };
+      expect(prompt.candidates).toHaveLength(10);
+      expect(prompt.maxRanked).toBe(10);
+    });
+
     it('clamps LLM scores to 0–1 range', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue(
         jsonResponse({
