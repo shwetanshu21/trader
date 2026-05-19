@@ -58,6 +58,7 @@ import type {
   InstrumentSyncState,
 } from '../src/integrations/broker/types.js';
 import type { MarketClock } from '../src/runtime/market-clock.js';
+import { getEligibleSymbols } from '../src/universe/policy.js';
 
 // ---------------------------------------------------------------------------
 // Mock services (mirrors S03 test patterns)
@@ -1697,18 +1698,7 @@ describe('S04 Runtime — Execution gate composition', () => {
 // Mirrors the temp-DB / fake-timer pattern from S03's RuntimeApp tests.
 
 /** All 50 NSE EQ allowlist symbols from the universe policy. */
-const NSE_ALLOWLIST_SYMBOLS = [
-  'ADANIENT', 'ADANIPORTS', 'APOLLOHOSP', 'ASIANPAINT', 'AXISBANK',
-  'BAJAJ-AUTO', 'BAJFINANCE', 'BAJAJFINSV', 'BEL', 'BHARTIARTL',
-  'BPCL', 'BRITANNIA', 'CIPLA', 'COALINDIA', 'DIVISLAB',
-  'DRREDDY', 'EICHERMOT', 'GRASIM', 'HCLTECH', 'HDFCBANK',
-  'HDFCLIFE', 'HEROMOTOCO', 'HINDALCO', 'HINDUSTAN_UNILEVER', 'ICICIBANK',
-  'INDUSINDBK', 'INFY', 'ITC', 'JSW_STEEL', 'KOTAKBANK',
-  'LT', 'M&M', 'MARUTI', 'NESTLEIND', 'NTPC',
-  'ONGC', 'POWERGRID', 'RELIANCE', 'SBILIFE', 'SBIN',
-  'SHRIRAMFIN', 'SUNPHARMA', 'TATACONSUM', 'TMCV', 'TATASTEEL',
-  'TCS', 'TECHM', 'TITAN', 'ULTRACEMCO', 'WIPRO',
-];
+const NSE_ALLOWLIST_SYMBOLS = [...getEligibleSymbols('NSE')].sort();
 
 /** Seed the broker repo with all NSE allowlist instruments and quotes. */
 function seedFullNseUniverse(brokerRepo: BrokerRepository): void {
@@ -1824,7 +1814,7 @@ describe('RuntimeApp-root witnesses', () => {
     // Mark instrument sync as fresh (otherwise validator refuses with instrument_stale)
     h.brokerRepo.upsertInstrumentSyncState({
       lastSuccessAt: Date.now(),
-      lastInstrumentCount: 50,
+      lastInstrumentCount: NSE_ALLOWLIST_SYMBOLS.length,
       lastSkippedCount: 0,
       lastStatus: 'success',
       lastError: null,
@@ -1912,7 +1902,7 @@ describe('RuntimeApp-root witnesses', () => {
       const run = runs[0];
 
       // Run metadata matches coordinator output
-      expect(run.totalEvaluated).toBe(50); // Full NSE universe
+      expect(run.totalEvaluated).toBe(NSE_ALLOWLIST_SYMBOLS.length);
       expect(run.hasPluginErrors).toBe(false);
       expect(run.durationMs).toBeGreaterThanOrEqual(0);
       expect(run.universeSnapshotId).toBeNull(); // Not yet wired

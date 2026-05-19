@@ -56,6 +56,8 @@ const PAPER_QUOTE_STALENESS_MS = 5 * 60 * 1000;
 export class PaperExecutionPolicy {
   readonly label = 'paper-execution-policy';
 
+  constructor(private readonly _now: () => number = () => Date.now()) {}
+
   /**
    * Evaluate whether a strategy-approved candidate can be paper-filled using
    * only local quote and instrument data.
@@ -87,7 +89,7 @@ export class PaperExecutionPolicy {
     }
 
     // ── Quote staleness check ─────────────────────────────────────────────
-    const stalenessMs = Date.now() - quote.receivedAt;
+    const stalenessMs = this._now() - quote.receivedAt;
     if (stalenessMs > PAPER_QUOTE_STALENESS_MS) {
       return this._refuse(
         ExecutionRefusalCode.StaleOrMissingQuote,

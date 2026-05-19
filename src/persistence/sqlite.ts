@@ -224,7 +224,19 @@ CREATE TABLE IF NOT EXISTS strategy_decisions (
   risk_sizing_basis     TEXT    NOT NULL DEFAULT '',
   risk_max_loss_rupees  REAL,
   risk_stop_distance    REAL,
-  risk_exposure_tag     TEXT
+  risk_stop_price       REAL,
+  risk_trailing_stop_distance REAL,
+  risk_budget_rupees    REAL,
+  risk_exposure_tag     TEXT,
+  india_research_evidence TEXT,
+  execution_class       TEXT    NOT NULL DEFAULT 'EQ',
+  segment               TEXT    NOT NULL DEFAULT 'NSE',
+  instrument_type       TEXT    NOT NULL DEFAULT 'EQ',
+  expiry                TEXT,
+  strike                REAL,
+  lot_size              INTEGER NOT NULL DEFAULT 1,
+  tick_size             REAL    NOT NULL DEFAULT 0.05,
+  freeze_quantity       INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategy_decisions_status ON strategy_decisions(decision_status);
@@ -324,6 +336,9 @@ CREATE TABLE IF NOT EXISTS position_events (
   new_quantity          INTEGER NOT NULL,
   new_avg_cost          REAL    NOT NULL,
   realized_pnl          REAL    NOT NULL DEFAULT 0,
+  stop_price            REAL,
+  trailing_anchor_price REAL,
+  trailing_stop_distance REAL,
   created_at            INTEGER NOT NULL
 );
 
@@ -342,6 +357,11 @@ CREATE TABLE IF NOT EXISTS paper_positions (
   quantity        INTEGER NOT NULL DEFAULT 0,
   avg_cost_price  REAL    NOT NULL DEFAULT 0,
   realized_pnl    REAL    NOT NULL DEFAULT 0,
+  stop_price      REAL,
+  trailing_anchor_price REAL,
+  trailing_stop_distance REAL,
+  mark_price      REAL,
+  marked_at       INTEGER,
   updated_at      INTEGER NOT NULL,
   UNIQUE(exchange, tradingsymbol, product)
 );
@@ -663,16 +683,27 @@ export class DatabaseManager {
     this._migrateAddColumnIfNotExists('strategy_run_candidates', 'expiry', 'TEXT');
     this._migrateAddColumnIfNotExists('strategy_run_candidates', 'strike', 'REAL');
     this._migrateAddColumnIfNotExists('strategy_run_candidates', 'freeze_quantity', 'INTEGER');
-
-    // Migrate S03 columns for execution-class metadata (idempotent)
-    this._migrateAddColumnIfNotExists('strategy_decisions', 'execution_class', 'TEXT NOT NULL DEFAULT \'EQ\'');
-    this._migrateAddColumnIfNotExists('strategy_decisions', 'segment', 'TEXT NOT NULL DEFAULT \'NSE\'');
-    this._migrateAddColumnIfNotExists('strategy_decisions', 'instrument_type', 'TEXT NOT NULL DEFAULT \'EQ\'');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'execution_class', "TEXT NOT NULL DEFAULT 'EQ'");
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'segment', "TEXT NOT NULL DEFAULT 'NSE'");
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'instrument_type', "TEXT NOT NULL DEFAULT 'EQ'");
     this._migrateAddColumnIfNotExists('strategy_decisions', 'expiry', 'TEXT');
     this._migrateAddColumnIfNotExists('strategy_decisions', 'strike', 'REAL');
     this._migrateAddColumnIfNotExists('strategy_decisions', 'lot_size', 'INTEGER NOT NULL DEFAULT 1');
     this._migrateAddColumnIfNotExists('strategy_decisions', 'tick_size', 'REAL NOT NULL DEFAULT 0.05');
     this._migrateAddColumnIfNotExists('strategy_decisions', 'freeze_quantity', 'INTEGER');
+
+    // M007 quick-task: dynamic sizing / stop state columns (idempotent)
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'risk_stop_price', 'REAL');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'risk_trailing_stop_distance', 'REAL');
+    this._migrateAddColumnIfNotExists('strategy_decisions', 'risk_budget_rupees', 'REAL');
+    this._migrateAddColumnIfNotExists('position_events', 'stop_price', 'REAL');
+    this._migrateAddColumnIfNotExists('position_events', 'trailing_anchor_price', 'REAL');
+    this._migrateAddColumnIfNotExists('position_events', 'trailing_stop_distance', 'REAL');
+    this._migrateAddColumnIfNotExists('paper_positions', 'stop_price', 'REAL');
+    this._migrateAddColumnIfNotExists('paper_positions', 'trailing_anchor_price', 'REAL');
+    this._migrateAddColumnIfNotExists('paper_positions', 'trailing_stop_distance', 'REAL');
+    this._migrateAddColumnIfNotExists('paper_positions', 'mark_price', 'REAL');
+    this._migrateAddColumnIfNotExists('paper_positions', 'marked_at', 'INTEGER');
   }
 
   /** Add a column to a table only if it does not already exist. */

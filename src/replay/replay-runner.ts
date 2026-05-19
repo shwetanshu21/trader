@@ -10,11 +10,24 @@ import { ReplaySessionRepository } from '../persistence/replay-session-repo.js';
 import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { createStrategyCoordinator } from '../strategy/coordinator-factory.js';
 import { ProposalEngine } from '../proposals/proposal-engine.js';
+import { BrokerRepository } from '../persistence/broker-repo.js';
+import { ProposalRepository } from '../persistence/proposal-repo.js';
+import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
+import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
+import { PaperOrderRepository } from '../persistence/paper-order-repo.js';
+import { PaperFillRepository } from '../persistence/paper-fill-repo.js';
+import { PaperPositionRepository } from '../persistence/paper-position-repo.js';
+import { PaperExecutionPolicy } from '../execution/paper-execution-policy.js';
+import { PaperExecutionLedger } from '../execution/paper-execution-ledger.js';
+import { PaperPositionManager } from '../execution/paper-position-manager.js';
+import { ModeAwareExecutionService } from '../execution/mode-aware-execution-service.js';
+import { BlockedExecutionAdapter, LiveExecutionAdapter } from '../execution/execution-adapters.js';
 import {
   ReplaySessionStatus,
   ReplayFidelity,
   type ReplaySessionRow,
 } from './types.js';
+import { ExecutionMode } from '../types/runtime.js';
 import type { HistoricalDataProvider } from './historical-data-provider.js';
 import type { MarketProfile } from '../market/market-profile.js';
 import type Database from 'better-sqlite3';
@@ -47,6 +60,8 @@ export interface ReplayRunnerOptions {
   rangeStart?: number;
   /** Explicit replay range end (epoch ms). Defaults to now. */
   rangeEnd?: number;
+  /** When true, execute replay-approved candidates through paper execution state. */
+  enablePaperExecution?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +116,44 @@ export async function runReplay(options: ReplayRunnerOptions): Promise<ReplayRun
   const sessionRepo = new ReplaySessionRepository(db);
   const strategyRunRepo = new StrategyRunRepository(db);
 
+  // Optional replay-owned execution state (paper mode only)
+  const brokerRepo = new BrokerRepository(db);
+  const proposalRepo = new ProposalRepository(db);
+  const strategyDecisionRepo = new StrategyDecisionRepository(db);
+  const attemptRepo = new ExecutionAttemptRepository(db);
+  const orderRepo = new PaperOrderRepository(db);
+  const fillRepo = new PaperFillRepository(db);
+  const positionRepo = new PaperPositionRepository(db);
+  const paperExecution = options.enablePaperExecution
+    ? {
+        brokerRepo,
+        proposalRepo,
+        strategyDecisionRepo,
+        attemptRepo,
+        orderRepo,
+        fillRepo,
+        positionRepo,
+        executionService: new ModeAwareExecutionService({
+          attemptRepo,
+          paperPolicy: new PaperExecutionPolicy(() => rangeEnd),
+          paperLedger: new PaperExecutionLedger({ db, attemptRepo, orderRepo, fillRepo, positionRepo }),
+          liveAdapter: new LiveExecutionAdapter(null),
+          blockedAdapter: new BlockedExecutionAdapter(),
+          mode: ExecutionMode.Paper,
+        }),
+      }
+    : null;
+
+  const paperPositionManager = paperExecution
+    ? new PaperPositionManager({
+        brokerRepo: paperExecution.brokerRepo,
+        positionRepo: paperExecution.positionRepo,
+        proposalRepo: paperExecution.proposalRepo,
+        strategyRepo: paperExecution.strategyDecisionRepo,
+        executionService: paperExecution.executionService,
+      })
+    : null;
+
   // ── Step 3: Create the strategy coordinator via the shared factory ─────
   // The factory always includes the deterministic screener plugin for
   // truthful fallback behavior (non-empty deterministic scores even when
@@ -146,6 +199,19 @@ export async function runReplay(options: ReplayRunnerOptions): Promise<ReplayRun
     rangeStart,
     rangeEnd,
     maxCandidates,
+    paperExecution: paperExecution
+      ? {
+          brokerRepo: paperExecution.brokerRepo,
+          proposalRepo: paperExecution.proposalRepo,
+          strategyRepo: paperExecution.strategyDecisionRepo,
+          attemptRepo: paperExecution.attemptRepo,
+          orderRepo: paperExecution.orderRepo,
+          fillRepo: paperExecution.fillRepo,
+          positionRepo: paperExecution.positionRepo,
+          executionService: paperExecution.executionService,
+          positionManager: paperPositionManager!,
+        }
+      : null,
   });
 
   const engineResult = await engine.run();

@@ -47,6 +47,20 @@ class MockSessionService {
     if (expiresAt !== undefined) this._expiresAt = expiresAt;
   }
 
+  getSession() {
+    return {
+      requestToken: null,
+      accessToken: 'mock-access-token',
+      publicToken: null,
+      obtainedAt: Date.now(),
+      expiresAt: this._expiresAt,
+      state: this._state,
+      reason: 'mock',
+      lastError: null,
+      lastAuthCheckAt: Date.now(),
+    };
+  }
+
   getSessionHealth() {
     return {
       state: this._state,
@@ -56,6 +70,26 @@ class MockSessionService {
       lastError: null,
       lastAuthCheckAt: Date.now(),
     };
+  }
+
+  needsRefresh() {
+    return false;
+  }
+
+  applySessionMaterial() {
+    return this.getSession();
+  }
+
+  markExpired(reason: string) {
+    this._state = ZerodhaSessionState.Error;
+    return {
+      ...this.getSession(),
+      reason,
+    };
+  }
+
+  resetCredentials() {
+    return this.getSession();
   }
 
   get isConfigured() { return true; }
@@ -87,6 +121,36 @@ class MockInstrumentsService {
     this._syncState = { ...this._syncState, ...state };
   }
 
+  syncFromRecords(records: InstrumentRecord[]) {
+    const bySegment = new Map<string, InstrumentRecord[]>();
+    for (const record of records) {
+      const segmentRecords = bySegment.get(record.segment) ?? [];
+      segmentRecords.push(record);
+      bySegment.set(record.segment, segmentRecords);
+    }
+    for (const [segment, segmentRecords] of bySegment.entries()) {
+      this.setInstruments(segment, segmentRecords);
+    }
+    this._syncState = {
+      ...this._syncState,
+      lastSuccessAt: Date.now(),
+      lastInstrumentCount: records.length,
+      lastSkippedCount: 0,
+      lastStatus: 'success',
+      lastError: null,
+    };
+    return {
+      inserted: records.length,
+      updated: 0,
+      total: records.length,
+      skipped: 0,
+    };
+  }
+
+  checkFreshness() {
+    return { isStale: false, stalenessMs: 0 };
+  }
+
   getInstrumentsBySegment(segment: string): InstrumentRecord[] {
     return this._instrumentsBySegment.get(segment) ?? [];
   }
@@ -97,6 +161,13 @@ class MockInstrumentsService {
 
   getInstrument(exchange: string, tradingsymbol: string): InstrumentRecord | null {
     return this._lookup.get(`${exchange}:${tradingsymbol}`) ?? null;
+  }
+
+  getInstrumentByToken(instrumentToken: number): InstrumentRecord | null {
+    for (const instrument of this._lookup.values()) {
+      if (instrument.instrumentToken === instrumentToken) return instrument;
+    }
+    return null;
   }
 
   getSyncState(): InstrumentSyncState | null {
@@ -164,10 +235,11 @@ function minimalHealth(): HealthStatus {
 }
 
 function sampleNseInstrument(symbol: string, overrides?: Partial<InstrumentRecord>): InstrumentRecord {
+  const tokenSeed = Array.from(symbol).reduce((sum, ch, index) => sum + ch.charCodeAt(0) * (index + 1), 0);
   return {
     exchange: 'NSE',
     tradingsymbol: symbol,
-    instrumentToken: 100000 + symbol.charCodeAt(0) * 100,
+    instrumentToken: 100000 + tokenSeed,
     name: `${symbol} LTD`,
     expiry: null,
     strike: null,
@@ -637,6 +709,11 @@ describe('Universe Supervisor — integration', () => {
         instruments as any,
         brokerRepo,
         stream as any,
+        {
+          refreshSession: async () => null,
+          fetchInstrumentCatalog: async () => [],
+          hasCachedInstrumentKeys: () => true,
+        },
       );
       await supervisor.doWork(new Date(), minimalHealth());
       expect(subscribeCalls[0]?.length).toBe(seeded.length);

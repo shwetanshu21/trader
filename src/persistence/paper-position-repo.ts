@@ -40,8 +40,8 @@ export class PaperPositionRepository {
         (paper_order_id, paper_fill_id, execution_attempt_id, event_type,
          exchange, tradingsymbol, product, quantity_delta, price,
          previous_quantity, previous_avg_cost, new_quantity, new_avg_cost,
-         realized_pnl, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         realized_pnl, stop_price, trailing_anchor_price, trailing_stop_distance, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -59,6 +59,9 @@ export class PaperPositionRepository {
       event.newQuantity,
       event.newAvgCost,
       event.realizedPnl,
+      event.stopPrice,
+      event.trailingAnchorPrice,
+      event.trailingStopDistance,
       event.createdAt,
     );
 
@@ -78,6 +81,9 @@ export class PaperPositionRepository {
       newQuantity: event.newQuantity,
       newAvgCost: event.newAvgCost,
       realizedPnl: event.realizedPnl,
+      stopPrice: event.stopPrice,
+      trailingAnchorPrice: event.trailingAnchorPrice,
+      trailingStopDistance: event.trailingStopDistance,
       createdAt: event.createdAt,
     };
   }
@@ -141,13 +147,19 @@ export class PaperPositionRepository {
     const stmt = this._db.prepare(`
       INSERT INTO paper_positions
         (exchange, tradingsymbol, product, side, quantity,
-         avg_cost_price, realized_pnl, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         avg_cost_price, realized_pnl, stop_price, trailing_anchor_price,
+         trailing_stop_distance, mark_price, marked_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(exchange, tradingsymbol, product) DO UPDATE SET
         side            = excluded.side,
         quantity        = excluded.quantity,
         avg_cost_price  = excluded.avg_cost_price,
         realized_pnl    = excluded.realized_pnl,
+        stop_price      = excluded.stop_price,
+        trailing_anchor_price = excluded.trailing_anchor_price,
+        trailing_stop_distance = excluded.trailing_stop_distance,
+        mark_price      = excluded.mark_price,
+        marked_at       = excluded.marked_at,
         updated_at      = excluded.updated_at
     `);
 
@@ -159,6 +171,11 @@ export class PaperPositionRepository {
       position.quantity,
       position.avgCostPrice,
       position.realizedPnl,
+      position.stopPrice,
+      position.trailingAnchorPrice,
+      position.trailingStopDistance,
+      position.markPrice,
+      position.markedAt,
       position.updatedAt,
     );
 
@@ -258,10 +275,22 @@ export class PaperPositionRepository {
         quantity: last.new_quantity,
         avgCostPrice: last.new_avg_cost,
         realizedPnl: groupEvents.reduce((sum, e) => sum + e.realized_pnl, 0),
+        stopPrice: last.stop_price,
+        trailingAnchorPrice: last.trailing_anchor_price,
+        trailingStopDistance: last.trailing_stop_distance,
+        markPrice: null,
+        markedAt: null,
         updatedAt: last.created_at,
       };
 
-      const inserted = this.upsertPosition(position);
+      const inserted = this.upsertPosition({
+        ...position,
+        stopPrice: position.stopPrice,
+        trailingAnchorPrice: position.trailingAnchorPrice,
+        trailingStopDistance: position.trailingStopDistance,
+        markPrice: position.markPrice,
+        markedAt: position.markedAt,
+      });
       positions.push(inserted);
     }
 
@@ -317,6 +346,9 @@ interface PositionEventDbRow {
   new_quantity: number;
   new_avg_cost: number;
   realized_pnl: number;
+  stop_price: number | null;
+  trailing_anchor_price: number | null;
+  trailing_stop_distance: number | null;
   created_at: number;
 }
 
@@ -337,6 +369,9 @@ function mapEventRow(row: PositionEventDbRow): PositionEventRow {
     newQuantity: row.new_quantity,
     newAvgCost: row.new_avg_cost,
     realizedPnl: row.realized_pnl,
+    stopPrice: row.stop_price,
+    trailingAnchorPrice: row.trailing_anchor_price,
+    trailingStopDistance: row.trailing_stop_distance,
     createdAt: row.created_at,
   };
 }
@@ -350,6 +385,11 @@ interface PaperPositionDbRow {
   quantity: number;
   avg_cost_price: number;
   realized_pnl: number;
+  stop_price: number | null;
+  trailing_anchor_price: number | null;
+  trailing_stop_distance: number | null;
+  mark_price: number | null;
+  marked_at: number | null;
   updated_at: number;
 }
 
@@ -363,6 +403,11 @@ function mapPositionRow(row: PaperPositionDbRow): PaperPositionRow {
     quantity: row.quantity,
     avgCostPrice: row.avg_cost_price,
     realizedPnl: row.realized_pnl,
+    stopPrice: row.stop_price,
+    trailingAnchorPrice: row.trailing_anchor_price,
+    trailingStopDistance: row.trailing_stop_distance,
+    markPrice: row.mark_price,
+    markedAt: row.marked_at,
     updatedAt: row.updated_at,
   };
 }

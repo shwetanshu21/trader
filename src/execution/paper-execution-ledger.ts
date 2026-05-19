@@ -214,6 +214,11 @@ export class PaperExecutionLedger {
         quantity: eventRow.newQuantity,
         avgCostPrice: eventRow.newAvgCost,
         realizedPnl: cumRealizedPnl,
+        stopPrice: eventRow.stopPrice,
+        trailingAnchorPrice: eventRow.trailingAnchorPrice,
+        trailingStopDistance: eventRow.trailingStopDistance,
+        markPrice: fillPrice,
+        markedAt: now,
         updatedAt: now,
       });
 
@@ -308,6 +313,17 @@ export class PaperExecutionLedger {
       }
     }
 
+    const isEntry = prevQty === 0;
+    const nextStopPrice = isEntry
+      ? candidate.stopPrice
+      : currentPosition?.stopPrice ?? null;
+    const nextTrailingAnchorPrice = isEntry
+      ? fillPrice
+      : currentPosition?.trailingAnchorPrice ?? null;
+    const nextTrailingStopDistance = isEntry
+      ? candidate.trailingStopDistance
+      : currentPosition?.trailingStopDistance ?? null;
+
     return {
       paperOrderId,
       paperFillId,
@@ -323,6 +339,9 @@ export class PaperExecutionLedger {
       newQuantity: newQty,
       newAvgCost,
       realizedPnl,
+      stopPrice: newQty === 0 ? null : nextStopPrice,
+      trailingAnchorPrice: newQty === 0 ? null : nextTrailingAnchorPrice,
+      trailingStopDistance: newQty === 0 ? null : nextTrailingStopDistance,
       createdAt: now,
     };
   }

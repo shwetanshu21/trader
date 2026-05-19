@@ -105,5 +105,10 @@ This document records the Hetzner deployment investigation and replay/backtest f
   - verdict: `PASS`
 
 ## Remaining caveats
-- The server-side working copy must be synced with the latest local chunking/timestamp fixes before the next full Hetzner replay proof.
-- Runtime quote freshness still needs a steady-state post-systemd verification pass.
+- The Hetzner host had a dirty `/root/trader` working tree during deploy; the safe deploy path was to stash server-local changes, fast-forward `main`, then restart the systemd units.
+- After deploy on 2026-05-18, all three managed services were active and listening on `127.0.0.1:8788`, `127.0.0.1:8787`, and `127.0.0.1:3001`.
+- The runtime stayed operational but broker-degraded because the Upstox notifier token at `/root/trader/tmp/upstox/notifier/latest-token.json` was expired.
+- Journal signature for this failure mode:
+  - `MCP tool "get-profile" returned an error: Upstox token ... expired`
+  - `Universe coverage is degraded: 0/50 fresh quotes`
+- Runtime quote freshness still needs a steady-state verification pass after refreshing the token.

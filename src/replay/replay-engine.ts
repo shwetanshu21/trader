@@ -12,6 +12,7 @@ import {
   ReplayFidelity,
   type ReplaySessionRow,
   type ReplayTick,
+  type ReplayExecutionSnapshot,
 } from './types.js';
 import type { HistoricalDataProvider } from './historical-data-provider.js';
 import type {
@@ -20,7 +21,9 @@ import type {
   BoundedCandidate,
   HybridCoordinatorResult,
   PluginScoreEvidence,
+  StrategyApprovedCandidate,
 } from '../types/runtime.js';
+import { ProposalStatus, StrategyDecisionStatus } from '../types/runtime.js';
 import { IndiaResearchBuilder } from '../strategy/india-research.js';
 
 // ---------------------------------------------------------------------------
@@ -58,6 +61,17 @@ export class ReplayEngine {
   private readonly _rangeEnd: number;
   private readonly _maxCandidates: number;
   private readonly _researchBuilder: IndiaResearchBuilder;
+  private readonly _paperExecution: {
+    brokerRepo: any;
+    proposalRepo: any;
+    strategyRepo: any;
+    attemptRepo: any;
+    orderRepo: any;
+    fillRepo: any;
+    positionRepo: any;
+    executionService: any;
+    positionManager: any;
+  } | null;
 
   constructor(options: {
     clock: ReplayClock;
@@ -70,6 +84,18 @@ export class ReplayEngine {
     rangeEnd: number;
     /** Optional engine-level candidate cap applied before coordinator evaluation (0 = unlimited). */
     maxCandidates?: number;
+    /** Optional paper execution state owned by replay. */
+    paperExecution?: {
+      brokerRepo: any;
+      proposalRepo: any;
+      strategyRepo: any;
+      attemptRepo: any;
+      orderRepo: any;
+      fillRepo: any;
+      positionRepo: any;
+      executionService: any;
+      positionManager: any;
+    } | null;
   }) {
     this._clock = options.clock;
     this._dataProvider = options.dataProvider;
@@ -81,6 +107,7 @@ export class ReplayEngine {
     this._rangeEnd = options.rangeEnd;
     this._maxCandidates = options.maxCandidates ?? 0;
     this._researchBuilder = new IndiaResearchBuilder();
+    this._paperExecution = options.paperExecution ?? null;
   }
 
   /**
@@ -234,7 +261,21 @@ export class ReplayEngine {
       candidateRows,
     );
 
-    // ── Step 4: Save checkpoint ──────────────────────────────────────────
+    // ── Step 4: Optional replay-owned paper execution + managed stops ─────
+    let executionSnapshot: ReplayExecutionSnapshot | null = null;
+    if (this._paperExecution) {
+      await this._applyPaperExecution(tick, coordinatorResult);
+      executionSnapshot = {
+        tickIndex: tick.index,
+        tickTimestamp: tick.timestamp,
+        executionAttempts: this._paperExecution.attemptRepo.count(),
+        paperOrders: this._paperExecution.orderRepo.count(),
+        paperFills: this._paperExecution.fillRepo.count(),
+        openPositions: this._paperExecution.positionRepo.countOpenPositions(),
+      };
+    }
+
+    // ── Step 5: Save checkpoint ──────────────────────────────────────────
     this._sessionRepo.saveCheckpoint({
       sessionId: this._sessionId,
       tickIndex: tick.index,
@@ -246,6 +287,7 @@ export class ReplayEngine {
         appliedCap: this._maxCandidates > 0 ? this._maxCandidates : null,
         preCapCandidateCount: preCapCount,
         runDurationMs: Date.now() - tickStartedAt,
+        executionSnapshot,
       }),
       savedAt: Date.now(),
     });
@@ -325,5 +367,141 @@ export class ReplayEngine {
         indiaResearchEvidence: evidence.indiaResearchEvidence,
       };
     });
+  }
+
+  private async _applyPaperExecution(tick: ReplayTick, result: HybridCoordinatorResult): Promise<void> {
+    if (!this._paperExecution) return;
+
+    for (const evidence of result.candidates) {
+      const c = evidence.candidate;
+      if (c.lastPrice == null || c.lastPrice <= 0) continue;
+      this._paperExecution.brokerRepo.upsertInstruments([{
+        exchange: c.exchange,
+        tradingsymbol: c.tradingsymbol,
+        instrumentToken: c.instrumentToken,
+        name: c.tradingsymbol,
+        expiry: c.expiry,
+        strike: c.strike,
+        lotSize: c.lotSize,
+        tickSize: c.tickSize,
+        instrumentType: c.instrumentType,
+        segment: c.exchange,
+        exchangeToken: c.instrumentToken,
+        freezeQuantity: c.freezeQuantity,
+      }]);
+      this._paperExecution.brokerRepo.upsertQuote({
+        exchange: c.exchange,
+        tradingsymbol: c.tradingsymbol,
+        instrumentToken: c.instrumentToken,
+        lastPrice: c.lastPrice,
+        change: null,
+        changePercent: null,
+        volume: c.volume,
+        oi: null,
+        high: null,
+        low: null,
+        open: null,
+        close: null,
+        bid: c.bid,
+        ask: c.ask,
+        priceTimestamp: tick.timestamp,
+        receivedAt: tick.timestamp,
+      });
+
+      const proposal = this._paperExecution.proposalRepo.insertAttempt({
+        exchange: c.exchange,
+        tradingsymbol: c.tradingsymbol,
+        instrumentToken: c.instrumentToken,
+        side: c.side,
+        product: 'MIS',
+        quantity: c.lotSize,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: `replay-${this._sessionId}`,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: tick.timestamp,
+      });
+
+      const decision = this._paperExecution.strategyRepo.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'replay-paper',
+        strategyVersion: '1.0.0',
+        decidedAt: tick.timestamp,
+        exchange: c.exchange,
+        tradingsymbol: c.tradingsymbol,
+        side: c.side,
+        product: 'MIS',
+        quantity: c.lotSize,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: c.lastPrice,
+        quoteBid: c.bid,
+        quoteAsk: c.ask,
+        quoteVolume: c.volume,
+        quoteReceivedAt: tick.timestamp,
+        riskNotional: c.lotSize * c.lastPrice,
+        riskSizingBasis: 'replay_last_price',
+        riskMaxLossRupees: c.lotSize * c.lastPrice * 0.01,
+        riskStopDistance: Math.max(c.lastPrice * 0.01, c.tickSize),
+        riskStopPrice: c.side === 'sell' ? c.lastPrice + Math.max(c.lastPrice * 0.01, c.tickSize) : c.lastPrice - Math.max(c.lastPrice * 0.01, c.tickSize),
+        riskTrailingStopDistance: Math.max(c.lastPrice * 0.01, c.tickSize),
+        riskBudgetRupees: c.lotSize * c.lastPrice * 0.01,
+        riskExposureTag: 'replay',
+        indiaResearchEvidence: evidence.indiaResearchEvidence,
+        executionClass: c.instrumentType === 'EQ' ? 'EQ' : 'FO',
+        segment: c.exchange,
+        instrumentType: c.instrumentType,
+        expiry: c.expiry,
+        strike: c.strike,
+        lotSize: c.lotSize,
+        tickSize: c.tickSize,
+        freezeQuantity: c.freezeQuantity,
+      });
+
+      const approved: StrategyApprovedCandidate = {
+        id: decision.id,
+        proposalAttemptId: decision.proposalAttemptId,
+        strategyId: decision.strategyId,
+        strategyVersion: decision.strategyVersion,
+        decidedAt: decision.decidedAt,
+        exchange: decision.exchange,
+        tradingsymbol: decision.tradingsymbol,
+        side: decision.side,
+        product: decision.product,
+        quantity: decision.quantity,
+        price: decision.price,
+        triggerPrice: decision.triggerPrice,
+        orderType: decision.orderType,
+        lastPrice: decision.quoteLastPrice,
+        bid: decision.quoteBid,
+        ask: decision.quoteAsk,
+        notional: decision.riskNotional,
+        sizingBasis: decision.riskSizingBasis,
+        maxLossRupees: decision.riskMaxLossRupees,
+        stopDistance: decision.riskStopDistance,
+        stopPrice: decision.riskStopPrice,
+        trailingStopDistance: decision.riskTrailingStopDistance,
+        riskBudgetRupees: decision.riskBudgetRupees,
+        executionClass: decision.executionClass,
+        segment: decision.segment,
+        instrumentType: decision.instrumentType,
+        expiry: decision.expiry,
+        strike: decision.strike,
+        lotSize: decision.lotSize,
+        tickSize: decision.tickSize,
+        freezeQuantity: decision.freezeQuantity,
+      };
+
+      await this._paperExecution.executionService.execute(
+        approved,
+        this._paperExecution.brokerRepo.getQuote(c.exchange, c.tradingsymbol),
+        this._paperExecution.brokerRepo.getInstrument(c.exchange, c.tradingsymbol),
+      );
+    }
+
+    await this._paperExecution.positionManager.doWork(new Date(tick.timestamp), { verdict: 'healthy' } as any);
   }
 }

@@ -20,9 +20,11 @@ import {
 
 export class StrategyDecisionRepository {
   private readonly _db: Database.Database;
+  private readonly _decisionColumns: Set<string>;
 
   constructor(db: Database.Database) {
     this._db = db;
+    this._decisionColumns = this._loadDecisionColumns();
   }
 
   /**
@@ -31,51 +33,52 @@ export class StrategyDecisionRepository {
    * (UNIQUE constraint) — decisions are append-only per proposal.
    */
   insertDecision(decision: NewStrategyDecision): StrategyDecisionRow {
+    const valuesByColumn: Record<string, unknown> = {
+      proposal_attempt_id: decision.proposalAttemptId,
+      decision_status: decision.decisionStatus,
+      strategy_id: decision.strategyId,
+      strategy_version: decision.strategyVersion,
+      decided_at: decision.decidedAt,
+      exchange: decision.exchange,
+      tradingsymbol: decision.tradingsymbol,
+      side: decision.side,
+      product: decision.product,
+      quantity: decision.quantity,
+      price: decision.price,
+      trigger_price: decision.triggerPrice,
+      order_type: decision.orderType,
+      quote_last_price: decision.quoteLastPrice,
+      quote_bid: decision.quoteBid,
+      quote_ask: decision.quoteAsk,
+      quote_volume: decision.quoteVolume,
+      quote_received_at: decision.quoteReceivedAt,
+      risk_notional: decision.riskNotional,
+      risk_sizing_basis: decision.riskSizingBasis,
+      risk_max_loss_rupees: decision.riskMaxLossRupees,
+      risk_stop_distance: decision.riskStopDistance,
+      risk_stop_price: decision.riskStopPrice,
+      risk_trailing_stop_distance: decision.riskTrailingStopDistance,
+      risk_budget_rupees: decision.riskBudgetRupees,
+      risk_exposure_tag: decision.riskExposureTag,
+      india_research_evidence: decision.indiaResearchEvidence ? JSON.stringify(decision.indiaResearchEvidence) : null,
+      execution_class: decision.executionClass ?? 'EQ',
+      segment: decision.segment ?? decision.exchange,
+      instrument_type: decision.instrumentType ?? 'EQ',
+      expiry: decision.expiry ?? null,
+      strike: decision.strike ?? null,
+      lot_size: decision.lotSize ?? 1,
+      tick_size: decision.tickSize ?? 0.05,
+      freeze_quantity: decision.freezeQuantity ?? null,
+    };
+
+    const columns = Object.keys(valuesByColumn).filter(column => this._decisionColumns.has(column));
+    const placeholders = columns.map(() => '?').join(', ');
     const stmt = this._db.prepare(`
-      INSERT INTO strategy_decisions
-        (proposal_attempt_id, decision_status, strategy_id, strategy_version, decided_at,
-         exchange, tradingsymbol, side, product, quantity, price, trigger_price, order_type,
-         quote_last_price, quote_bid, quote_ask, quote_volume, quote_received_at,
-         risk_notional, risk_sizing_basis, risk_max_loss_rupees, risk_stop_distance, risk_exposure_tag,
-         india_research_evidence,
-         execution_class, segment, instrument_type, expiry, strike, lot_size, tick_size, freeze_quantity)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO strategy_decisions (${columns.join(', ')})
+      VALUES (${placeholders})
     `);
 
-    const result = stmt.run(
-      decision.proposalAttemptId,
-      decision.decisionStatus,
-      decision.strategyId,
-      decision.strategyVersion,
-      decision.decidedAt,
-      decision.exchange,
-      decision.tradingsymbol,
-      decision.side,
-      decision.product,
-      decision.quantity,
-      decision.price,
-      decision.triggerPrice,
-      decision.orderType,
-      decision.quoteLastPrice,
-      decision.quoteBid,
-      decision.quoteAsk,
-      decision.quoteVolume,
-      decision.quoteReceivedAt,
-      decision.riskNotional,
-      decision.riskSizingBasis,
-      decision.riskMaxLossRupees,
-      decision.riskStopDistance,
-      decision.riskExposureTag,
-      decision.indiaResearchEvidence ? JSON.stringify(decision.indiaResearchEvidence) : null,
-      decision.executionClass,
-      decision.segment,
-      decision.instrumentType,
-      decision.expiry,
-      decision.strike,
-      decision.lotSize,
-      decision.tickSize,
-      decision.freezeQuantity,
-    );
+    const result = stmt.run(...columns.map(column => valuesByColumn[column]));
 
     return {
       id: Number(result.lastInsertRowid),
@@ -101,16 +104,19 @@ export class StrategyDecisionRepository {
       riskSizingBasis: decision.riskSizingBasis,
       riskMaxLossRupees: decision.riskMaxLossRupees,
       riskStopDistance: decision.riskStopDistance,
+      riskStopPrice: decision.riskStopPrice,
+      riskTrailingStopDistance: decision.riskTrailingStopDistance,
+      riskBudgetRupees: decision.riskBudgetRupees,
       riskExposureTag: decision.riskExposureTag,
       indiaResearchEvidence: decision.indiaResearchEvidence,
-      executionClass: decision.executionClass,
-      segment: decision.segment,
-      instrumentType: decision.instrumentType,
-      expiry: decision.expiry,
-      strike: decision.strike,
-      lotSize: decision.lotSize,
-      tickSize: decision.tickSize,
-      freezeQuantity: decision.freezeQuantity,
+      executionClass: decision.executionClass ?? 'EQ',
+      segment: decision.segment ?? decision.exchange,
+      instrumentType: decision.instrumentType ?? 'EQ',
+      expiry: decision.expiry ?? null,
+      strike: decision.strike ?? null,
+      lotSize: decision.lotSize ?? 1,
+      tickSize: decision.tickSize ?? 0.05,
+      freezeQuantity: decision.freezeQuantity ?? null,
     };
   }
 
@@ -242,6 +248,11 @@ export class StrategyDecisionRepository {
       ask: r.quote_ask,
       notional: r.risk_notional,
       sizingBasis: r.risk_sizing_basis,
+      maxLossRupees: r.risk_max_loss_rupees,
+      stopDistance: r.risk_stop_distance,
+      stopPrice: r.risk_stop_price,
+      trailingStopDistance: r.risk_trailing_stop_distance,
+      riskBudgetRupees: r.risk_budget_rupees,
       executionClass: r.execution_class as any,
       segment: r.segment,
       instrumentType: r.instrument_type,
@@ -385,6 +396,11 @@ export class StrategyDecisionRepository {
       createdAt: r.created_at,
     }));
   }
+
+  private _loadDecisionColumns(): Set<string> {
+    const rows = this._db.prepare("PRAGMA table_info('strategy_decisions')").all() as Array<{ name: string }>;
+    return new Set(rows.map(row => row.name));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +431,9 @@ interface StrategyDecisionDbRow {
   risk_sizing_basis: string;
   risk_max_loss_rupees: number | null;
   risk_stop_distance: number | null;
+  risk_stop_price: number | null;
+  risk_trailing_stop_distance: number | null;
+  risk_budget_rupees: number | null;
   risk_exposure_tag: string | null;
   india_research_evidence: string | null;
   execution_class: string;
@@ -452,6 +471,9 @@ function mapDecisionRow(row: StrategyDecisionDbRow): StrategyDecisionRow {
     riskSizingBasis: row.risk_sizing_basis,
     riskMaxLossRupees: row.risk_max_loss_rupees,
     riskStopDistance: row.risk_stop_distance,
+    riskStopPrice: row.risk_stop_price,
+    riskTrailingStopDistance: row.risk_trailing_stop_distance,
+    riskBudgetRupees: row.risk_budget_rupees,
     riskExposureTag: row.risk_exposure_tag,
     indiaResearchEvidence: row.india_research_evidence
       ? JSON.parse(row.india_research_evidence)

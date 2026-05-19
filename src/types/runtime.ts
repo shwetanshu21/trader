@@ -971,12 +971,18 @@ export interface StrategyQuoteSnapshot {
 export interface StrategyRiskMetadata {
   /** Estimated notional value (quantity × reference price). */
   notional: number | null;
-  /** The basis used for sizing (e.g. 'last_price', 'bid', 'ask'). */
+  /** The basis used for sizing (e.g. 'last_price', 'bid', 'ask', 'risk_budget'). */
   sizingBasis: string;
   /** Max loss for this position in rupees, if computable. */
   maxLossRupees: number | null;
   /** Stop-loss distance from entry, if applicable. */
   stopDistance: number | null;
+  /** Initial stop-loss price, if computable. */
+  stopPrice: number | null;
+  /** Trailing-stop distance from the best favorable price, if enabled. */
+  trailingStopDistance: number | null;
+  /** Current per-trade risk budget in rupees used for sizing, if any. */
+  riskBudgetRupees: number | null;
   /** Exposure category tag (e.g. 'intraday', 'delivery'). */
   exposureTag: string | null;
 }
@@ -1031,6 +1037,12 @@ export interface StrategyDecisionRow {
   riskSizingBasis: string;
   riskMaxLossRupees: number | null;
   riskStopDistance: number | null;
+  /** Initial stop-loss price at decision time, or null. */
+  riskStopPrice: number | null;
+  /** Trailing-stop distance in price units, or null. */
+  riskTrailingStopDistance: number | null;
+  /** Per-trade risk budget used for sizing, or null. */
+  riskBudgetRupees: number | null;
   riskExposureTag: string | null;
   /** India research evidence — null when no research evidence influenced this decision. */
   indiaResearchEvidence: IndiaResearchDecisionEvidence | null;
@@ -1091,6 +1103,16 @@ export interface StrategyApprovedCandidate {
   // ── Risk summary ──
   notional: number | null;
   sizingBasis: string;
+  /** Max loss in rupees implied by entry sizing/stop, or null. */
+  maxLossRupees: number | null;
+  /** Initial stop distance in price units, or null. */
+  stopDistance: number | null;
+  /** Initial stop price, or null. */
+  stopPrice: number | null;
+  /** Trailing-stop distance in price units, or null. */
+  trailingStopDistance: number | null;
+  /** Per-trade risk budget used for sizing, or null. */
+  riskBudgetRupees: number | null;
 
   // ── Execution-class metadata (S03) ──
   /** High-level execution class: 'EQ' or 'FO'. */
@@ -1613,6 +1635,12 @@ export interface PositionEventRow {
   newAvgCost: number;
   /** Realized P&L from this event (0 for fills that don't close a position). */
   realizedPnl: number;
+  /** Stop price after this event, or null. */
+  stopPrice: number | null;
+  /** Trailing anchor price after this event, or null. */
+  trailingAnchorPrice: number | null;
+  /** Trailing-stop distance after this event, or null. */
+  trailingStopDistance: number | null;
   /** Unix timestamp (ms) when this event was recorded. */
   createdAt: number;
 }
@@ -1653,6 +1681,16 @@ export interface PaperPositionRow {
   avgCostPrice: number;
   /** Cumulative realized P&L in rupees. */
   realizedPnl: number;
+  /** Initial stop price for the currently open leg, or null. */
+  stopPrice: number | null;
+  /** Current trailing reference price (high-water for long / low-water for short), or null. */
+  trailingAnchorPrice: number | null;
+  /** Trailing-stop distance in price units, or null when trailing is disabled. */
+  trailingStopDistance: number | null;
+  /** Last marked quote price used for stop management, or null. */
+  markPrice: number | null;
+  /** Unix timestamp (ms) when markPrice was last updated, or null. */
+  markedAt: number | null;
   /** Unix timestamp (ms) when this position was last updated. */
   updatedAt: number;
 }

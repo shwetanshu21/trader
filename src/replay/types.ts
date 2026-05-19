@@ -135,6 +135,15 @@ export interface ReplayCheckpointRow {
   savedAt: number;
 }
 
+export interface ReplayExecutionSnapshot {
+  tickIndex: number;
+  tickTimestamp: number;
+  executionAttempts: number;
+  paperOrders: number;
+  paperFills: number;
+  openPositions: number;
+}
+
 /** Shape for inserting a new checkpoint (without id). */
 export interface NewReplayCheckpoint {
   sessionId: number;

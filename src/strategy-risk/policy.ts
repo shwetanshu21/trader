@@ -9,6 +9,7 @@ import {
   type StrategyDecisionReason,
   StrategyDecisionReasonCode,
 } from '../types/runtime.js';
+import { computePositionSizing } from './position-sizing-policy.js';
 
 // ---------------------------------------------------------------------------
 // Policy config
@@ -24,6 +25,14 @@ export interface IndiaStrategyPolicyConfig {
   minNotional: number;
   /** Maximum loss as a percentage of notional (e.g. 5 = 5%). */
   maxLossPercent: number;
+  /** Default per-trade risk budget for stop-based sizing. */
+  defaultRiskBudgetRupees: number;
+  /** Max total exposure for one position. */
+  maxPositionExposureRupees: number;
+  /** Max portfolio exposure placeholder for downstream portfolio allocator. */
+  maxPortfolioExposureRupees: number;
+  /** Default stop distance as a ratio of reference price. */
+  stopDistanceRatio: number;
   /** Supported exchange segments (e.g. ['NSE']). */
   supportedSegments: string[];
 }
@@ -34,6 +43,10 @@ export const INDIA_NSE_EQ_STRATEGY: IndiaStrategyPolicyConfig = {
   version: '1.0.0',
   minNotional: 10_000,
   maxLossPercent: 5,
+  defaultRiskBudgetRupees: 500,
+  maxPositionExposureRupees: 100_000,
+  maxPortfolioExposureRupees: 300_000,
+  stopDistanceRatio: 0.01,
   supportedSegments: ['NSE', 'NFO'],
 };
 
@@ -57,6 +70,9 @@ export interface StrategyRiskComputation {
   riskSizingBasis: string;
   riskMaxLossRupees: number | null;
   riskStopDistance: number | null;
+  riskStopPrice: number | null;
+  riskTrailingStopDistance: number | null;
+  riskBudgetRupees: number | null;
   riskExposureTag: string;
 }
 
@@ -75,6 +91,9 @@ export interface StrategyApprovedEvaluation {
   riskSizingBasis: string;
   riskMaxLossRupees: number | null;
   riskStopDistance: number | null;
+  riskStopPrice: number | null;
+  riskTrailingStopDistance: number | null;
+  riskBudgetRupees: number | null;
   riskExposureTag: string;
 }
 
@@ -221,7 +240,31 @@ export function evaluateProposal(params: EvaluateProposalParams): StrategyEvalua
     );
   }
 
-  // 8. Approved — compute risk metadata from executable quantity
+  const sizing = computePositionSizing({
+    exchange: params.exchange,
+    tradingsymbol: params.tradingsymbol,
+    quantity: lotRoundedQuantity,
+    quote: params.quote,
+    instrumentMeta: params.instrumentMeta,
+    side: params.side,
+    requestedStopDistance: null,
+    riskBudgetRupees: executableNotional * (policy.maxLossPercent / 100),
+    config: {
+      defaultRiskBudgetRupees: executableNotional * (policy.maxLossPercent / 100),
+      maxPortfolioExposureRupees: Number.MAX_SAFE_INTEGER,
+      maxPositionExposureRupees: Number.MAX_SAFE_INTEGER,
+      trailingStopDistanceRatio: policy.stopDistanceRatio,
+      stopDistanceRatio: policy.stopDistanceRatio,
+    },
+  });
+  if (!sizing.ok) {
+    return {
+      approved: false,
+      reasons: sizing.reasons,
+    };
+  }
+
+  // 8. Approved — enrich old quantity decision with stop-based metadata
   const maxLossRupees = executableNotional * (policy.maxLossPercent / 100);
 
   return {
@@ -233,7 +276,10 @@ export function evaluateProposal(params: EvaluateProposalParams): StrategyEvalua
     riskNotional: executableNotional,
     riskSizingBasis: 'last_price',
     riskMaxLossRupees: maxLossRupees,
-    riskStopDistance: null,
+    riskStopDistance: sizing.stopDistance,
+    riskStopPrice: sizing.stopPrice,
+    riskTrailingStopDistance: sizing.trailingStopDistance,
+    riskBudgetRupees: sizing.riskBudgetRupees,
     riskExposureTag: 'intraday',
   };
 }

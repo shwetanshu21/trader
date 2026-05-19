@@ -39,6 +39,7 @@ import { ExecutionGateSupervisor } from '../execution/execution-gate-supervisor.
 import { ModeAwareExecutionService } from '../execution/mode-aware-execution-service.js';
 import { PaperExecutionPolicy } from '../execution/paper-execution-policy.js';
 import { PaperExecutionLedger } from '../execution/paper-execution-ledger.js';
+import { PaperPositionManager } from '../execution/paper-position-manager.js';
 import { ExecutionRiskGuard } from '../execution/execution-risk-guard.js';
 import { ExecutionRiskRepository } from '../persistence/execution-risk-repo.js';
 import { PaperOrderRepository } from '../persistence/paper-order-repo.js';
@@ -282,6 +283,7 @@ export class RuntimeApp {
     let orderRepo: PaperOrderRepository | null = null;
     let fillRepo: PaperFillRepository | null = null;
     let positionRepo: PaperPositionRepository | null = null;
+    let paperPositionManager: PaperPositionManager | null = null;
 
     if (this.config.proposalEngine) {
       logBoot('Proposal engine: configured');
@@ -344,6 +346,14 @@ export class RuntimeApp {
         mode: this.config.execution.mode,
       });
 
+      paperPositionManager = new PaperPositionManager({
+        brokerRepo,
+        positionRepo,
+        proposalRepo,
+        strategyRepo: strategyDecisionRepo,
+        executionService,
+      });
+
       // ExecutionRiskGuard — market-hours, kill-switch, duplicate,
       // exposure-cap, and daily-loss checks before execution
       riskRepo = new ExecutionRiskRepository(dbManager.db);
@@ -398,6 +408,7 @@ export class RuntimeApp {
       ...(proposalSupervisor ? [proposalSupervisor] : []),
       ...(strategyRiskSupervisor ? [strategyRiskSupervisor] : []),
       ...(executionGateSupervisor ? [executionGateSupervisor] : []),
+      ...(paperPositionManager ? [paperPositionManager] : []),
     ];
 
     const scheduler = new Scheduler({

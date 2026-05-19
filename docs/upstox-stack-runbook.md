@@ -140,6 +140,16 @@ If bridge token exists but quote calls are failing, inspect:
 - `tmp/upstox/logs/bridge.log`
 - `tmp/upstox/mcp-local/status.json`
 
+Observed Hetzner deploy case:
+- systemd services were active and listening (`8788`, `8787`, `3001`)
+- runtime code deploy succeeded after stashing server-local edits and fast-forwarding `main`
+- broker path remained degraded because the notifier token had expired
+- journal signature:
+  - `MCP tool "get-profile" returned an error: Upstox token ... expired`
+  - `Universe coverage is degraded: 0/50 fresh quotes`
+
+In this case, do not roll back the code deploy first — refresh the token, then re-check broker health.
+
 ### 3. Runtime is healthy but proposal-provider behavior looks stale
 
 Observed failure mode:
