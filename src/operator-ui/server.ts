@@ -23,10 +23,8 @@ import {
 } from './auth.js';
 import type Database from 'better-sqlite3';
 import type { OperatorReadModel } from '../operator/operator-read-model.js';
-import type {
-  OperatorSummaryCard,
-  OperatorDecisionPerformance,
-} from '../types/runtime.js';
+import { fetchDashboardPayload } from './dashboard-data.js';
+import { renderDashboardPage } from './pages/dashboard-page.js';
 
 // ---------------------------------------------------------------------------
 // Server options
@@ -187,14 +185,13 @@ function handleDashboardHtml(
   }
 
   try {
-    const cards = readModel.getSummaryCards();
-    const decisions = readModel.getDecisionPerformance(50);
+    const payload = fetchDashboardPayload(readModel, dbError);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(renderDashboardHtml({ cards, decisions }));
+    res.end(renderDashboardPage(payload));
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(renderErrorHtml('Query Failed', message));
+    res.end(renderErrorHtml('Dashboard Render Failed', message));
   }
 }
 
@@ -211,23 +208,67 @@ function handleApiRefresh(
   }
 
   try {
-    const cards = readModel.getSummaryCards();
-    const decisions = readModel.getDecisionPerformance(50);
-    const strategies = readModel.getStrategyPerformance();
-    const tickers = readModel.getTickerPerformance();
-    const lifecycle = readModel.getLifecycleStates();
-    const governance = readModel.getLifecycleHistory(20);
-
+    const payload = fetchDashboardPayload(readModel, dbError);
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      assembledAt: new Date().toISOString(),
-      cards,
-      decisions,
-      strategies,
-      tickers,
-      lifecycle,
-      governance,
-    }, null, 2));
+
+    // Build a flat JSON response suitable for client-side polling
+    const jsonPayload = {
+      assembledAt: payload.assembledAt,
+      dbAvailable: payload.dbAvailable,
+      dbError: payload.dbError,
+      sections: {
+        summaryCards: {
+          state: payload.summaryCards.state,
+          count: payload.summaryCards.data.length,
+          data: payload.summaryCards.data,
+          errorMessage: payload.summaryCards.errorMessage,
+        },
+        strategyPerformance: {
+          state: payload.strategyPerformance.state,
+          count: payload.strategyPerformance.data.length,
+          data: payload.strategyPerformance.data,
+          errorMessage: payload.strategyPerformance.errorMessage,
+        },
+        tickerPerformance: {
+          state: payload.tickerPerformance.state,
+          count: payload.tickerPerformance.data.length,
+          data: payload.tickerPerformance.data,
+          errorMessage: payload.tickerPerformance.errorMessage,
+        },
+        decisionPerformance: {
+          state: payload.decisionPerformance.state,
+          count: payload.decisionPerformance.data.length,
+          data: payload.decisionPerformance.data,
+          errorMessage: payload.decisionPerformance.errorMessage,
+        },
+        lifecycleStates: {
+          state: payload.lifecycleStates.state,
+          count: payload.lifecycleStates.data.length,
+          data: payload.lifecycleStates.data,
+          errorMessage: payload.lifecycleStates.errorMessage,
+        },
+        governanceHistory: {
+          state: payload.governanceHistory.state,
+          count: payload.governanceHistory.data.length,
+          data: payload.governanceHistory.data,
+          errorMessage: payload.governanceHistory.errorMessage,
+        },
+        promotionHistory: {
+          state: payload.promotionHistory.state,
+          count: payload.promotionHistory.data.length,
+          data: payload.promotionHistory.data,
+          errorMessage: payload.promotionHistory.errorMessage,
+        },
+        walkForwardLeaderboard: {
+          state: payload.walkForwardLeaderboard.state,
+          count: payload.walkForwardLeaderboard.data.length,
+          data: payload.walkForwardLeaderboard.data,
+          errorMessage: payload.walkForwardLeaderboard.errorMessage,
+        },
+      },
+    };
+
+    res.end(JSON.stringify(jsonPayload, null, 2));
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -325,112 +366,6 @@ function handleApiHealth(
 // HTML renderers
 // ---------------------------------------------------------------------------
 
-/** Render a summary-first dashboard HTML page. */
-function renderDashboardHtml(data: {
-  cards: OperatorSummaryCard[];
-  decisions: OperatorDecisionPerformance[];
-}): string {
-  const { cards, decisions } = data;
-
-  // Build summary card grid
-  const cardHtml = cards.length > 0
-    ? cards.map((c) => {
-        const label = String(c.label || c.key || '');
-        const value = c.value;
-        const unit = c.unit ?? '';
-        return `<div class="meta-card">
-          <div class="label">${escapeHtml(label)}</div>
-          <div class="value">${escapeHtml(String(value))}${unit ? ` <span class="unit">${escapeHtml(String(unit))}</span>` : ''}</div>
-        </div>`;
-      }).join('\n')
-    : `<div class="meta-card">
-        <div class="label">Decisions</div>
-        <div class="value">0</div>
-       </div>`;
-
-  // Build decisions table rows
-  const rows = decisions.length > 0
-    ? decisions.map((d, i) => {
-        const status = String(d.decisionStatus ?? 'unknown');
-        const statusClass = status === 'approved' ? 'status-approved'
-          : status === 'refused' ? 'status-refused'
-          : 'status-unknown';
-        return `<tr>
-          <td>${i + 1}</td>
-          <td>${escapeHtml(d.exchange ?? '')}</td>
-          <td>${escapeHtml(d.tradingsymbol ?? '')}</td>
-          <td>${escapeHtml(d.side ?? '')}</td>
-          <td>${escapeHtml(String(d.quantity ?? ''))}</td>
-          <td class="${statusClass}">${status}</td>
-          <td>${escapeHtml(String(d.strategyId ?? ''))}</td>
-          <td>${escapeHtml(d.decidedAt ?? '')}</td>
-        </tr>`;
-      }).join('\n')
-    : '<tr><td colspan="8" class="empty">No decisions found.</td></tr>';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Operator Console</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 1.5rem; }
-  h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.25rem; }
-  .subtitle { color: #64748b; font-size: 0.875rem; margin-bottom: 1.5rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
-  th { text-align: left; padding: 0.5rem 0.75rem; background: #1e293b; color: #94a3b8; font-weight: 600; border-bottom: 1px solid #334155; }
-  td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e293b; }
-  .status-approved { color: #22c55e; font-weight: 600; }
-  .status-refused { color: #ef4444; font-weight: 600; }
-  .status-unknown { color: #f59e0b; }
-  .empty { text-align: center; color: #64748b; padding: 2rem; }
-  .section-title { font-size: 1.125rem; font-weight: 600; margin: 1.5rem 0 0.75rem; color: #f1f5f9; }
-  .meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
-  .meta-card { background: #1e293b; border-radius: 0.5rem; padding: 0.75rem; border: 1px solid #334155; }
-  .meta-card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
-  .meta-card .value { font-size: 1.125rem; font-weight: 600; margin-top: 0.25rem; }
-  a { color: #3b82f6; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .nav { margin-top: 1.5rem; display: flex; gap: 1rem; font-size: 0.875rem; }
-</style>
-</head>
-<body>
-<h1>Operator Console</h1>
-<p class="subtitle">Summary-first dashboard</p>
-
-<div class="meta-grid">
-${cardHtml}
-</div>
-
-<h2 class="section-title">Recent Decisions</h2>
-<table>
-<thead>
-  <tr>
-    <th>#</th>
-    <th>Exchange</th>
-    <th>Symbol</th>
-    <th>Side</th>
-    <th>Product</th>
-    <th>Qty</th>
-    <th>Status</th>
-    <th>Decided At</th>
-  </tr>
-</thead>
-<tbody>
-${rows}
-</tbody>
-</table>
-
-<div class="nav">
-  <a href="/api/refresh">JSON Refresh</a>
-  <a href="/api/health">API Health</a>
-</div>
-</body>
-</html>`;
-}
-
 /** Render an error HTML page. */
 function renderErrorHtml(title: string, detail: string): string {
   return `<!DOCTYPE html>
@@ -457,7 +392,7 @@ function renderErrorHtml(title: string, detail: string): string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Simple HTML entity escape. */
+/** Simple HTML entity escape (local copy for error pages). */
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')

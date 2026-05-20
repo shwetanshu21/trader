@@ -1,0 +1,610 @@
+// ── Dashboard HTML page composition ──
+// Renders the full summary-first dashboard from a DashboardPayload.
+// Every section is independently state-aware: ok sections render normally,
+// error sections show error banners (with last-known data if available),
+// and unavailable sections show empty-state messages.
+//
+// All user-visible text is HTML-escaped. No external dependencies.
+
+import type { DashboardPayload, DashboardSection } from '../dashboard-data.js';
+import type {
+  OperatorSummaryCard,
+  OperatorStrategyPerformance,
+  OperatorTickerPerformance,
+  OperatorDecisionPerformance,
+  OperatorLifecycleState,
+  OperatorLifecycleHistory,
+  OperatorPromotionHistory,
+  OperatorWalkForwardLeaderboard,
+} from '../../types/runtime.js';
+import {
+  escapeHtml,
+  formatCurrency,
+  formatPercent,
+  formatRawPercent,
+  formatNumber,
+  formatInt,
+  formatStaleness,
+  formatTimestamp,
+  renderSection,
+  renderProvenanceBadge,
+  renderErrorBanner,
+  renderEmptyState,
+  statusClass,
+  formatUptime,
+} from '../render-utils.js';
+
+// ---------------------------------------------------------------------------
+// Full dashboard page
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the complete dashboard HTML page from a payload.
+ */
+export function renderDashboardPage(payload: DashboardPayload): string {
+  const sections = [
+    renderSummaryCardsSection(payload.summaryCards),
+    renderStrategyPerformanceSection(payload.strategyPerformance),
+    renderTickerPerformanceSection(payload.tickerPerformance),
+    renderDecisionPerformanceSection(payload.decisionPerformance),
+    renderLifecycleStatesSection(payload.lifecycleStates),
+    renderGovernanceHistorySection(payload.governanceHistory),
+    renderPromotionHistorySection(payload.promotionHistory),
+    renderWalkForwardLeaderboardSection(payload.walkForwardLeaderboard),
+  ].join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operator Console</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 1.5rem; line-height: 1.5; }
+  h1 { font-size: 1.3rem; font-weight: 600; margin-bottom: 0.25rem; }
+  h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+  .header { margin-bottom: 1.5rem; }
+  .header .meta { font-size: 0.85rem; color: #64748b; }
+  .section { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+  .section h2 { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .section-subtitle { font-size: 0.75rem; color: #64748b; font-weight: normal; text-transform: none; letter-spacing: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+  th { text-align: left; padding: 0.4rem 0.5rem; background: #1e293b; color: #64748b; font-weight: 600; border-bottom: 1px solid #334155; white-space: nowrap; }
+  td { padding: 0.35rem 0.5rem; border-bottom: 1px solid #1e293b; vertical-align: top; }
+  td:first-child { white-space: nowrap; }
+  .empty-state { text-align: center; color: #64748b; font-style: italic; padding: 1.5rem 0; }
+
+  /* Summary cards */
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
+  .summary-card { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem; padding: 0.75rem; }
+  .summary-card .label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  .summary-card .value { font-size: 1.25rem; font-weight: 700; margin-top: 0.25rem; color: #f1f5f9; font-variant-numeric: tabular-nums; }
+  .summary-card .unit { font-size: 0.7rem; color: #64748b; font-weight: normal; }
+  .summary-card .provenance { margin-top: 0.25rem; }
+
+  /* Status classes */
+  .status-ok { color: #22c55e; font-weight: 600; }
+  .status-warn { color: #f59e0b; font-weight: 600; }
+  .status-err { color: #ef4444; font-weight: 600; }
+  .status-skip { color: #64748b; }
+  .status-default { color: #94a3b8; }
+
+  /* Error banner */
+  .section-error-banner { display: flex; align-items: center; gap: 0.5rem; background: #7f1d1d22; border: 1px solid #7f1d1d; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+  .section-error-icon { color: #ef4444; font-size: 1rem; }
+  .section-error-text { color: #fca5a5; font-size: 0.8125rem; }
+
+  /* Stale banner */
+  .section-stale-banner { display: flex; align-items: center; gap: 0.5rem; background: #713f1222; border: 1px solid #78350f; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+  .section-stale-icon { color: #f59e0b; font-size: 1rem; }
+  .section-stale-text { color: #fbbf24; font-size: 0.8125rem; }
+
+  /* Provenance badge */
+  .provenance { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  /* Nav */
+  .nav { margin-top: 1rem; display: flex; gap: 1rem; font-size: 0.875rem; }
+  .nav a { color: #3b82f6; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+
+  /* Code */
+  code { background: #0f172a; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.75rem; }
+
+  /* Verdict badge */
+  .verdict-badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
+
+  /* Table cell: numeric alignment */
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.num { text-align: right; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Operator Console</h1>
+  <div class="meta">
+    Assembled: ${escapeHtml(formatTimestamp(payload.assembledAt))} &mdash;
+    DB: ${payload.dbAvailable ? 'Connected' : `<span style="color:#ef4444;">Disconnected</span>`}
+    ${payload.dbError ? `&mdash; <span style="color:#ef4444;">${escapeHtml(payload.dbError)}</span>` : ''}
+  </div>
+</div>
+
+${sections}
+
+<div class="nav">
+  <a href="/api/refresh">JSON Refresh</a>
+  <a href="/api/health">API Health</a>
+</div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Section renderers — each consumes a DashboardSection<T> and renders
+// the appropriate HTML based on the section's state.
+// ---------------------------------------------------------------------------
+
+// ── 1. Summary Cards ───────────────────────────────────────────────────
+
+function renderSummaryCardsSection(
+  section: DashboardSection<OperatorSummaryCard[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const cards = section.data.map(c => {
+      const value = typeof c.value === 'number'
+        ? c.unit === 'INR'
+          ? formatCurrency(c.value, c.unit)
+          : `${escapeHtml(formatNumber(c.value))}`
+        : escapeHtml(String(c.value));
+
+      const label = escapeHtml(c.label || c.key || '');
+      const badge = renderProvenanceBadge(c.provenance);
+
+      return `<div class="summary-card">
+        <div class="label">${label}</div>
+        <div class="value">${value}</div>
+        ${badge ? `<div class="provenance">${badge}</div>` : ''}
+      </div>`;
+    }).join('\n');
+    content = `<div class="summary-grid">${cards}</div>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — summary cards cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load summary cards.');
+  } else {
+    content = renderEmptyState('No summary data available.');
+  }
+
+  return renderSection(
+    'Summary',
+    content,
+    section.state === 'error' ? 'error' : section.state === 'unavailable' ? 'unavailable' : 'ok',
+    section.errorMessage,
+    section.stalenessMs,
+    'Aggregate totals',
+  );
+}
+
+// ── 2. Strategy Performance ─────────────────────────────────────────────
+
+function renderStrategyPerformanceSection(
+  section: DashboardSection<OperatorStrategyPerformance[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const rows = section.data.map(s => {
+      const sharpe = s.sharpeRatio !== null ? formatNumber(s.sharpeRatio, 2) : '—';
+      const drawdown = s.maxDrawdownPct !== null ? formatRawPercent(s.maxDrawdownPct) : '—';
+      const winRate = s.winRate !== null ? formatPercent(s.winRate) : '—';
+      const profitFactor = s.profitFactor !== null ? formatNumber(s.profitFactor, 2) : '—';
+      const badge = renderProvenanceBadge(s.provenance);
+
+      return `<tr>
+        <td><code>${escapeHtml(s.strategyId)}</code></td>
+        <td><code>${escapeHtml(s.strategyVersion)}</code></td>
+        <td class="num">${formatInt(s.tradeCount)}</td>
+        <td class="num ${s.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(s.realizedPnl, 'INR')}</td>
+        <td class="num ${s.unrealizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(s.unrealizedPnl, 'INR')}</td>
+        <td class="num ${s.totalReturnPct >= 0 ? 'status-ok' : 'status-err'}">${formatRawPercent(s.totalReturnPct)}</td>
+        <td class="num">${sharpe}</td>
+        <td class="num">${drawdown}</td>
+        <td class="num">${winRate}</td>
+        <td class="num">${profitFactor}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('\n');
+
+    content = `<table>
+      <thead><tr>
+        <th>Strategy</th>
+        <th>Version</th>
+        <th class="num">Trades</th>
+        <th class="num">Realized P&amp;L</th>
+        <th class="num">Unrealized P&amp;L</th>
+        <th class="num">Return</th>
+        <th class="num">Sharpe</th>
+        <th class="num">Max DD</th>
+        <th class="num">Win Rate</th>
+        <th class="num">Profit Factor</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — strategy performance cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load strategy performance.');
+  } else {
+    content = renderEmptyState('No strategy performance data available.');
+  }
+
+  return renderSection(
+    'Strategy Performance',
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    'Per-strategy P&L and metrics',
+  );
+}
+
+// ── 3. Ticker Performance ───────────────────────────────────────────────
+
+function renderTickerPerformanceSection(
+  section: DashboardSection<OperatorTickerPerformance[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const rows = section.data.map(t => {
+      const sideColor = t.netQuantity > 0 ? 'status-ok' : t.netQuantity < 0 ? 'status-err' : 'status-skip';
+      const sideLabel = t.netQuantity > 0 ? 'Long' : t.netQuantity < 0 ? 'Short' : 'Flat';
+      const entry = t.avgEntryPrice !== null ? formatCurrency(t.avgEntryPrice, null) : '—';
+      const last = t.lastPrice !== null ? formatCurrency(t.lastPrice, null) : '—';
+      const winRate = t.winRate !== null ? formatPercent(t.winRate) : '—';
+      const badge = renderProvenanceBadge(t.provenance);
+
+      return `<tr>
+        <td><code>${escapeHtml(t.exchange)}</code></td>
+        <td><code>${escapeHtml(t.tradingsymbol)}</code></td>
+        <td class="num"><span class="${sideColor}">${sideLabel}</span></td>
+        <td class="num">${formatInt(t.netQuantity)}</td>
+        <td class="num">${entry}</td>
+        <td class="num">${last}</td>
+        <td class="num">${formatInt(t.tradeCount)}</td>
+        <td class="num">${winRate}</td>
+        <td class="num ${t.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(t.realizedPnl, null)}</td>
+        <td class="num ${t.unrealizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(t.unrealizedPnl, null)}</td>
+        <td class="num ${t.totalPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(t.totalPnl, null)}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('\n');
+
+    content = `<table>
+      <thead><tr>
+        <th>Exchange</th>
+        <th>Symbol</th>
+        <th>Side</th>
+        <th class="num">Qty</th>
+        <th class="num">Entry</th>
+        <th class="num">Last</th>
+        <th class="num">Trades</th>
+        <th class="num">Win Rate</th>
+        <th class="num">Realized</th>
+        <th class="num">Unrealized</th>
+        <th class="num">Total</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — ticker performance cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load ticker performance.');
+  } else {
+    content = renderEmptyState('No ticker performance data available.');
+  }
+
+  return renderSection(
+    'Ticker Performance',
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    'Per-symbol P&L and position state',
+  );
+}
+
+// ── 4. Decision Performance ─────────────────────────────────────────────
+
+function renderDecisionPerformanceSection(
+  section: DashboardSection<OperatorDecisionPerformance[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const rows = section.data.map(d => {
+      const status = d.decisionStatus;
+      const execStatus = d.executionStatus ?? '—';
+      const outcome = d.outcomeCode ?? '—';
+      const pnl = d.realizedPnl !== null
+        ? `<span class="${d.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(d.realizedPnl, null)}</span>`
+        : '—';
+      const badge = renderProvenanceBadge(d.provenance);
+
+      return `<tr>
+        <td><code>${escapeHtml(d.exchange)}</code></td>
+        <td><code>${escapeHtml(d.tradingsymbol)}</code></td>
+        <td>${escapeHtml(d.side)}</td>
+        <td class="num">${formatInt(d.quantity)}</td>
+        <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
+        <td>${escapeHtml(execStatus)}</td>
+        <td>${escapeHtml(outcome)}</td>
+        <td class="num">${pnl}</td>
+        <td><code>${escapeHtml(d.strategyId)}</code></td>
+        <td>${escapeHtml(formatTimestamp(d.decidedAt))}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('\n');
+
+    content = `<table>
+      <thead><tr>
+        <th>Exchange</th>
+        <th>Symbol</th>
+        <th>Side</th>
+        <th class="num">Qty</th>
+        <th>Status</th>
+        <th>Exec Status</th>
+        <th>Outcome</th>
+        <th class="num">Realized P&amp;L</th>
+        <th>Strategy</th>
+        <th>Decided At</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — decision performance cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load decision performance.');
+  } else {
+    content = renderEmptyState('No decision performance data available.');
+  }
+
+  return renderSection(
+    'Recent Decisions',
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    'Newest first',
+  );
+}
+
+// ── 5. Lifecycle States ─────────────────────────────────────────────────
+
+function renderLifecycleStatesSection(
+  section: DashboardSection<OperatorLifecycleState[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const rows = section.data.map(s => {
+      const phaseColor = statusClass(s.phase);
+      const badge = renderProvenanceBadge(s.provenance);
+
+      return `<tr>
+        <td><code>${escapeHtml(s.strategyId)}</code></td>
+        <td><code>${escapeHtml(s.strategyVersion)}</code></td>
+        <td><code>${escapeHtml(s.marketId)}</code></td>
+        <td><span class="${phaseColor}">${escapeHtml(s.phase)}</span></td>
+        <td>${escapeHtml(formatTimestamp(s.updatedAt))}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('\n');
+
+    content = `<table>
+      <thead><tr>
+        <th>Strategy</th>
+        <th>Version</th>
+        <th>Market</th>
+        <th>Phase</th>
+        <th>Updated At</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — lifecycle states cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load lifecycle states.');
+  } else {
+    content = renderEmptyState('No lifecycle state data available.');
+  }
+
+  return renderSection(
+    'Lifecycle States',
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    'Current strategy phases',
+  );
+}
+
+// ── 6. Governance History ───────────────────────────────────────────────
+
+function renderGovernanceHistorySection(
+  section: DashboardSection<OperatorLifecycleHistory[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const rows = section.data.map(g => {
+      const verdictClass = statusClass(g.verdict);
+      const badge = renderProvenanceBadge(g.provenance);
+
+      return `<tr>
+        <td><code>${escapeHtml(g.strategyId)}</code></td>
+        <td><span class="${verdictClass}">${escapeHtml(g.verdict)}</span></td>
+        <td><code>${escapeHtml(g.previousPhase)}</code></td>
+        <td><code>${escapeHtml(g.newPhase)}</code></td>
+        <td style="max-width:250px;word-break:break-word;">${escapeHtml(g.rationale)}</td>
+        <td>${escapeHtml(formatTimestamp(g.recordedAt))}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('\n');
+
+    content = `<table>
+      <thead><tr>
+        <th>Strategy</th>
+        <th>Verdict</th>
+        <th>From</th>
+        <th>To</th>
+        <th>Rationale</th>
+        <th>Timestamp</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — governance history cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load governance history.');
+  } else {
+    content = renderEmptyState('No governance history data available.');
+  }
+
+  return renderSection(
+    'Governance History',
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    'Lifecycle phase decisions',
+  );
+}
+
+// ── 7. Promotion History ────────────────────────────────────────────────
+
+function renderPromotionHistorySection(
+  section: DashboardSection<OperatorPromotionHistory[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const rows = section.data.map(p => {
+      const badge = renderProvenanceBadge(p.provenance);
+      const winnerRef = p.winnerId !== null
+        ? `<a href="#" title="Walk-forward winner #${p.winnerId}">WF#${p.winnerId}</a>`
+        : '—';
+
+      return `<tr>
+        <td><code>${escapeHtml(p.strategyId)}</code></td>
+        <td><code>${escapeHtml(p.previousPhase)}</code></td>
+        <td><code><span class="status-ok">${escapeHtml(p.newPhase)}</span></code></td>
+        <td style="max-width:250px;word-break:break-word;">${escapeHtml(p.rationale)}</td>
+        <td>${winnerRef}</td>
+        <td>${escapeHtml(formatTimestamp(p.promotedAt))}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('\n');
+
+    content = `<table>
+      <thead><tr>
+        <th>Strategy</th>
+        <th>From</th>
+        <th>To</th>
+        <th>Rationale</th>
+        <th>Winner Ref</th>
+        <th>Promoted At</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — promotion history cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load promotion history.');
+  } else {
+    content = renderEmptyState('No promotion history data available.');
+  }
+
+  return renderSection(
+    'Promotion History',
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    'Lifecycle promotions only',
+  );
+}
+
+// ── 8. Walk-Forward Leaderboard ─────────────────────────────────────────
+
+function renderWalkForwardLeaderboardSection(
+  section: DashboardSection<OperatorWalkForwardLeaderboard[]>,
+): string {
+  let content: string;
+
+  if (section.state === 'ok' && section.data.length > 0) {
+    const rows = section.data.map(w => {
+      const mergedScore = w.mergedScore !== null ? formatPercent(w.mergedScore) : '—';
+      const sharpe = w.sharpeRatio !== null ? formatNumber(w.sharpeRatio, 2) : '—';
+      const totalReturn = w.totalReturnPct !== null ? formatRawPercent(w.totalReturnPct) : '—';
+      const drawdown = w.maxDrawdownPct !== null ? formatRawPercent(w.maxDrawdownPct) : '—';
+      const winRate = w.winRate !== null ? formatPercent(w.winRate) : '—';
+      const badge = renderProvenanceBadge(w.provenance);
+      const selectedAt = w.selectedAt ? formatTimestamp(w.selectedAt) : '—';
+
+      return `<tr>
+        <td><code>${escapeHtml(w.label)}</code></td>
+        <td><code>${escapeHtml(w.strategyId)}</code></td>
+        <td class="num">${formatInt(w.windowCount)}</td>
+        <td class="num">${mergedScore}</td>
+        <td class="num">${sharpe}</td>
+        <td class="num ${(w.totalReturnPct ?? 0) >= 0 ? 'status-ok' : 'status-err'}">${totalReturn}</td>
+        <td class="num">${drawdown}</td>
+        <td class="num">${winRate}</td>
+        <td><code>${escapeHtml(w.selectionStrategy ?? '—')}</code></td>
+        <td>${escapeHtml(selectedAt)}</td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('\n');
+
+    content = `<table>
+      <thead><tr>
+        <th>Run</th>
+        <th>Strategy</th>
+        <th class="num">Windows</th>
+        <th class="num">Score</th>
+        <th class="num">Sharpe</th>
+        <th class="num">Return</th>
+        <th class="num">Max DD</th>
+        <th class="num">Win Rate</th>
+        <th>Selection</th>
+        <th>Selected At</th>
+        <th>Source</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('Database unavailable — walk-forward leaderboard cannot be loaded.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load walk-forward leaderboard.');
+  } else {
+    content = renderEmptyState('No walk-forward leaderboard data available.');
+  }
+
+  return renderSection(
+    'Walk-Forward Leaderboard',
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    'Historical backtest results',
+  );
+}
