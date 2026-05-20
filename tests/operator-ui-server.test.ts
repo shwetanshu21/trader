@@ -144,13 +144,22 @@ describe('operator-ui server detail routes', () => {
     expect(response.headers.get('www-authenticate')).toContain('Basic realm="Operator Console"');
   });
 
-  it('renders decision, strategy, and backtest detail pages for valid authenticated requests', async () => {
+  it('renders dashboard and detail pages for valid authenticated requests', async () => {
     const server = createOperatorUIServer({
       config: baseConfig,
       authenticator: authOk as any,
       db: null,
       dbError: null,
-      readModel: null,
+      readModel: {
+        getSummaryCards: () => [{ key: 'current_pnl', label: 'Current P&L', value: 1000, unit: 'INR', change: null, display: null, provenance: null }],
+        getStrategyPerformance: () => [{ strategyId: 'alpha', strategyVersion: '1.0.0', totalReturnPct: 12.5, sharpeRatio: 1.2, maxDrawdownPct: 10, tradeCount: 2, winRate: 0.5, profitFactor: 1.2, realizedPnl: 100, unrealizedPnl: 0, provenance: null }],
+        getTickerPerformance: () => [{ exchange: 'NSE', tradingsymbol: 'RELIANCE', totalPnl: 10, tradeCount: 1, winRate: 1, netQuantity: 1, avgEntryPrice: 100, lastPrice: 101, unrealizedPnl: 1, realizedPnl: 9, provenance: null }],
+        getDecisionPerformance: () => [{ decisionId: 7, proposalAttemptId: 100, exchange: 'NSE', tradingsymbol: 'RELIANCE', side: 'buy', quantity: 1, price: 100, decisionStatus: 'approved', strategyId: 'alpha', decidedAt: '2025-01-10T10:20:30.000Z', executionStatus: 'completed', outcomeCode: 'paper_simulated', realizedPnl: 10, provenance: null }],
+        getLifecycleStates: () => [{ strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', phase: 'paper', updatedAt: '2025-01-11T09:15:00.000Z', provenance: null }],
+        getLifecycleHistory: () => [{ id: 1, strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Winner met thresholds.', recordedAt: '2025-01-11T09:20:00.000Z', provenance: null }],
+        getPromotionHistory: () => [{ id: 1, strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', previousPhase: 'backtest', newPhase: 'paper', rationale: 'WF run promoted.', winnerId: 5, promotedAt: '2025-01-11T09:20:00.000Z', provenance: null }],
+        getWalkForwardLeaderboard: () => [{ runId: 42, label: 'WF-42', strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', windowCount: 4, winnerId: 4, selectionStrategy: 'best_sharpe', mergedScore: 0.78, sharpeRatio: 1.8, totalReturnPct: 15.2, maxDrawdownPct: 18.5, winRate: 0.65, selectedAt: '2025-01-11T09:30:00.000Z', provenance: null }],
+      } as any,
       detailReadModel: {
         getDecisionDetail: () => decisionDetail,
         getStrategyDetail: () => strategyDetail,
@@ -158,6 +167,14 @@ describe('operator-ui server detail routes', () => {
       } as any,
     });
     const baseUrl = await listen(server);
+
+    const dashboardResponse = await fetch(`${baseUrl}/`, { headers: { Authorization: 'Basic ok' } });
+    expect(dashboardResponse.status).toBe(200);
+    const dashboardHtml = await dashboardResponse.text();
+    expect(dashboardHtml).toContain('id="dashboard-bootstrap"');
+    expect(dashboardHtml).toContain('"pollIntervalMs":1000');
+    expect(dashboardHtml).toContain('data-dashboard-section="summaryCards"');
+    expect(dashboardHtml).toContain('data-dashboard-section="strategyPerformance"');
 
     const decisionResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
     expect(decisionResponse.status).toBe(200);
@@ -265,11 +282,13 @@ describe('operator-ui server refresh API', () => {
     const firstResponse = await fetch(`${baseUrl}/api/refresh`, { headers: { Authorization: 'Basic ok' } });
     expect(firstResponse.status).toBe(200);
     const firstPayload = await firstResponse.json();
+    expect(firstPayload.pollIntervalMs).toBe(1000);
     expect(firstPayload.sections.summaryCards.state).toBe('ok');
     expect(firstPayload.sections.summaryCards.count).toBe(1);
     expect(firstPayload.sections.summaryCards.isCachedData).toBe(false);
     expect(firstPayload.sections.summaryCards.stalenessMs).toBe(0);
     expect(typeof firstPayload.sections.summaryCards.lastFetchedAt).toBe('string');
+    expect(firstPayload.sections.summaryCards.html).toContain('data-dashboard-section="summaryCards"');
 
     refreshModel.failSummaryCards();
 
@@ -284,6 +303,8 @@ describe('operator-ui server refresh API', () => {
     expect(secondPayload.sections.summaryCards.stalenessMs).toBeGreaterThanOrEqual(0);
     expect(secondPayload.sections.summaryCards.errorMessage).toContain('Failed to refresh summary cards');
     expect(secondPayload.sections.summaryCards.errorMessage).toContain('authorization=[redacted]');
+    expect(secondPayload.sections.summaryCards.html).toContain('Showing last known data');
+    expect(secondPayload.sections.summaryCards.html).toContain('data-section-state="stale"');
     expect(secondPayload.sections.strategyPerformance.state).toBe('ok');
   });
 
@@ -304,6 +325,7 @@ describe('operator-ui server refresh API', () => {
     expect(payload.error).toBe('Database unavailable');
     expect(payload.dbAvailable).toBe(false);
     expect(payload.dbError).toBe('open failed');
+    expect(payload.pollIntervalMs).toBe(1000);
     expect(payload.sections.summaryCards).toMatchObject({
       state: 'unavailable',
       count: 0,
@@ -313,5 +335,6 @@ describe('operator-ui server refresh API', () => {
       lastFetchedAt: null,
       isCachedData: false,
     });
+    expect(payload.sections.summaryCards.html).toContain('data-section-state="unavailable"');
   });
 });

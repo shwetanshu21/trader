@@ -224,21 +224,29 @@ function sampleBacktestDetail(): OperatorBacktestDetail {
 }
 
 describe('Dashboard page', () => {
-  it('renders drill-down links from persisted identifiers', () => {
-    const html = renderDashboardPage(buildPayload());
+  it('renders drill-down links, stable section hooks, and polling bootstrap metadata', () => {
+    const html = renderDashboardPage(buildPayload(), { pollIntervalMs: 1_500 });
     expect(html).toContain('/strategy?strategyId=india-nse-eq-v1&strategyVersion=1.0.0');
     expect(html).toContain('/decision?id=7');
     expect(html).toContain('/backtest?runId=42');
     expect(html).toContain('WF#5');
+    expect(html).toContain('data-dashboard-section="summaryCards"');
+    expect(html).toContain('id="dashboard-section-strategyPerformance"');
+    expect(html).toContain('id="dashboard-bootstrap"');
+    expect(html).toContain('"pollIntervalMs":1500');
+    expect(html).toContain('window.setTimeout(pollOnce, pollIntervalMs);');
   });
 
-  it('renders degraded and unavailable states', () => {
+  it('renders degraded and unavailable states with explicit state metadata', () => {
     const html = renderDashboardPage(buildPayload({ strategyPerformance: errorSection('Query failed'), promotionHistory: unavailableSection() }));
     expect(html).toContain('Query failed');
     expect(html).toContain('Database is not available.');
+    expect(html).toContain('data-section-state="error"');
+    expect(html).toContain('data-section-state="unavailable"');
+    expect(html).toContain('No database snapshot available.');
   });
 
-  it('renders stale sections with preserved rows and warning banner', () => {
+  it('renders stale sections with preserved rows, last-known copy, and timestamps', () => {
     const html = renderDashboardPage(buildPayload({
       strategyPerformance: {
         state: 'stale',
@@ -249,9 +257,27 @@ describe('Dashboard page', () => {
         isCachedData: true,
       },
     }));
-    expect(html).toContain('Data may be stale');
+    expect(html).toContain('Showing last known data from 2025-01-11 09:59:15.');
+    expect(html).toContain('Last successful snapshot is 45s old.');
     expect(html).toContain('india-nse-eq-v1');
-    expect(html).toContain('45s ago');
+    expect(html).toContain('data-section-state="stale"');
+    expect(html).toContain('data-is-cached-data="true"');
+  });
+
+  it('tolerates stale sections whose freshness metadata is missing', () => {
+    const html = renderDashboardPage(buildPayload({
+      tickerPerformance: {
+        state: 'stale',
+        data: sampleTickerPerformance(),
+        errorMessage: 'Failed to refresh ticker performance: malformed rows',
+        stalenessMs: null,
+        lastFetchedAt: null,
+        isCachedData: true,
+      },
+    }));
+    expect(html).toContain('Refresh freshness is unknown.');
+    expect(html).toContain('Showing last known data from the most recent successful refresh.');
+    expect(html).toContain('RELIANCE');
   });
 });
 

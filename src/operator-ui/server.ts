@@ -15,7 +15,7 @@ import { OperatorDetailReadModel, OperatorDetailReadModelError } from '../operat
 import { DashboardPayloadAssembler } from './dashboard-data.js';
 import { renderStatusPage } from './render-utils.js';
 import { renderBacktestDetailPage } from './pages/backtest-detail-page.js';
-import { renderDashboardPage } from './pages/dashboard-page.js';
+import { renderDashboardPage, renderDashboardSectionHtml } from './pages/dashboard-page.js';
 import { renderDecisionDetailPage } from './pages/decision-detail-page.js';
 import { renderStrategyDetailPage } from './pages/strategy-detail-page.js';
 
@@ -56,7 +56,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError);
+          handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs);
           return;
         }
 
@@ -84,7 +84,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/api/refresh': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleApiRefresh(res, dashboardPayloadAssembler, readModel, dbError);
+          handleApiRefresh(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs);
           return;
         }
 
@@ -154,6 +154,7 @@ function handleDashboardHtml(
   dashboardPayloadAssembler: DashboardPayloadAssembler,
   readModel: OperatorReadModel | null,
   dbError: string | null,
+  pollIntervalMs: number,
 ): void {
   if (readModel === null) {
     respondHtml(res, 503, renderStatusPage({
@@ -167,7 +168,7 @@ function handleDashboardHtml(
 
   try {
     const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
-    respondHtml(res, 200, renderDashboardPage(payload));
+    respondHtml(res, 200, renderDashboardPage(payload, { pollIntervalMs }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Dashboard Render Failed',
@@ -344,24 +345,27 @@ function handleApiRefresh(
   dashboardPayloadAssembler: DashboardPayloadAssembler,
   readModel: OperatorReadModel | null,
   dbError: string | null,
+  pollIntervalMs: number,
 ): void {
   try {
     const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
+    const sectionHtml = renderDashboardSectionHtml(payload);
     res.writeHead(payload.dbAvailable ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       assembledAt: payload.assembledAt,
       dbAvailable: payload.dbAvailable,
       dbError: payload.dbError,
+      pollIntervalMs,
       error: payload.dbAvailable ? null : 'Database unavailable',
       sections: {
-        summaryCards: serializeDashboardSection(payload.summaryCards),
-        strategyPerformance: serializeDashboardSection(payload.strategyPerformance),
-        tickerPerformance: serializeDashboardSection(payload.tickerPerformance),
-        decisionPerformance: serializeDashboardSection(payload.decisionPerformance),
-        lifecycleStates: serializeDashboardSection(payload.lifecycleStates),
-        governanceHistory: serializeDashboardSection(payload.governanceHistory),
-        promotionHistory: serializeDashboardSection(payload.promotionHistory),
-        walkForwardLeaderboard: serializeDashboardSection(payload.walkForwardLeaderboard),
+        summaryCards: serializeDashboardSection(payload.summaryCards, sectionHtml.summaryCards),
+        strategyPerformance: serializeDashboardSection(payload.strategyPerformance, sectionHtml.strategyPerformance),
+        tickerPerformance: serializeDashboardSection(payload.tickerPerformance, sectionHtml.tickerPerformance),
+        decisionPerformance: serializeDashboardSection(payload.decisionPerformance, sectionHtml.decisionPerformance),
+        lifecycleStates: serializeDashboardSection(payload.lifecycleStates, sectionHtml.lifecycleStates),
+        governanceHistory: serializeDashboardSection(payload.governanceHistory, sectionHtml.governanceHistory),
+        promotionHistory: serializeDashboardSection(payload.promotionHistory, sectionHtml.promotionHistory),
+        walkForwardLeaderboard: serializeDashboardSection(payload.walkForwardLeaderboard, sectionHtml.walkForwardLeaderboard),
       },
     }, null, 2));
   } catch (err) {
@@ -380,7 +384,7 @@ function serializeDashboardSection<T extends { length: number }>(section: {
   stalenessMs: number | null;
   lastFetchedAt: string | null;
   isCachedData: boolean;
-}) {
+}, html: string) {
   return {
     state: section.state,
     count: section.data.length,
@@ -389,6 +393,7 @@ function serializeDashboardSection<T extends { length: number }>(section: {
     stalenessMs: section.stalenessMs,
     lastFetchedAt: section.lastFetchedAt,
     isCachedData: section.isCachedData,
+    html,
   };
 }
 

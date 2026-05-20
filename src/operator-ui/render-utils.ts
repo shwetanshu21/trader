@@ -177,25 +177,70 @@ export function renderLink(href: string, text: string, title?: string): string {
 // Section state badges
 // ---------------------------------------------------------------------------
 
+function sectionStateLabel(state: 'ok' | 'error' | 'stale' | 'unavailable'): string {
+  switch (state) {
+    case 'ok':
+      return 'Live';
+    case 'stale':
+      return 'Stale';
+    case 'error':
+      return 'Refresh failed';
+    case 'unavailable':
+      return 'Unavailable';
+  }
+}
+
 /** Render an error banner for a failed section. */
 export function renderErrorBanner(message: string): string {
-  return `<div class="section-error-banner">
+  return `<div class="section-error-banner" role="status" aria-live="polite">
     <span class="section-error-icon">⚠</span>
     <span class="section-error-text">${escapeHtml(message)}</span>
   </div>`;
 }
 
 /** Render a stale-data banner. */
-export function renderStaleBanner(stalenessMs: number): string {
-  return `<div class="section-stale-banner">
+export function renderStaleBanner(
+  stalenessMs: number | null,
+  lastFetchedAt: string | null = null,
+  diagnosticMessage: string | null = null,
+  isCachedData = false,
+): string {
+  const freshness = stalenessMs === null
+    ? 'Refresh freshness is unknown.'
+    : `Last successful snapshot is ${escapeHtml(formatStaleness(stalenessMs))} old.`;
+  const lastKnownCopy = isCachedData
+    ? lastFetchedAt
+      ? `Showing last known data from ${escapeHtml(formatTimestamp(lastFetchedAt))}.`
+      : 'Showing last known data from the most recent successful refresh.'
+    : 'Section data may be stale.';
+  const diagnostics = diagnosticMessage
+    ? ` Diagnostics: ${escapeHtml(diagnosticMessage)}`
+    : '';
+
+  return `<div class="section-stale-banner" role="status" aria-live="polite">
     <span class="section-stale-icon">⟳</span>
-    <span class="section-stale-text">Data may be stale (last refreshed ${formatStaleness(stalenessMs)} ago)</span>
+    <span class="section-stale-text">${lastKnownCopy} ${freshness}${diagnostics}</span>
+  </div>`;
+}
+
+/** Render an unavailable-data banner. */
+export function renderUnavailableBanner(message: string): string {
+  return `<div class="section-unavailable-banner" role="status" aria-live="polite">
+    <span class="section-unavailable-icon">⊘</span>
+    <span class="section-unavailable-text">${escapeHtml(message)}</span>
   </div>`;
 }
 
 /** Render an empty state placeholder. */
 export function renderEmptyState(message: string): string {
   return `<p class="empty-state">${escapeHtml(message)}</p>`;
+}
+
+export interface RenderSectionOptions {
+  id?: string;
+  dataKey?: string;
+  lastFetchedAt?: string | null;
+  isCachedData?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -212,26 +257,49 @@ export function renderSection(
   errorMessage: string | null = null,
   stalenessMs: number | null = null,
   subtitle: string | null = null,
+  options: RenderSectionOptions = {},
 ): string {
   const borderColor = state === 'error' ? '#ef4444'
     : state === 'stale' ? '#f59e0b'
     : state === 'unavailable' ? '#64748b'
     : '#334155';
 
+  const sectionId = options.id ? ` id="${escapeHtml(options.id)}"` : '';
+  const dataKey = options.dataKey ? ` data-dashboard-section="${escapeHtml(options.dataKey)}"` : '';
+  const lastFetchedAttr = options.lastFetchedAt ? ` data-last-fetched-at="${escapeHtml(options.lastFetchedAt)}"` : '';
+  const staleAttr = stalenessMs !== null ? ` data-staleness-ms="${escapeHtml(String(stalenessMs))}"` : '';
+  const cachedAttr = ` data-is-cached-data="${options.isCachedData ? 'true' : 'false'}"`;
+  const stateAttr = ` data-section-state="${escapeHtml(state)}"`;
+
   let banner = '';
   if (state === 'error' && errorMessage) {
     banner = renderErrorBanner(errorMessage);
-  } else if (state === 'stale' && stalenessMs !== null) {
-    banner = renderStaleBanner(stalenessMs);
+  } else if (state === 'stale') {
+    banner = renderStaleBanner(stalenessMs, options.lastFetchedAt ?? null, errorMessage, options.isCachedData ?? false);
+  } else if (state === 'unavailable') {
+    banner = renderUnavailableBanner(errorMessage ?? 'Section data is not available.');
   }
 
   const subtitleHtml = subtitle ? `<span class="section-subtitle">${escapeHtml(subtitle)}</span>` : '';
+  const freshnessMeta = [
+    `<span class="section-state-pill section-state-${escapeHtml(state)}">${escapeHtml(sectionStateLabel(state))}</span>`,
+    options.lastFetchedAt
+      ? `<span>Last fetched ${escapeHtml(formatTimestamp(options.lastFetchedAt))}</span>`
+      : state === 'unavailable'
+        ? '<span>No database snapshot available.</span>'
+        : '<span>No successful fetch recorded yet.</span>',
+    state === 'stale' && stalenessMs !== null
+      ? `<span>Age ${escapeHtml(formatStaleness(stalenessMs))}</span>`
+      : '',
+    options.isCachedData ? '<span>Showing last known data.</span>' : '',
+  ].filter(Boolean).join('<span aria-hidden="true">•</span>');
 
-  return `<div class="section" style="border-left: 3px solid ${borderColor};">
+  return `<section class="section"${sectionId}${dataKey}${stateAttr}${lastFetchedAttr}${staleAttr}${cachedAttr} style="border-left: 3px solid ${borderColor};">
     <h2>${escapeHtml(title)} ${subtitleHtml}</h2>
+    <div class="section-meta" data-section-meta>${freshnessMeta}</div>
     ${banner}
     ${state === 'unavailable' ? renderEmptyState(errorMessage ?? 'Section data is not available.') : content}
-  </div>`;
+  </section>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +330,12 @@ const PAGE_STYLES = `
   .page-actions { margin-top: 0.9rem; display: flex; flex-wrap: wrap; gap: 0.85rem; font-size: 0.9rem; }
   .section { background: #1e293b; border: 1px solid #334155; border-radius: 0.6rem; padding: 1rem; margin-bottom: 1rem; }
   .section-subtitle { font-size: 0.75rem; color: #64748b; font-weight: normal; text-transform: none; letter-spacing: normal; }
+  .section-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; color: #94a3b8; font-size: 0.76rem; }
+  .section-state-pill { display: inline-flex; align-items: center; padding: 0.12rem 0.5rem; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.66rem; }
+  .section-state-ok { background: #14532d; color: #86efac; }
+  .section-state-stale { background: #78350f; color: #fcd34d; }
+  .section-state-error { background: #7f1d1d; color: #fca5a5; }
+  .section-state-unavailable { background: #334155; color: #cbd5e1; }
   .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; }
   .summary-card { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem; padding: 0.75rem; }
   .summary-card .label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
@@ -279,6 +353,9 @@ const PAGE_STYLES = `
   .section-stale-banner { display: flex; align-items: center; gap: 0.5rem; background: #713f1222; border: 1px solid #78350f; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
   .section-stale-icon { color: #f59e0b; font-size: 1rem; }
   .section-stale-text { color: #fbbf24; font-size: 0.8125rem; }
+  .section-unavailable-banner { display: flex; align-items: center; gap: 0.5rem; background: #1e293b; border: 1px solid #475569; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+  .section-unavailable-icon { color: #cbd5e1; font-size: 1rem; }
+  .section-unavailable-text { color: #cbd5e1; font-size: 0.8125rem; }
   .status-ok { color: #22c55e; font-weight: 600; }
   .status-warn { color: #f59e0b; font-weight: 600; }
   .status-err { color: #ef4444; font-weight: 600; }

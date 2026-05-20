@@ -1,8 +1,8 @@
 // ── Dashboard HTML page composition ──
 // Renders the full summary-first dashboard from a DashboardPayload.
 // Every section is independently state-aware: ok sections render normally,
-// error sections show error banners (with last-known data if available),
-// and unavailable sections show empty-state messages.
+// stale sections keep last-known rows with explicit copy, error sections show
+// refresh failure banners, and unavailable sections show empty-state messages.
 //
 // All user-visible text is HTML-escaped. No external dependencies.
 
@@ -24,19 +24,35 @@ import {
   formatRawPercent,
   formatNumber,
   formatInt,
-  formatStaleness,
   formatTimestamp,
   renderSection,
   renderProvenanceBadge,
-  renderErrorBanner,
   renderEmptyState,
   statusClass,
-  formatUptime,
   backtestDetailHref,
   decisionDetailHref,
   renderLink,
   strategyDetailHref,
 } from '../render-utils.js';
+
+const DASHBOARD_SECTION_ORDER = [
+  'summaryCards',
+  'strategyPerformance',
+  'tickerPerformance',
+  'decisionPerformance',
+  'lifecycleStates',
+  'governanceHistory',
+  'promotionHistory',
+  'walkForwardLeaderboard',
+] as const;
+
+type DashboardSectionKey = typeof DASHBOARD_SECTION_ORDER[number];
+
+type DashboardSectionHtmlMap = Record<DashboardSectionKey, string>;
+
+export interface DashboardPageOptions {
+  pollIntervalMs?: number;
+}
 
 // ---------------------------------------------------------------------------
 // Full dashboard page
@@ -45,17 +61,14 @@ import {
 /**
  * Render the complete dashboard HTML page from a payload.
  */
-export function renderDashboardPage(payload: DashboardPayload): string {
-  const sections = [
-    renderSummaryCardsSection(payload.summaryCards),
-    renderStrategyPerformanceSection(payload.strategyPerformance),
-    renderTickerPerformanceSection(payload.tickerPerformance),
-    renderDecisionPerformanceSection(payload.decisionPerformance),
-    renderLifecycleStatesSection(payload.lifecycleStates),
-    renderGovernanceHistorySection(payload.governanceHistory),
-    renderPromotionHistorySection(payload.promotionHistory),
-    renderWalkForwardLeaderboardSection(payload.walkForwardLeaderboard),
-  ].join('\n');
+export function renderDashboardPage(
+  payload: DashboardPayload,
+  options: DashboardPageOptions = {},
+): string {
+  const pollIntervalMs = Math.max(1000, options.pollIntervalMs ?? 30_000);
+  const sectionHtml = renderDashboardSectionHtml(payload);
+  const sections = DASHBOARD_SECTION_ORDER.map(key => sectionHtml[key]).join('\n');
+  const bootstrapJson = buildDashboardBootstrapJson(payload, pollIntervalMs);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -73,6 +86,12 @@ export function renderDashboardPage(payload: DashboardPayload): string {
   .section { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
   .section h2 { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .section-subtitle { font-size: 0.75rem; color: #64748b; font-weight: normal; text-transform: none; letter-spacing: normal; }
+  .section-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; color: #94a3b8; font-size: 0.76rem; }
+  .section-state-pill { display: inline-flex; align-items: center; padding: 0.12rem 0.5rem; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.66rem; }
+  .section-state-ok { background: #14532d; color: #86efac; }
+  .section-state-stale { background: #78350f; color: #fcd34d; }
+  .section-state-error { background: #7f1d1d; color: #fca5a5; }
+  .section-state-unavailable { background: #334155; color: #cbd5e1; }
   table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
   th { text-align: left; padding: 0.4rem 0.5rem; background: #1e293b; color: #64748b; font-weight: 600; border-bottom: 1px solid #334155; white-space: nowrap; }
   td { padding: 0.35rem 0.5rem; border-bottom: 1px solid #1e293b; vertical-align: top; }
@@ -94,6 +113,13 @@ export function renderDashboardPage(payload: DashboardPayload): string {
   .status-skip { color: #64748b; }
   .status-default { color: #94a3b8; }
 
+  /* Refresh banner */
+  .page-refresh-banner { display: none; align-items: center; gap: 0.6rem; padding: 0.75rem 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border: 1px solid #475569; background: #1e293b; color: #cbd5e1; }
+  .page-refresh-banner[data-visible="true"] { display: flex; }
+  .page-refresh-banner[data-kind="warn"] { border-color: #78350f; background: #713f1222; color: #fcd34d; }
+  .page-refresh-banner[data-kind="error"] { border-color: #7f1d1d; background: #7f1d1d22; color: #fecaca; }
+  .page-refresh-banner[data-kind="ok"] { border-color: #14532d; background: #14532d22; color: #86efac; }
+
   /* Error banner */
   .section-error-banner { display: flex; align-items: center; gap: 0.5rem; background: #7f1d1d22; border: 1px solid #7f1d1d; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
   .section-error-icon { color: #ef4444; font-size: 1rem; }
@@ -103,6 +129,11 @@ export function renderDashboardPage(payload: DashboardPayload): string {
   .section-stale-banner { display: flex; align-items: center; gap: 0.5rem; background: #713f1222; border: 1px solid #78350f; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
   .section-stale-icon { color: #f59e0b; font-size: 1rem; }
   .section-stale-text { color: #fbbf24; font-size: 0.8125rem; }
+
+  /* Unavailable banner */
+  .section-unavailable-banner { display: flex; align-items: center; gap: 0.5rem; background: #0f172a; border: 1px solid #475569; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+  .section-unavailable-icon { color: #cbd5e1; font-size: 1rem; }
+  .section-unavailable-text { color: #cbd5e1; font-size: 0.8125rem; }
 
   /* Provenance badge */
   .provenance { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
@@ -126,21 +157,227 @@ export function renderDashboardPage(payload: DashboardPayload): string {
 <body>
 <div class="header">
   <h1>Operator Console</h1>
-  <div class="meta">
+  <div class="meta" id="dashboard-meta" data-dashboard-meta>
     Assembled: ${escapeHtml(formatTimestamp(payload.assembledAt))} &mdash;
     DB: ${payload.dbAvailable ? 'Connected' : `<span style="color:#ef4444;">Disconnected</span>`}
     ${payload.dbError ? `&mdash; <span style="color:#ef4444;">${escapeHtml(payload.dbError)}</span>` : ''}
   </div>
 </div>
 
+<div class="page-refresh-banner" id="dashboard-refresh-banner" data-visible="false" data-kind="warn" role="status" aria-live="polite"></div>
+
+<main id="dashboard-root" data-poll-interval-ms="${escapeHtml(String(pollIntervalMs))}">
 ${sections}
+</main>
 
 <div class="nav">
   <a href="/api/refresh">JSON Refresh</a>
   <a href="/api/health">API Health</a>
 </div>
+
+<script type="application/json" id="dashboard-bootstrap">${bootstrapJson}</script>
+<script>
+(() => {
+  const bootstrapNode = document.getElementById('dashboard-bootstrap');
+  const refreshBanner = document.getElementById('dashboard-refresh-banner');
+  const dashboardMeta = document.getElementById('dashboard-meta');
+
+  function setBanner(kind, message) {
+    if (!refreshBanner) return;
+    if (!message) {
+      refreshBanner.textContent = '';
+      refreshBanner.setAttribute('data-visible', 'false');
+      refreshBanner.setAttribute('data-kind', kind || 'warn');
+      return;
+    }
+    refreshBanner.textContent = message;
+    refreshBanner.setAttribute('data-visible', 'true');
+    refreshBanner.setAttribute('data-kind', kind || 'warn');
+  }
+
+  function formatTimestamp(iso) {
+    if (!iso || typeof iso !== 'string') return '—';
+    return iso.replace('T', ' ').replace(/\.\d{3}Z$/, '').replace(/\.\d{3}\+.*$/, '').slice(0, 19);
+  }
+
+  function renderHeaderMeta(payload) {
+    if (!dashboardMeta) return;
+    const dbStatus = payload && payload.dbAvailable
+      ? 'Connected'
+      : '<span style="color:#ef4444;">Disconnected</span>';
+    const dbError = payload && payload.dbError
+      ? '&mdash; <span style="color:#ef4444;">' + String(payload.dbError).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') + '</span>'
+      : '';
+    dashboardMeta.innerHTML = 'Assembled: ' + formatTimestamp(payload && payload.assembledAt) + ' &mdash; DB: ' + dbStatus + ' ' + dbError;
+  }
+
+  function replaceSection(sectionKey, nextHtml) {
+    if (typeof nextHtml !== 'string' || nextHtml.trim().length === 0) {
+      return false;
+    }
+    const current = document.querySelector('[data-dashboard-section="' + sectionKey + '"]');
+    if (!current) {
+      return false;
+    }
+    const template = document.createElement('template');
+    template.innerHTML = nextHtml.trim();
+    const next = template.content.firstElementChild;
+    if (!next) {
+      return false;
+    }
+    current.replaceWith(next);
+    return true;
+  }
+
+  function applyRefreshPayload(payload) {
+    if (!payload || typeof payload !== 'object' || !payload.sections || typeof payload.sections !== 'object') {
+      setBanner('warn', 'Live refresh degraded: malformed refresh payload. Keeping the last known dashboard view.');
+      return;
+    }
+
+    let malformedSection = false;
+    for (const [sectionKey, sectionPayload] of Object.entries(payload.sections)) {
+      if (!sectionPayload || typeof sectionPayload !== 'object' || typeof sectionPayload.html !== 'string') {
+        malformedSection = true;
+        continue;
+      }
+      replaceSection(sectionKey, sectionPayload.html);
+    }
+
+    renderHeaderMeta(payload);
+
+    if (malformedSection) {
+      setBanner('warn', 'Live refresh skipped one or more malformed section updates. Existing dashboard content was preserved.');
+      return;
+    }
+
+    if (payload.dbAvailable === false) {
+      setBanner('warn', 'Live refresh reports the operator database as unavailable. Existing dashboard content remains visible.');
+      return;
+    }
+
+    setBanner('', '');
+  }
+
+  let bootstrap;
+  try {
+    bootstrap = JSON.parse(bootstrapNode && bootstrapNode.textContent ? bootstrapNode.textContent : '{}');
+  } catch (_error) {
+    setBanner('warn', 'Live refresh bootstrap could not be parsed. The dashboard will remain static until reload.');
+    return;
+  }
+
+  const pollIntervalMs = Number(bootstrap.pollIntervalMs);
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1000) {
+    setBanner('warn', 'Live refresh is disabled because the poll interval is invalid.');
+    return;
+  }
+
+  const refreshUrl = typeof bootstrap.refreshUrl === 'string' ? bootstrap.refreshUrl : '/api/refresh';
+  const timeoutMs = Math.max(1000, Math.min(10000, Math.floor(pollIntervalMs * 0.9)));
+  let stopped = false;
+
+  async function pollOnce() {
+    if (stopped) return;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
+    try {
+      const response = await fetch(refreshUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store',
+        signal: controller ? controller.signal : undefined,
+      });
+      const rawBody = await response.text();
+      let payload;
+      try {
+        payload = JSON.parse(rawBody);
+      } catch (_error) {
+        setBanner('warn', 'Live refresh returned malformed JSON. Keeping the last known dashboard view.');
+        return;
+      }
+      applyRefreshPayload(payload);
+    } catch (error) {
+      const message = error && typeof error === 'object' && 'name' in error && error.name === 'AbortError'
+        ? 'Live refresh timed out. Keeping the last known dashboard view until the next poll.'
+        : 'Live refresh failed. Keeping the last known dashboard view until the next poll.';
+      setBanner('warn', message);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (!stopped) {
+        window.setTimeout(pollOnce, pollIntervalMs);
+      }
+    }
+  }
+
+  window.setTimeout(pollOnce, pollIntervalMs);
+  window.addEventListener('beforeunload', () => {
+    stopped = true;
+  }, { once: true });
+})();
+</script>
 </body>
 </html>`;
+}
+
+export function renderDashboardSectionHtml(payload: DashboardPayload): DashboardSectionHtmlMap {
+  return {
+    summaryCards: renderSummaryCardsSection(payload.summaryCards),
+    strategyPerformance: renderStrategyPerformanceSection(payload.strategyPerformance),
+    tickerPerformance: renderTickerPerformanceSection(payload.tickerPerformance),
+    decisionPerformance: renderDecisionPerformanceSection(payload.decisionPerformance),
+    lifecycleStates: renderLifecycleStatesSection(payload.lifecycleStates),
+    governanceHistory: renderGovernanceHistorySection(payload.governanceHistory),
+    promotionHistory: renderPromotionHistorySection(payload.promotionHistory),
+    walkForwardLeaderboard: renderWalkForwardLeaderboardSection(payload.walkForwardLeaderboard),
+  };
+}
+
+function buildDashboardBootstrapJson(payload: DashboardPayload, pollIntervalMs: number): string {
+  const bootstrap = {
+    refreshUrl: '/api/refresh',
+    pollIntervalMs,
+    assembledAt: payload.assembledAt,
+    dbAvailable: payload.dbAvailable,
+    dbError: payload.dbError,
+    sections: Object.fromEntries(DASHBOARD_SECTION_ORDER.map(key => [key, summarizeSection(payload[key])])),
+  };
+
+  return JSON.stringify(bootstrap).replace(/</g, '\\u003c');
+}
+
+function summarizeSection<T>(section: DashboardSection<T>) {
+  return {
+    state: section.state,
+    errorMessage: section.errorMessage,
+    stalenessMs: section.stalenessMs,
+    lastFetchedAt: section.lastFetchedAt,
+    isCachedData: section.isCachedData,
+  };
+}
+
+function renderDashboardSectionWrapper<T>(
+  sectionKey: DashboardSectionKey,
+  title: string,
+  subtitle: string,
+  section: DashboardSection<T>,
+  content: string,
+): string {
+  return renderSection(
+    title,
+    content,
+    section.state,
+    section.errorMessage,
+    section.stalenessMs,
+    subtitle,
+    {
+      id: `dashboard-section-${sectionKey}`,
+      dataKey: sectionKey,
+      lastFetchedAt: section.lastFetchedAt,
+      isCachedData: section.isCachedData,
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -181,13 +418,12 @@ function renderSummaryCardsSection(
     content = renderEmptyState('No summary data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'summaryCards',
     'Summary',
-    content,
-    section.state === 'error' ? 'error' : section.state === 'unavailable' ? 'unavailable' : 'ok',
-    section.errorMessage,
-    section.stalenessMs,
     'Aggregate totals',
+    section,
+    content,
   );
 }
 
@@ -246,13 +482,12 @@ function renderStrategyPerformanceSection(
     content = renderEmptyState('No strategy performance data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'strategyPerformance',
     'Strategy Performance',
-    content,
-    section.state,
-    section.errorMessage,
-    section.stalenessMs,
     'Per-strategy P&L and metrics',
+    section,
+    content,
   );
 }
 
@@ -313,13 +548,12 @@ function renderTickerPerformanceSection(
     content = renderEmptyState('No ticker performance data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'tickerPerformance',
     'Ticker Performance',
-    content,
-    section.state,
-    section.errorMessage,
-    section.stalenessMs,
     'Per-symbol P&L and position state',
+    section,
+    content,
   );
 }
 
@@ -380,13 +614,12 @@ function renderDecisionPerformanceSection(
     content = renderEmptyState('No decision performance data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'decisionPerformance',
     'Recent Decisions',
-    content,
-    section.state,
-    section.errorMessage,
-    section.stalenessMs,
     'Newest first',
+    section,
+    content,
   );
 }
 
@@ -431,13 +664,12 @@ function renderLifecycleStatesSection(
     content = renderEmptyState('No lifecycle state data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'lifecycleStates',
     'Lifecycle States',
-    content,
-    section.state,
-    section.errorMessage,
-    section.stalenessMs,
     'Current strategy phases',
+    section,
+    content,
   );
 }
 
@@ -484,13 +716,12 @@ function renderGovernanceHistorySection(
     content = renderEmptyState('No governance history data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'governanceHistory',
     'Governance History',
-    content,
-    section.state,
-    section.errorMessage,
-    section.stalenessMs,
     'Lifecycle phase decisions',
+    section,
+    content,
   );
 }
 
@@ -540,13 +771,12 @@ function renderPromotionHistorySection(
     content = renderEmptyState('No promotion history data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'promotionHistory',
     'Promotion History',
-    content,
-    section.state,
-    section.errorMessage,
-    section.stalenessMs,
     'Lifecycle promotions only',
+    section,
+    content,
   );
 }
 
@@ -608,12 +838,11 @@ function renderWalkForwardLeaderboardSection(
     content = renderEmptyState('No walk-forward leaderboard data available.');
   }
 
-  return renderSection(
+  return renderDashboardSectionWrapper(
+    'walkForwardLeaderboard',
     'Walk-Forward Leaderboard',
-    content,
-    section.state,
-    section.errorMessage,
-    section.stalenessMs,
     'Historical backtest results',
+    section,
+    content,
   );
 }
