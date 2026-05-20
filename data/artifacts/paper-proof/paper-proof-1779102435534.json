@@ -1,0 +1,362 @@
+{
+  "harness": "M009/S06 Paper Proof Harness",
+  "completedAt": "2026-05-18T11:07:15.533Z",
+  "verdict": "PASS",
+  "totalAssertions": 66,
+  "passed": 66,
+  "failed": 0,
+  "assertions": [
+    {
+      "name": "execution endpoint returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "mode is paper",
+      "pass": true,
+      "detail": "mode=paper"
+    },
+    {
+      "name": "totalAttempts = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "totalOrders = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "totalFills = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "openPositionCount = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "recentAttempts[0] is RELIANCE",
+      "pass": true,
+      "detail": "got RELIANCE"
+    },
+    {
+      "name": "recentAttempts[0] outcome is paper_simulated",
+      "pass": true,
+      "detail": "got paper_simulated"
+    },
+    {
+      "name": "recentPaperOrders[0] is RELIANCE",
+      "pass": true,
+      "detail": "got RELIANCE"
+    },
+    {
+      "name": "recentPaperFills[0] is RELIANCE",
+      "pass": true,
+      "detail": "got RELIANCE"
+    },
+    {
+      "name": "currentPositions[0] is RELIANCE",
+      "pass": true,
+      "detail": "got RELIANCE"
+    },
+    {
+      "name": "riskState haltState is no_halt",
+      "pass": true,
+      "detail": "got no_halt"
+    },
+    {
+      "name": "riskState isRefusing is false",
+      "pass": true,
+      "detail": "got false"
+    },
+    {
+      "name": "dashboard.json returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "dashboard execution totalAttempts = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "dashboard execution totalOrders = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "dashboard execution totalFills = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "dashboard execution openPositionCount = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "dashboard has recentStrategyDecisions",
+      "pass": true,
+      "detail": "missing"
+    },
+    {
+      "name": "dashboard SD has indiaResearchEvidence",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "dashboard SD indiaResearchEvidence.summary mentions high-conviction buy",
+      "pass": true,
+      "detail": "got India research flagged RELIANCE as high-conviction buy based on Q4 earnings beat and positive management commentary"
+    },
+    {
+      "name": "dashboard SD indiaResearchEvidence.tags includes earnings-beat",
+      "pass": true,
+      "detail": "got [\"earnings-beat\",\"management-guidance\",\"high-conviction\"]"
+    },
+    {
+      "name": "dashboard SD indiaResearchEvidence.freshnessMs = 120000",
+      "pass": true,
+      "detail": "got 120000"
+    },
+    {
+      "name": "dashboard SD indiaResearchEvidence.influenceContext mentions Hold to Buy",
+      "pass": true,
+      "detail": "got India research committee upgraded rating from Hold to Buy after Q4 earnings review"
+    },
+    {
+      "name": "dashboard SD executionClass = EQ",
+      "pass": true,
+      "detail": "got EQ"
+    },
+    {
+      "name": "dashboard SD segment = NSE",
+      "pass": true,
+      "detail": "got NSE"
+    },
+    {
+      "name": "dashboard SD instrumentType = EQ",
+      "pass": true,
+      "detail": "got EQ"
+    },
+    {
+      "name": "dashboard SD lotSize = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "dashboard SD tickSize = 0.05",
+      "pass": true,
+      "detail": "got 0.05"
+    },
+    {
+      "name": "dashboard SD expiry is null",
+      "pass": true,
+      "detail": "got null"
+    },
+    {
+      "name": "dashboard SD strike is null",
+      "pass": true,
+      "detail": "got null"
+    },
+    {
+      "name": "/health/strategy returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "/health/strategy totalDecisions = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "/health/strategy approvedCount = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "/health/strategy refusedCount = 0",
+      "pass": true,
+      "detail": "got 0"
+    },
+    {
+      "name": "/health/strategy SD has indiaResearchEvidence",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "/health/strategy SD indiaResearchEvidence.summary mentions high-conviction buy",
+      "pass": true,
+      "detail": "got India research flagged RELIANCE as high-conviction buy based on Q4 earnings beat and positive management commentary"
+    },
+    {
+      "name": "/health/strategy SD indiaResearchEvidence.tags includes earnings-beat",
+      "pass": true,
+      "detail": "got [\"earnings-beat\",\"management-guidance\",\"high-conviction\"]"
+    },
+    {
+      "name": "/health/strategy SD indiaResearchEvidence.tags includes management-guidance",
+      "pass": true,
+      "detail": "got [\"earnings-beat\",\"management-guidance\",\"high-conviction\"]"
+    },
+    {
+      "name": "/health/strategy SD indiaResearchEvidence.freshnessMs = 120000",
+      "pass": true,
+      "detail": "got 120000"
+    },
+    {
+      "name": "/health/strategy SD indiaResearchEvidence.influenceContext mentions Hold to Buy",
+      "pass": true,
+      "detail": "got India research committee upgraded rating from Hold to Buy after Q4 earnings review"
+    },
+    {
+      "name": "/health/strategy SD executionClass = EQ",
+      "pass": true,
+      "detail": "got EQ"
+    },
+    {
+      "name": "/health/strategy SD segment = NSE",
+      "pass": true,
+      "detail": "got NSE"
+    },
+    {
+      "name": "/health/strategy SD instrumentType = EQ",
+      "pass": true,
+      "detail": "got EQ"
+    },
+    {
+      "name": "/health/strategy SD lotSize = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "/health/strategy SD tickSize = 0.05",
+      "pass": true,
+      "detail": "got 0.05"
+    },
+    {
+      "name": "/health/strategy SD expiry is null",
+      "pass": true,
+      "detail": "got null"
+    },
+    {
+      "name": "/health/strategy SD strike is null",
+      "pass": true,
+      "detail": "got null"
+    },
+    {
+      "name": "/dashboard (HTML) returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "/dashboard (HTML) contains DOCTYPE",
+      "pass": true,
+      "detail": "missing"
+    },
+    {
+      "name": "/dashboard (HTML) is non-empty",
+      "pass": true,
+      "detail": "length=14175"
+    },
+    {
+      "name": "Phase2: execution endpoint returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "Phase2: totalAttempts still = 1 (no new attempt)",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "Phase2: totalOrders still = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "Phase2: totalFills still = 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "Phase2: riskState haltState is active_halt",
+      "pass": true,
+      "detail": "got active_halt"
+    },
+    {
+      "name": "Phase2: riskState haltSource is operator",
+      "pass": true,
+      "detail": "got operator"
+    },
+    {
+      "name": "Phase2: riskState isRefusing is true",
+      "pass": true,
+      "detail": "got true"
+    },
+    {
+      "name": "Phase2: recentRiskEvents length >= 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "Phase2: halt event found in risk events",
+      "pass": true,
+      "detail": "not found"
+    },
+    {
+      "name": "Phase2: halt event message matches",
+      "pass": true,
+      "detail": "got Operator kill-switch activated — S06 paper-proof refusal test"
+    },
+    {
+      "name": "Phase2: strategy totalDecisions = 2",
+      "pass": true,
+      "detail": "got 2"
+    },
+    {
+      "name": "Phase2: strategy approvedCount = 2",
+      "pass": true,
+      "detail": "got 2"
+    },
+    {
+      "name": "Phase2: dashboard risk haltState = active_halt",
+      "pass": true,
+      "detail": "got active_halt"
+    },
+    {
+      "name": "Phase2: dashboard risk isRefusing = true",
+      "pass": true,
+      "detail": "got true"
+    },
+    {
+      "name": "Phase2: dashboard risk events length >= 1",
+      "pass": true,
+      "detail": "got 1"
+    }
+  ],
+  "surfacesTested": [
+    "/health/execution",
+    "/health/strategy",
+    "/dashboard.json",
+    "/dashboard"
+  ],
+  "evidenceBlocks": {
+    "paperFill": {
+      "symbol": "RELIANCE",
+      "side": "buy",
+      "price": 2850.5,
+      "quantity": 75,
+      "indiaResearchEvidence": true,
+      "executionClass": "EQ"
+    },
+    "refusalHalt": {
+      "source": "operator",
+      "haltState": "active_halt",
+      "attemptedSymbol": "INFY",
+      "consumptionPrevented": true
+    }
+  }
+}

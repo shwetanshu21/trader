@@ -1,0 +1,336 @@
+{
+  "harness": "M009/S06 Paper Proof Harness",
+  "completedAt": "2026-05-18T12:10:37.702Z",
+  "verdict": "FAIL",
+  "totalAssertions": 60,
+  "passed": 21,
+  "failed": 39,
+  "assertions": [
+    {
+      "name": "proposal supervisor emitted >= 2 accepted attempts",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "/health/strategy returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "/health/strategy totalDecisions >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "/health/strategy approvedCount >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "/health/strategy refusedCount = 0",
+      "pass": true,
+      "detail": "got 0"
+    },
+    {
+      "name": "/health/strategy exposes consulted LLM evidence",
+      "pass": false,
+      "detail": "got []"
+    },
+    {
+      "name": "strategy decisions include RELIANCE",
+      "pass": false,
+      "detail": "missing RELIANCE"
+    },
+    {
+      "name": "strategy decisions include NIFTY24DECFUT",
+      "pass": false,
+      "detail": "missing NIFTY24DECFUT"
+    },
+    {
+      "name": "FO decision executionClass = FO",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "FO decision segment = NFO",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "FO decision lotSize = 75",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "FO decision expiry is present",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "execution endpoint returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "mode is paper",
+      "pass": true,
+      "detail": "mode=paper"
+    },
+    {
+      "name": "totalAttempts >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "totalOrders >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "totalFills >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "openPositionCount >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "recentAttempts contain RELIANCE",
+      "pass": false,
+      "detail": "missing RELIANCE"
+    },
+    {
+      "name": "recentAttempts contain NIFTY24DECFUT",
+      "pass": false,
+      "detail": "missing NIFTY24DECFUT"
+    },
+    {
+      "name": "recentAttempts contain paper_simulated outcomes only",
+      "pass": true,
+      "detail": "got []"
+    },
+    {
+      "name": "recentPaperOrders contain NIFTY24DECFUT",
+      "pass": false,
+      "detail": "missing FO order"
+    },
+    {
+      "name": "recentPaperFills contain NIFTY24DECFUT",
+      "pass": false,
+      "detail": "missing FO fill"
+    },
+    {
+      "name": "currentPositions contain NIFTY24DECFUT",
+      "pass": false,
+      "detail": "missing FO position"
+    },
+    {
+      "name": "riskState haltState is no_halt",
+      "pass": true,
+      "detail": "got no_halt"
+    },
+    {
+      "name": "riskState isRefusing is false",
+      "pass": true,
+      "detail": "got false"
+    },
+    {
+      "name": "dashboard.json returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "dashboard execution totalAttempts >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "dashboard execution totalOrders >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "dashboard execution totalFills >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "dashboard execution openPositionCount >= 2",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "dashboard has recentStrategyDecisions",
+      "pass": false,
+      "detail": "missing"
+    },
+    {
+      "name": "dashboard includes RELIANCE strategy decision",
+      "pass": false,
+      "detail": "missing RELIANCE"
+    },
+    {
+      "name": "dashboard includes FO strategy decision",
+      "pass": false,
+      "detail": "missing FO"
+    },
+    {
+      "name": "dashboard exposes consulted LLM evidence",
+      "pass": false,
+      "detail": "got []"
+    },
+    {
+      "name": "dashboard FO executionClass = FO",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "dashboard FO segment = NFO",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "dashboard FO lotSize = 75",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "dashboard RELIANCE has indiaResearchEvidence",
+      "pass": false,
+      "detail": "null"
+    },
+    {
+      "name": "dashboard RELIANCE research summary is present",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "/health/strategy RELIANCE has indiaResearchEvidence",
+      "pass": false,
+      "detail": "null"
+    },
+    {
+      "name": "/health/strategy RELIANCE research summary is present",
+      "pass": false,
+      "detail": "got undefined"
+    },
+    {
+      "name": "/dashboard (HTML) returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "/dashboard (HTML) contains DOCTYPE",
+      "pass": true,
+      "detail": "missing"
+    },
+    {
+      "name": "/dashboard (HTML) is non-empty",
+      "pass": true,
+      "detail": "length=12352"
+    },
+    {
+      "name": "Phase2: execution endpoint returns 200",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "Phase2: totalAttempts still = 1 (no new attempt)",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "Phase2: totalOrders still = 1",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "Phase2: totalFills still = 1",
+      "pass": false,
+      "detail": "got 0"
+    },
+    {
+      "name": "Phase2: riskState haltState is active_halt",
+      "pass": true,
+      "detail": "got active_halt"
+    },
+    {
+      "name": "Phase2: riskState haltSource is operator",
+      "pass": true,
+      "detail": "got operator"
+    },
+    {
+      "name": "Phase2: riskState isRefusing is true",
+      "pass": true,
+      "detail": "got true"
+    },
+    {
+      "name": "Phase2: recentRiskEvents length >= 1",
+      "pass": true,
+      "detail": "got 1"
+    },
+    {
+      "name": "Phase2: halt event found in risk events",
+      "pass": true,
+      "detail": "not found"
+    },
+    {
+      "name": "Phase2: halt event message matches",
+      "pass": true,
+      "detail": "got Operator kill-switch activated — S06 paper-proof refusal test"
+    },
+    {
+      "name": "Phase2: strategy totalDecisions = 2",
+      "pass": false,
+      "detail": "got 1"
+    },
+    {
+      "name": "Phase2: strategy approvedCount = 2",
+      "pass": false,
+      "detail": "got 1"
+    },
+    {
+      "name": "Phase2: dashboard risk haltState = active_halt",
+      "pass": true,
+      "detail": "got active_halt"
+    },
+    {
+      "name": "Phase2: dashboard risk isRefusing = true",
+      "pass": true,
+      "detail": "got true"
+    },
+    {
+      "name": "Phase2: dashboard risk events length >= 1",
+      "pass": true,
+      "detail": "got 1"
+    }
+  ],
+  "surfacesTested": [
+    "/health/execution",
+    "/health/strategy",
+    "/dashboard.json",
+    "/dashboard"
+  ],
+  "evidenceBlocks": {
+    "paperFill": {
+      "symbols": [
+        "RELIANCE",
+        "NIFTY24DECFUT"
+      ],
+      "indiaResearchEvidence": true,
+      "executionClasses": [
+        "EQ",
+        "FO"
+      ],
+      "llmConsulted": true
+    },
+    "refusalHalt": {
+      "source": "operator",
+      "haltState": "active_halt",
+      "attemptedSymbol": "INFY",
+      "consumptionPrevented": true
+    }
+  }
+}

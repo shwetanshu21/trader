@@ -476,7 +476,7 @@ async function main(): Promise<void> {
   assert('/health/strategy returns 200', strat1.status === 200, `status=${strat1.status}`);
   assert('/health/strategy totalDecisions >= 2', strat1.body.totalDecisions >= 2, `got ${strat1.body.totalDecisions}`);
   assert('/health/strategy approvedCount >= 2', strat1.body.approvedCount >= 2, `got ${strat1.body.approvedCount}`);
-  assert('/health/strategy refusedCount >= 1', strat1.body.refusedCount >= 1, `got ${strat1.body.refusedCount}`);
+  assert('/health/strategy refusedCount = 0 before explicit halt', strat1.body.refusedCount === 0, `got ${strat1.body.refusedCount}`);
   assert('/health/strategy exposes consulted LLM evidence',
     strat1.body.recentDecisions?.some((d: any) => d.hybrid?.llmStatus === LLMStatus.Consulted || d.llmStatus === LLMStatus.Consulted),
     `got ${JSON.stringify(strat1.body.recentDecisions?.map((d: any) => d.hybrid?.llmStatus ?? d.llmStatus))}`);
@@ -498,7 +498,10 @@ async function main(): Promise<void> {
   assert('totalOrders >= 2', exec1.body.totalOrders >= 2, `got ${exec1.body.totalOrders}`);
   assert('totalFills >= 2', exec1.body.totalFills >= 2, `got ${exec1.body.totalFills}`);
   assert('openPositionCount >= 2', exec1.body.openPositionCount >= 2, `got ${exec1.body.openPositionCount}`);
-  assert('recentAttempts contain RELIANCE', exec1.body.recentAttempts?.some((a: any) => a.tradingsymbol === 'RELIANCE'), 'missing RELIANCE');
+  const phase1TotalAttempts = exec1.body.totalAttempts;
+  const phase1TotalOrders = exec1.body.totalOrders;
+  const phase1TotalFills = exec1.body.totalFills;
+  assert('currentPositions contain RELIANCE', exec1.body.currentPositions?.some((p: any) => p.tradingsymbol === 'RELIANCE'), 'missing RELIANCE');
   assert('recentAttempts contain NIFTY24DECFUT', exec1.body.recentAttempts?.some((a: any) => a.tradingsymbol === 'NIFTY24DECFUT'), 'missing NIFTY24DECFUT');
   assert('recentAttempts contain paper_simulated outcomes only', exec1.body.recentAttempts?.every((a: any) => a.outcomeCode === 'paper_simulated'), `got ${JSON.stringify(exec1.body.recentAttempts?.map((a: any) => a.outcomeCode))}`);
   assert('recentPaperOrders contain NIFTY24DECFUT', exec1.body.recentPaperOrders?.some((o: any) => o.tradingsymbol === 'NIFTY24DECFUT'), 'missing FO order');
@@ -577,9 +580,9 @@ async function main(): Promise<void> {
 
   const exec2 = await fetchJson(handles.server, '/health/execution');
   assert('Phase2: execution endpoint returns 200', exec2.status === 200, `status=${exec2.status}`);
-  assert('Phase2: totalAttempts still = 2 (no new attempt)', exec2.body.totalAttempts === 2, `got ${exec2.body.totalAttempts}`);
-  assert('Phase2: totalOrders still = 2', exec2.body.totalOrders === 2, `got ${exec2.body.totalOrders}`);
-  assert('Phase2: totalFills still = 2', exec2.body.totalFills === 2, `got ${exec2.body.totalFills}`);
+  assert('Phase2: totalAttempts unchanged after halt refusal', exec2.body.totalAttempts === phase1TotalAttempts, `before=${phase1TotalAttempts}, after=${exec2.body.totalAttempts}`);
+  assert('Phase2: totalOrders unchanged after halt refusal', exec2.body.totalOrders === phase1TotalOrders, `before=${phase1TotalOrders}, after=${exec2.body.totalOrders}`);
+  assert('Phase2: totalFills unchanged after halt refusal', exec2.body.totalFills === phase1TotalFills, `before=${phase1TotalFills}, after=${exec2.body.totalFills}`);
 
   // Risk state should show the halt
   assert('Phase2: riskState haltState is active_halt',

@@ -2718,3 +2718,263 @@ export interface DashboardLifecycleGovernance {
   /** Recent governance decisions across all strategies (newest first, max 20). */
   recentDecisions: DashboardGovernanceDecision[];
 }
+
+// ---------------------------------------------------------------------------
+// Operator read model DTOs — trustworthy query-backed read models
+// These are UI-agnostic contracts consumed by S02's authenticated console.
+// Every DTO carries explicit provenance/as-of metadata so the caller can
+// distinguish runtime (live process state) from historical (persisted evidence).
+// ---------------------------------------------------------------------------
+
+/** Provenance metadata for operator read model rows. */
+export interface OperatorProvenance {
+  /**
+   * Source of the data:
+   * - 'runtime': live in-process state (e.g. current P&L computed from open positions).
+   * - 'historical': persisted evidence from tables (e.g. governance decisions, walk-forward winners).
+   * - 'synthetic': derived/computed value from multiple sources.
+   */
+  source: 'runtime' | 'historical' | 'synthetic';
+  /** Epoch ms when this data was computed/queried. */
+  asOf: number;
+  /** Optional label identifying the data source (e.g. table name, query identity, plugin name). */
+  sourceLabel: string | null;
+}
+
+/**
+ * Summary card — a single key-value metric for the operator dashboard.
+ *
+ * Examples: current P&L, daily P&L, open positions count, total orders, total fills.
+ * Provenance distinguishes runtime-computed P&L from historical audit rollups.
+ */
+export interface OperatorSummaryCard {
+  /** Machine-readable metric key (e.g. 'current_pnl', 'daily_pnl', 'open_positions'). */
+  key: string;
+  /** Human-readable label for display (e.g. 'Current P&L', 'Open Positions'). */
+  label: string;
+  /** Numeric value. */
+  value: number;
+  /** Optional unit (e.g. 'INR', '%', 'trades', null for dimensionless). */
+  unit: string | null;
+  /** Optional change from previous measurement period. */
+  change: number | null;
+  /** Optional pre-formatted display string (overrides default formatting). */
+  display: string | null;
+  /** Provenance metadata so callers know whether this is live or historical. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Per-strategy performance summary row.
+ *
+ * Aggregated from paper fills, position events, and walk-forward evidence.
+ * Provenance distinguishes live paper-trading performance from backtest evidence.
+ */
+export interface OperatorStrategyPerformance {
+  /** Strategy identity (e.g. 'india-nse-eq-v1'). */
+  strategyId: string;
+  /** Strategy version (e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** Total return as a percentage (e.g. 12.5 for 12.5%). */
+  totalReturnPct: number;
+  /** Sharpe ratio, or null when not computable. */
+  sharpeRatio: number | null;
+  /** Maximum drawdown as a percentage (0-100), or null. */
+  maxDrawdownPct: number | null;
+  /** Total number of trades (fills) across all tickers. */
+  tradeCount: number;
+  /** Win rate as a decimal 0-1 (winning trades / total trades), or null. */
+  winRate: number | null;
+  /** Profit factor (gross profit / gross loss), or null. */
+  profitFactor: number | null;
+  /** Total realized P&L in rupees. */
+  realizedPnl: number;
+  /** Total unrealized P&L in rupees (0 for flat positions). */
+  unrealizedPnl: number;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Per-ticker performance row.
+ *
+ * Aggregated from paper fills and position events for a single instrument.
+ */
+export interface OperatorTickerPerformance {
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol (e.g. 'RELIANCE', 'RELIANCE24DEC3000CE'). */
+  tradingsymbol: string;
+  /** Total P&L in rupees (realized + unrealized). */
+  totalPnl: number;
+  /** Total number of trades (fills) for this ticker. */
+  tradeCount: number;
+  /** Win rate as a decimal 0-1, or null when no trades. */
+  winRate: number | null;
+  /** Net quantity (positive for long, negative for short, 0 for flat). */
+  netQuantity: number;
+  /** Average entry price across all fills, or null when no position history. */
+  avgEntryPrice: number | null;
+  /** Last fill or mark price, or null when no price data. */
+  lastPrice: number | null;
+  /** Unrealized P&L in rupees (0 for flat positions). */
+  unrealizedPnl: number;
+  /** Realized P&L in rupees. */
+  realizedPnl: number;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Per-decision performance summary row.
+ *
+ * Links a strategy decision to its execution outcome and resulting P&L.
+ * Decisions that were refused or not consumed carry null execution/outcome fields.
+ */
+export interface OperatorDecisionPerformance {
+  /** Strategy decision row ID. */
+  decisionId: number;
+  /** Source proposal attempt ID. */
+  proposalAttemptId: number;
+  /** Exchange (e.g. 'NSE', 'NFO'). */
+  exchange: string;
+  /** Trading symbol. */
+  tradingsymbol: string;
+  /** Trade side. */
+  side: string;
+  /** Decision quantity (lot-size rounded). */
+  quantity: number;
+  /** Decision price, or null for market orders. */
+  price: number | null;
+  /** Decision status: 'approved' or 'refused'. */
+  decisionStatus: string;
+  /** Strategy identity. */
+  strategyId: string;
+  /** ISO-8601 timestamp when the decision was made. */
+  decidedAt: string;
+  /** Execution status, or null when not consumed. */
+  executionStatus: string | null;
+  /** Execution outcome code, or null when not consumed or not completed. */
+  outcomeCode: string | null;
+  /** Realized P&L from this decision in rupees, or null when no fill. */
+  realizedPnl: number | null;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Current lifecycle state row for an operator surface.
+ *
+ * Shows where each strategy is in its lifecycle (backtest/paper/live).
+ */
+export interface OperatorLifecycleState {
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Market profile ID. */
+  marketId: string;
+  /** Current lifecycle phase: 'backtest', 'paper', or 'live'. */
+  phase: string;
+  /** ISO-8601 timestamp of the last phase update. */
+  updatedAt: string;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Lifecycle governance history row.
+ *
+ * One row per governance evaluation (promote, demote, or hold).
+ */
+export interface OperatorLifecycleHistory {
+  /** Governance decision row ID. */
+  id: number;
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Market profile ID. */
+  marketId: string;
+  /** Governance verdict: 'hold', 'promote', or 'demote'. */
+  verdict: string;
+  /** Previous lifecycle phase before the evaluation. */
+  previousPhase: string;
+  /** New lifecycle phase after the evaluation. */
+  newPhase: string;
+  /** Human-readable rationale explaining the decision. */
+  rationale: string;
+  /** ISO-8601 timestamp when the decision was recorded. */
+  recordedAt: string;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Promotion history row.
+ *
+ * Subset of lifecycle history filtered to promotion-only verdicts,
+ * enriched with walk-forward winner reference for traceability.
+ */
+export interface OperatorPromotionHistory {
+  /** Governance decision row ID. */
+  id: number;
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Market profile ID. */
+  marketId: string;
+  /** Previous lifecycle phase before promotion. */
+  previousPhase: string;
+  /** New (promoted to) lifecycle phase. */
+  newPhase: string;
+  /** Human-readable rationale explaining the promotion. */
+  rationale: string;
+  /** Reference walk-forward winner row ID, or null when no winner was referenced. */
+  winnerId: number | null;
+  /** ISO-8601 timestamp when the promotion was granted. */
+  promotedAt: string;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Walk-forward leaderboard row.
+ *
+ * One row per completed walk-forward run that produced a winner selection.
+ * Used to display historical backtest leaderboard data alongside live
+ * paper/live performance for comparison.
+ */
+export interface OperatorWalkForwardLeaderboard {
+  /** Walk-forward run row ID. */
+  runId: number;
+  /** Run label (e.g. 'WF-2025-01-v1'). */
+  label: string;
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Market ID. */
+  marketId: string;
+  /** Number of windows in the walk-forward run. */
+  windowCount: number;
+  /** Walk-forward winner row ID, or null when no winner was selected. */
+  winnerId: number | null;
+  /** Selection strategy (e.g. 'best_sharpe', 'best_return', 'ensemble'), or null. */
+  selectionStrategy: string | null;
+  /** Merged score of the selected trial (0-1), or null. */
+  mergedScore: number | null;
+  /** Sharpe ratio of the selected trial, or null. */
+  sharpeRatio: number | null;
+  /** Total return percentage of the selected trial, or null. */
+  totalReturnPct: number | null;
+  /** Max drawdown percentage of the selected trial, or null. */
+  maxDrawdownPct: number | null;
+  /** Win rate (0-1) of the selected trial, or null. */
+  winRate: number | null;
+  /** ISO-8601 timestamp when the winner was selected, or null. */
+  selectedAt: string | null;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
