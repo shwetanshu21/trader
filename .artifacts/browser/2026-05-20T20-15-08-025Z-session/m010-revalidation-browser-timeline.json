@@ -1,0 +1,62 @@
+{
+  "entries": [
+    {
+      "id": 1,
+      "tool": "browser_navigate",
+      "status": "success",
+      "durationMs": 835,
+      "beforeUrl": "about:blank",
+      "afterUrl": "http://operator:proof-password@127.0.0.1:45777/",
+      "line": "#1 | browser_navigate | success | 835ms | screenshot=true, url=\"http://operator:proof-password@127.0.0.1:45777/\" | URL changed to http://operator:proof-password@127.0.0.1:45777/; title changed to Operator Console; landmarks 0→9; links 0→12"
+    },
+    {
+      "id": 2,
+      "tool": "browser_batch",
+      "status": "error",
+      "durationMs": 902,
+      "beforeUrl": "http://operator:proof-password@127.0.0.1:45777/",
+      "afterUrl": "http://operator:proof-password@127.0.0.1:45777/strategy?strategyId=strat-a&strategyVersion=1.0.0",
+      "line": "#2 | browser_batch | error | 902ms | finalSummaryOnly=true, steps=[11], stopOnFailure=true | Stopped at step 7 (assert) | URL changed to http://operator:proof-password@127.0.0.1:45777/strategy?strategyId=strat-a&strategyVersion=1.0.0; title changed to strat-a@1.0.0; landmarks 9→7; links 12→6"
+    },
+    {
+      "id": 3,
+      "tool": "browser_batch",
+      "status": "error",
+      "durationMs": 8,
+      "beforeUrl": "http://operator:proof-password@127.0.0.1:45777/strategy?strategyId=strat-a&strategyVersion=1.0.0",
+      "afterUrl": "http://operator:proof-password@127.0.0.1:45777/strategy?strategyId=strat-a&strategyVersion=1.0.0",
+      "line": "#3 | browser_batch | error | 8ms | finalSummaryOnly=false, steps=[5], stopOnFailure=true | Stopped at step 1 (assert) | No meaningful browser-state change detected"
+    },
+    {
+      "id": 4,
+      "tool": "browser_batch",
+      "status": "success",
+      "durationMs": 750,
+      "beforeUrl": "http://operator:proof-password@127.0.0.1:45777/strategy?strategyId=strat-a&strategyVersion=1.0.0",
+      "afterUrl": "http://operator:proof-password@127.0.0.1:45777/backtest?runId=1",
+      "line": "#4 | browser_batch | success | 750ms | finalSummaryOnly=true, steps=[5], stopOnFailure=true | URL changed to http://operator:proof-password@127.0.0.1:45777/backtest?runId=1; title changed to WF-001 (#1); landmarks 7→8; links 6→4"
+    },
+    {
+      "id": 5,
+      "tool": "browser_navigate",
+      "status": "success",
+      "durationMs": 835,
+      "beforeUrl": "http://operator:proof-password@127.0.0.1:45777/backtest?runId=1",
+      "afterUrl": "http://operator:proof-password@127.0.0.1:45777/",
+      "line": "#5 | browser_navigate | success | 835ms | screenshot=true, url=\"http://operator:proof-password@127.0.0.1:45777/\" | URL changed to http://operator:proof-password@127.0.0.1:45777/; title changed to Operator Console; landmarks 8→9; links 4→12"
+    },
+    {
+      "id": 6,
+      "tool": "browser_batch",
+      "status": "success",
+      "durationMs": 1607,
+      "beforeUrl": "http://operator:proof-password@127.0.0.1:45777/",
+      "afterUrl": "http://127.0.0.1:45777/backtest?runId=1",
+      "line": "#6 | browser_batch | success | 1607ms | finalSummaryOnly=true, steps=[6], stopOnFailure=true | URL changed to http://127.0.0.1:45777/backtest?runId=1; title changed to WF-001 (#1); landmarks 9→8; links 12→4"
+    }
+  ],
+  "retained": 6,
+  "totalRecorded": 6,
+  "bounded": false,
+  "summary": "Timeline: 6 browser actions recorded."
+}

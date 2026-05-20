@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { DatabaseManager } from '../persistence/sqlite.js';
 
 export type OperatorUIProofFaultSection =
@@ -15,8 +16,10 @@ export type OperatorUIProofFaultSection =
   | 'promotionHistory'
   | 'walkForwardLeaderboard';
 
+type StartedOperatorChild = ChildProcessByStdio<null, Readable, Readable>;
+
 export type StartedOperatorUIProcess = {
-  child: ChildProcessWithoutNullStreams;
+  child: StartedOperatorChild;
   port: number;
   baseUrl: string;
   password: string;
@@ -305,7 +308,7 @@ export function seedOperatorUiDatabase(dbPath: string): void {
 
 export async function waitForOperatorUiReady(
   baseUrl: string,
-  child: ChildProcessWithoutNullStreams,
+  child: StartedOperatorChild,
   stdout: string[],
   stderr: string[],
   timeoutMs = 10_000,

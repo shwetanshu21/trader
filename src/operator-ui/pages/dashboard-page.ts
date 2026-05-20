@@ -197,7 +197,7 @@ ${sections}
 
   function formatTimestamp(iso) {
     if (!iso || typeof iso !== 'string') return '—';
-    return iso.replace('T', ' ').replace(/\.\d{3}Z$/, '').replace(/\.\d{3}\+.*$/, '').slice(0, 19);
+    return iso.replace('T', ' ').replace(/\\.\\d{3}Z$/, '').replace(/\\.\\d{3}\\+.*$/, '').slice(0, 19);
   }
 
   function renderHeaderMeta(payload) {
@@ -341,13 +341,16 @@ function buildDashboardBootstrapJson(payload: DashboardPayload, pollIntervalMs: 
     assembledAt: payload.assembledAt,
     dbAvailable: payload.dbAvailable,
     dbError: payload.dbError,
-    sections: Object.fromEntries(DASHBOARD_SECTION_ORDER.map(key => [key, summarizeSection(payload[key])])),
+    sections: Object.fromEntries(DASHBOARD_SECTION_ORDER.map((key) => {
+      const section = payload[key] as DashboardSection<unknown>;
+      return [key, summarizeSection(section)];
+    })),
   };
 
   return JSON.stringify(bootstrap).replace(/</g, '\\u003c');
 }
 
-function summarizeSection<T>(section: DashboardSection<T>) {
+function summarizeSection(section: DashboardSection<unknown>) {
   return {
     state: section.state,
     errorMessage: section.errorMessage,

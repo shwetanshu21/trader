@@ -254,14 +254,14 @@ export class DashboardPayloadAssembler {
     try {
       const data = definition.fetch(readModel);
       this.cache.set(definition.key, { data, lastFetchedAtMs: nowMs });
-      return okSection(data, nowMs);
+      return okSection(data, nowMs) as DashboardSectionMap[K];
     } catch (err) {
       const message = sanitizeDiagnostic(definition.label, err);
       const cached = this.cache.get(definition.key) as CachedSectionValue<DashboardSectionMap[K]['data']> | undefined;
       if (cached) {
-        return staleSection(cached, message, nowMs);
+        return staleSection(cached, message, nowMs) as DashboardSectionMap[K];
       }
-      return errorSection(definition.empty, message);
+      return errorSection(definition.empty, message) as DashboardSectionMap[K];
     }
   }
 }
