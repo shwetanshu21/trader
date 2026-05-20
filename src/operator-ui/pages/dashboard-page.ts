@@ -32,6 +32,10 @@ import {
   renderEmptyState,
   statusClass,
   formatUptime,
+  backtestDetailHref,
+  decisionDetailHref,
+  renderLink,
+  strategyDetailHref,
 } from '../render-utils.js';
 
 // ---------------------------------------------------------------------------
@@ -201,9 +205,10 @@ function renderStrategyPerformanceSection(
       const winRate = s.winRate !== null ? formatPercent(s.winRate) : '—';
       const profitFactor = s.profitFactor !== null ? formatNumber(s.profitFactor, 2) : '—';
       const badge = renderProvenanceBadge(s.provenance);
+      const strategyHref = strategyDetailHref(s.strategyId, s.strategyVersion);
 
       return `<tr>
-        <td><code>${escapeHtml(s.strategyId)}</code></td>
+        <td>${renderLink(strategyHref, s.strategyId)}</td>
         <td><code>${escapeHtml(s.strategyVersion)}</code></td>
         <td class="num">${formatInt(s.tradeCount)}</td>
         <td class="num ${s.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(s.realizedPnl, 'INR')}</td>
@@ -334,10 +339,11 @@ function renderDecisionPerformanceSection(
         ? `<span class="${d.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(d.realizedPnl, null)}</span>`
         : '—';
       const badge = renderProvenanceBadge(d.provenance);
+      const decisionHref = decisionDetailHref(d.decisionId);
 
       return `<tr>
         <td><code>${escapeHtml(d.exchange)}</code></td>
-        <td><code>${escapeHtml(d.tradingsymbol)}</code></td>
+        <td>${renderLink(decisionHref, d.tradingsymbol)}</td>
         <td>${escapeHtml(d.side)}</td>
         <td class="num">${formatInt(d.quantity)}</td>
         <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
@@ -498,12 +504,13 @@ function renderPromotionHistorySection(
   if (section.state === 'ok' && section.data.length > 0) {
     const rows = section.data.map(p => {
       const badge = renderProvenanceBadge(p.provenance);
+      const strategyHref = strategyDetailHref(p.strategyId, p.strategyVersion);
       const winnerRef = p.winnerId !== null
-        ? `<a href="#" title="Walk-forward winner #${p.winnerId}">WF#${p.winnerId}</a>`
-        : '—';
+        ? `<code>WF#${p.winnerId}</code>`
+        : '<span class="status-warn">No winner recorded</span>';
 
       return `<tr>
-        <td><code>${escapeHtml(p.strategyId)}</code></td>
+        <td>${renderLink(strategyHref, p.strategyId)}</td>
         <td><code>${escapeHtml(p.previousPhase)}</code></td>
         <td><code><span class="status-ok">${escapeHtml(p.newPhase)}</span></code></td>
         <td style="max-width:250px;word-break:break-word;">${escapeHtml(p.rationale)}</td>
@@ -559,10 +566,12 @@ function renderWalkForwardLeaderboardSection(
       const winRate = w.winRate !== null ? formatPercent(w.winRate) : '—';
       const badge = renderProvenanceBadge(w.provenance);
       const selectedAt = w.selectedAt ? formatTimestamp(w.selectedAt) : '—';
+      const runHref = backtestDetailHref(w.runId);
+      const strategyHref = strategyDetailHref(w.strategyId, w.strategyVersion);
 
       return `<tr>
-        <td><code>${escapeHtml(w.label)}</code></td>
-        <td><code>${escapeHtml(w.strategyId)}</code></td>
+        <td>${renderLink(runHref, w.label)}</td>
+        <td>${renderLink(strategyHref, w.strategyId)}</td>
         <td class="num">${formatInt(w.windowCount)}</td>
         <td class="num">${mergedScore}</td>
         <td class="num">${sharpe}</td>

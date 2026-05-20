@@ -1,34 +1,23 @@
 // ── Operator UI HTTP Server ──
 // Standalone HTTP server for the authenticated operator console.
 // Uses Node built-in `http` module — zero extra dependencies.
-//
-// Routes:
-//   GET /health         → Unauthenticated liveness probe
-//   GET /               → Authenticated dashboard HTML (summary-first)
-//   GET /api/refresh    → Authenticated JSON refresh surface
-//   GET /api/health     → Authenticated health JSON with DB diagnostics
-//
-// Security: binds to loopback by default, restricts CORS to loopback origins,
-// redacts internal exception detail from 500 responses, and never echoes
-// credentials or raw secrets.
 
 import http from 'node:http';
+import type Database from 'better-sqlite3';
 import type { OperatorUIConfig } from './config.js';
 import type { Authenticator, AuthResult } from './auth.js';
 import {
   WWW_AUTHENTICATE_HEADER,
   RETRY_AFTER_HEADER,
-  RATE_LIMIT_LIMIT_HEADER,
-  RATE_LIMIT_REMAINING_HEADER,
 } from './auth.js';
-import type Database from 'better-sqlite3';
 import type { OperatorReadModel } from '../operator/operator-read-model.js';
+import { OperatorDetailReadModel, OperatorDetailReadModelError } from '../operator/operator-detail-read-model.js';
 import { fetchDashboardPayload } from './dashboard-data.js';
+import { renderStatusPage } from './render-utils.js';
+import { renderBacktestDetailPage } from './pages/backtest-detail-page.js';
 import { renderDashboardPage } from './pages/dashboard-page.js';
-
-// ---------------------------------------------------------------------------
-// Server options
-// ---------------------------------------------------------------------------
+import { renderDecisionDetailPage } from './pages/decision-detail-page.js';
+import { renderStrategyDetailPage } from './pages/strategy-detail-page.js';
 
 export interface OperatorUIServerOptions {
   config: OperatorUIConfig;
@@ -36,23 +25,19 @@ export interface OperatorUIServerOptions {
   db: Database.Database | null;
   dbError: string | null;
   readModel: OperatorReadModel | null;
+  detailReadModel?: OperatorDetailReadModel | null;
 }
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 export function createOperatorUIServer(options: OperatorUIServerOptions): http.Server {
   const { config, authenticator, db, dbError, readModel } = options;
+  const detailReadModel = options.detailReadModel ?? (db !== null ? new OperatorDetailReadModel(db) : null);
   const corsOrigin = `http://${config.host === '0.0.0.0' ? '127.0.0.1' : config.host}`;
 
   return http.createServer((req, res) => {
-    // CORS headers restricted to the bind-host origin (never wildcard)
     res.setHeader('Access-Control-Allow-Origin', corsOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Accept');
 
-    // Handle preflight
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
@@ -63,58 +48,68 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
 
     try {
       switch (url.pathname) {
-        // ── Unauthenticated: liveness ────────────────────────────────
-        case '/health': {
+        case '/health':
           handleLiveness(res, db, dbError);
-          break;
-        }
+          return;
 
-        // ── Authenticated: dashboard HTML ────────────────────────────
         case '/': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
           handleDashboardHtml(res, readModel, dbError);
-          break;
+          return;
         }
 
-        // ── Authenticated: JSON refresh surface ──────────────────────
+        case '/decision': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleDecisionDetail(res, url, detailReadModel, dbError);
+          return;
+        }
+
+        case '/strategy': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleStrategyDetail(res, url, detailReadModel, dbError);
+          return;
+        }
+
+        case '/backtest': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleBacktestDetail(res, url, detailReadModel, dbError);
+          return;
+        }
+
         case '/api/refresh': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
           handleApiRefresh(res, readModel, dbError);
-          break;
+          return;
         }
 
-        // ── Authenticated: health JSON ───────────────────────────────
         case '/api/health': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
           handleApiHealth(res, config, db, dbError, authenticator, readModel);
-          break;
+          return;
         }
 
-        default: {
+        default:
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Not found', path: url.pathname }));
-          break;
-        }
+          return;
       }
     } catch (err) {
-      // Truthful redaction: include the error type but not raw exception detail
-      const message = err instanceof Error ? `${err.name}: ${err.message}` : 'Unknown error';
+      const detail = err instanceof Error ? `${err.name}: ${err.message}` : 'Unknown error';
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         error: 'Internal server error',
         type: err instanceof Error ? err.name : 'Unknown',
-        detail: message,
+        detail,
       }));
     }
   });
 }
-
-// ---------------------------------------------------------------------------
-// Auth helper
-// ---------------------------------------------------------------------------
 
 function verifyAuth(
   req: http.IncomingMessage,
@@ -125,38 +120,19 @@ function verifyAuth(
     req.socket.remoteAddress,
     req.headers['x-forwarded-for'] as string | undefined,
   );
-  const result = authenticator.authenticate(
-    req.headers.authorization,
-    clientIp,
-  );
+  const result = authenticator.authenticate(req.headers.authorization, clientIp);
 
   if (!result.ok) {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    if (result.status === 401) {
-      headers[WWW_AUTHENTICATE_HEADER] = 'Basic realm="Operator Console"';
-    }
-    if (result.status === 429) {
-      headers[RETRY_AFTER_HEADER] = '120';
-    }
-
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (result.status === 401) headers[WWW_AUTHENTICATE_HEADER] = 'Basic realm="Operator Console"';
+    if (result.status === 429) headers[RETRY_AFTER_HEADER] = '120';
     res.writeHead(result.status, headers);
-    res.end(JSON.stringify({
-      error: result.message,
-      status: result.status,
-    }));
+    res.end(JSON.stringify({ error: result.message, status: result.status }));
   }
 
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Route handlers
-// ---------------------------------------------------------------------------
-
-/** GET /health — unauthenticated liveness probe. */
 function handleLiveness(
   res: http.ServerResponse,
   db: Database.Database | null,
@@ -172,30 +148,195 @@ function handleLiveness(
   }));
 }
 
-/** GET / — authenticated dashboard HTML (summary-first). */
 function handleDashboardHtml(
   res: http.ServerResponse,
   readModel: OperatorReadModel | null,
   dbError: string | null,
 ): void {
   if (readModel === null) {
-    res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(renderErrorHtml('Database Unavailable', dbError ?? 'Failed to open database.'));
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Database Unavailable',
+      detail: dbError ?? 'Failed to open operator database.',
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
     return;
   }
 
   try {
     const payload = fetchDashboardPayload(readModel, dbError);
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(renderDashboardPage(payload));
+    respondHtml(res, 200, renderDashboardPage(payload));
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(renderErrorHtml('Dashboard Render Failed', message));
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Dashboard Render Failed',
+      detail: err instanceof Error ? err.message : 'Unknown error while assembling dashboard payload.',
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Retry dashboard</a>',
+    }));
   }
 }
 
-/** GET /api/refresh — authenticated JSON refresh surface. */
+function handleDecisionDetail(
+  res: http.ServerResponse,
+  url: URL,
+  detailReadModel: OperatorDetailReadModel | null,
+  dbError: string | null,
+): void {
+  const parsed = parseRequiredInt(url, 'id', 'decision id');
+  if (!parsed.ok) {
+    respondHtml(res, 400, renderStatusPage({
+      title: 'Malformed Decision Request',
+      detail: parsed.message,
+      statusLabel: '400 Bad Request',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+    return;
+  }
+
+  if (detailReadModel === null) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Decision Detail Unavailable',
+      detail: dbError ?? 'Operator database is unavailable, so persisted decision detail cannot be loaded.',
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+    return;
+  }
+
+  try {
+    const detail = detailReadModel.getDecisionDetail(parsed.value);
+    if (detail === null) {
+      respondHtml(res, 404, renderStatusPage({
+        title: 'Decision Not Found',
+        detail: `No persisted decision detail exists for id=${parsed.value}.`,
+        statusLabel: '404 Not Found',
+        actions: '<a href="/">Back to dashboard</a>',
+      }));
+      return;
+    }
+
+    respondHtml(res, 200, renderDecisionDetailPage(detail));
+  } catch (err) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Decision Detail Unavailable',
+      detail: describeDetailError('decision', err),
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+  }
+}
+
+function handleStrategyDetail(
+  res: http.ServerResponse,
+  url: URL,
+  detailReadModel: OperatorDetailReadModel | null,
+  dbError: string | null,
+): void {
+  const strategyId = parseRequiredString(url, 'strategyId', 'strategyId');
+  if (!strategyId.ok) {
+    respondHtml(res, 400, renderStatusPage({
+      title: 'Malformed Strategy Request',
+      detail: strategyId.message,
+      statusLabel: '400 Bad Request',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+    return;
+  }
+
+  const strategyVersion = parseRequiredString(url, 'strategyVersion', 'strategyVersion');
+  if (!strategyVersion.ok) {
+    respondHtml(res, 400, renderStatusPage({
+      title: 'Malformed Strategy Request',
+      detail: strategyVersion.message,
+      statusLabel: '400 Bad Request',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+    return;
+  }
+
+  if (detailReadModel === null) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Strategy Detail Unavailable',
+      detail: dbError ?? 'Operator database is unavailable, so persisted strategy detail cannot be loaded.',
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+    return;
+  }
+
+  try {
+    const detail = detailReadModel.getStrategyDetail(strategyId.value, strategyVersion.value);
+    if (detail === null) {
+      respondHtml(res, 404, renderStatusPage({
+        title: 'Strategy Not Found',
+        detail: `No persisted strategy detail exists for ${strategyId.value}@${strategyVersion.value}.`,
+        statusLabel: '404 Not Found',
+        actions: '<a href="/">Back to dashboard</a>',
+      }));
+      return;
+    }
+
+    respondHtml(res, 200, renderStrategyDetailPage(detail));
+  } catch (err) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Strategy Detail Unavailable',
+      detail: describeDetailError('strategy', err),
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+  }
+}
+
+function handleBacktestDetail(
+  res: http.ServerResponse,
+  url: URL,
+  detailReadModel: OperatorDetailReadModel | null,
+  dbError: string | null,
+): void {
+  const parsed = parseRequiredInt(url, 'runId', 'runId');
+  if (!parsed.ok) {
+    respondHtml(res, 400, renderStatusPage({
+      title: 'Malformed Backtest Request',
+      detail: parsed.message,
+      statusLabel: '400 Bad Request',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+    return;
+  }
+
+  if (detailReadModel === null) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Backtest Detail Unavailable',
+      detail: dbError ?? 'Operator database is unavailable, so persisted backtest detail cannot be loaded.',
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+    return;
+  }
+
+  try {
+    const detail = detailReadModel.getBacktestDetail(parsed.value);
+    if (detail === null) {
+      respondHtml(res, 404, renderStatusPage({
+        title: 'Backtest Run Not Found',
+        detail: `No persisted backtest run detail exists for runId=${parsed.value}.`,
+        statusLabel: '404 Not Found',
+        actions: '<a href="/">Back to dashboard</a>',
+      }));
+      return;
+    }
+
+    respondHtml(res, 200, renderBacktestDetailPage(detail));
+  } catch (err) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Backtest Detail Unavailable',
+      detail: describeDetailError('backtest', err),
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to dashboard</a>',
+    }));
+  }
+}
+
 function handleApiRefresh(
   res: http.ServerResponse,
   readModel: OperatorReadModel | null,
@@ -210,9 +351,7 @@ function handleApiRefresh(
   try {
     const payload = fetchDashboardPayload(readModel, dbError);
     res.writeHead(200, { 'Content-Type': 'application/json' });
-
-    // Build a flat JSON response suitable for client-side polling
-    const jsonPayload = {
+    res.end(JSON.stringify({
       assembledAt: payload.assembledAt,
       dbAvailable: payload.dbAvailable,
       dbError: payload.dbError,
@@ -266,17 +405,16 @@ function handleApiRefresh(
           errorMessage: payload.walkForwardLeaderboard.errorMessage,
         },
       },
-    };
-
-    res.end(JSON.stringify(jsonPayload, null, 2));
+    }, null, 2));
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
     res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Query failed', detail: message }));
+    res.end(JSON.stringify({
+      error: 'Query failed',
+      detail: err instanceof Error ? err.message : 'Unknown error',
+    }));
   }
 }
 
-/** GET /api/health — authenticated health JSON with diagnostics. */
 function handleApiHealth(
   res: http.ServerResponse,
   config: OperatorUIConfig,
@@ -286,64 +424,42 @@ function handleApiHealth(
   readModel: OperatorReadModel | null,
 ): void {
   const dbOk = db !== null;
-
-  // Section-level diagnostics: each query independently reports success/failure
   const sections: Record<string, unknown> = {};
 
   if (readModel !== null) {
-    // Summary cards
     try {
       const cards = readModel.getSummaryCards();
       sections.summaryCards = { status: 'ok', count: cards.length };
     } catch (err) {
-      sections.summaryCards = {
-        status: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      };
+      sections.summaryCards = { status: 'error', error: err instanceof Error ? err.message : String(err) };
     }
 
-    // Decision performance
     try {
       const decisions = readModel.getDecisionPerformance(5);
       sections.recentDecisions = { status: 'ok', count: decisions.length };
     } catch (err) {
-      sections.recentDecisions = {
-        status: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      };
+      sections.recentDecisions = { status: 'error', error: err instanceof Error ? err.message : String(err) };
     }
 
-    // Strategy performance
     try {
       const strategies = readModel.getStrategyPerformance();
       sections.strategyPerformance = { status: 'ok', count: strategies.length };
     } catch (err) {
-      sections.strategyPerformance = {
-        status: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      };
+      sections.strategyPerformance = { status: 'error', error: err instanceof Error ? err.message : String(err) };
     }
 
-    // Ticker performance
     try {
       const tickers = readModel.getTickerPerformance();
       sections.tickerPerformance = { status: 'ok', count: tickers.length };
     } catch (err) {
-      sections.tickerPerformance = {
-        status: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      };
+      sections.tickerPerformance = { status: 'error', error: err instanceof Error ? err.message : String(err) };
     }
 
-    // Lifecycle
     try {
       const lifecycle = readModel.getLifecycleStates();
       sections.lifecycle = { status: 'ok', count: lifecycle.length };
     } catch (err) {
-      sections.lifecycle = {
-        status: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      };
+      sections.lifecycle = { status: 'error', error: err instanceof Error ? err.message : String(err) };
     }
   } else {
     sections.summaryCards = { status: 'unavailable', error: dbError ?? 'Read model not initialized' };
@@ -362,42 +478,41 @@ function handleApiHealth(
   }));
 }
 
-// ---------------------------------------------------------------------------
-// HTML renderers
-// ---------------------------------------------------------------------------
-
-/** Render an error HTML page. */
-function renderErrorHtml(title: string, detail: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHtml(title)}</title>
-<style>
-  body { font-family: sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
-  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-  p { color: #94a3b8; }
-  .error { color: #ef4444; }
-</style>
-</head>
-<body>
-<h1 class="error">${escapeHtml(title)}</h1>
-<p>${escapeHtml(detail)}</p>
-</body>
-</html>`;
+function parseRequiredInt(url: URL, key: string, label: string):
+  | { ok: true; value: number }
+  | { ok: false; message: string } {
+  const raw = url.searchParams.get(key);
+  if (raw === null || raw.trim() === '') {
+    return { ok: false, message: `Missing required query parameter: ${label}.` };
+  }
+  if (!/^\d+$/.test(raw.trim())) {
+    return { ok: false, message: `Invalid ${label}. Expected a positive integer.` };
+  }
+  return { ok: true, value: Number(raw.trim()) };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+function parseRequiredString(url: URL, key: string, label: string):
+  | { ok: true; value: string }
+  | { ok: false; message: string } {
+  const raw = url.searchParams.get(key);
+  if (raw === null) {
+    return { ok: false, message: `Missing required query parameter: ${label}.` };
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, message: `Invalid ${label}. Expected a non-empty string.` };
+  }
+  return { ok: true, value: trimmed };
+}
 
-/** Simple HTML entity escape (local copy for error pages). */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
+function describeDetailError(operation: 'decision' | 'strategy' | 'backtest', err: unknown): string {
+  if (err instanceof OperatorDetailReadModelError) {
+    return `Persisted ${operation} detail is temporarily unavailable because the operator read model could not compose the requested evidence.`;
+  }
+  return `Persisted ${operation} detail is temporarily unavailable due to an unexpected read failure.`;
+}
+
+function respondHtml(res: http.ServerResponse, statusCode: number, body: string): void {
+  res.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(body);
 }

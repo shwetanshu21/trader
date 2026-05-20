@@ -2978,3 +2978,371 @@ export interface OperatorWalkForwardLeaderboard {
   /** Provenance metadata. */
   provenance: OperatorProvenance;
 }
+
+// ---------------------------------------------------------------------------
+// Operator detail read-model DTOs — rationale-first drill-down contracts
+// ---------------------------------------------------------------------------
+
+/** Ordered strategy-decision reason rendered on a detail page. */
+export interface OperatorDecisionReasonDetail {
+  /** Machine-readable reason code. */
+  reasonCode: string;
+  /** Human-readable explanation. */
+  reasonMessage: string;
+}
+
+/** Ordered deterministic hybrid component evidence for a decision detail page. */
+export interface OperatorHybridComponentDetail {
+  /** Component name (e.g. 'momentum', 'volume'). */
+  componentName: string;
+  /** Component score (0-1). */
+  score: number;
+  /** Component weight in the deterministic aggregate. */
+  weight: number;
+  /** Stable display ordering. */
+  sortOrder: number;
+}
+
+/** Hybrid-scoring evidence block for a single decision detail page. */
+export interface OperatorHybridEvidenceDetail {
+  /** Hybrid summary row ID. */
+  summaryId: number;
+  /** Deterministic aggregate score (0-1). */
+  deterministicScore: number;
+  /** LLM score (0-1), or null. */
+  llmScore: number | null;
+  /** LLM consultation status. */
+  llmStatus: string;
+  /** Human-readable LLM rationale, or null. */
+  llmRationale: string | null;
+  /** Final merged score (0-1). */
+  mergedScore: number;
+  /** Merge policy used. */
+  mergePolicy: string;
+  /** ISO-8601 creation timestamp of the hybrid evidence row. */
+  createdAt: string;
+  /** Ordered component rows. */
+  components: OperatorHybridComponentDetail[];
+}
+
+/** Execution-attempt evidence block linked from a strategy decision detail page. */
+export interface OperatorExecutionAttemptDetail {
+  /** Execution attempt row ID. */
+  id: number;
+  /** Execution mode active when the attempt was recorded. */
+  executionMode: string;
+  /** Current execution status. */
+  status: string;
+  /** Outcome code, or null. */
+  outcomeCode: string | null;
+  /** Broker order ID, or null. */
+  brokerOrderId: string | null;
+  /** Human-readable attempt message. */
+  message: string;
+  /** ISO-8601 attempt timestamp. */
+  attemptedAt: string;
+  /** ISO-8601 completion timestamp, or null. */
+  completedAt: string | null;
+  /** Ordered refusal reasons (empty when not refused or none recorded). */
+  refusalReasons: OperatorDecisionReasonDetail[];
+}
+
+/** Realized-P&L evidence linked from a strategy decision detail page. */
+export interface OperatorDecisionRealizedPnlDetail {
+  /** Sum of realized P&L linked to this decision's execution attempt. */
+  realizedPnl: number;
+  /** Number of position-event rows that contributed to realizedPnl. */
+  eventCount: number;
+  /** Latest linked position event timestamp, or null. */
+  latestEventAt: string | null;
+  /** Current paper-position snapshot for the same instrument/product, or null. */
+  currentPosition: {
+    exchange: string;
+    tradingsymbol: string;
+    product: string;
+    side: string;
+    quantity: number;
+    avgCostPrice: number;
+    realizedPnl: number;
+    markPrice: number | null;
+    updatedAt: string;
+  } | null;
+}
+
+/** Operator-facing strategy decision drill-down contract. */
+export interface OperatorDecisionDetail {
+  /** Strategy decision row ID. */
+  decisionId: number;
+  /** Source proposal attempt ID. */
+  proposalAttemptId: number;
+  /** Decision status. */
+  decisionStatus: string;
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** ISO-8601 decision timestamp. */
+  decidedAt: string;
+  /** Ordered rationale-first reasons. */
+  reasons: OperatorDecisionReasonDetail[];
+  /** India research evidence persisted with the decision, or null. */
+  indiaResearchEvidence: IndiaResearchDecisionEvidence | null;
+  /** Canonical deterministic trade payload. */
+  trade: {
+    exchange: string;
+    tradingsymbol: string;
+    side: string;
+    product: string;
+    quantity: number;
+    price: number | null;
+    triggerPrice: number | null;
+    orderType: string;
+  };
+  /** Decision-time quote snapshot. */
+  quote: {
+    lastPrice: number | null;
+    bid: number | null;
+    ask: number | null;
+    volume: number | null;
+    receivedAt: string | null;
+  };
+  /** Decision-time risk metadata. */
+  risk: {
+    notional: number | null;
+    sizingBasis: string;
+    maxLossRupees: number | null;
+    stopDistance: number | null;
+    stopPrice: number | null;
+    trailingStopDistance: number | null;
+    riskBudgetRupees: number | null;
+    exposureTag: string | null;
+  };
+  /** Execution-class metadata required for downstream inspection. */
+  instrument: {
+    executionClass: string;
+    segment: string;
+    instrumentType: string;
+    expiry: string | null;
+    strike: number | null;
+    lotSize: number;
+    tickSize: number;
+    freezeQuantity: number | null;
+  };
+  /** Hybrid evidence, or null when absent. */
+  hybrid: OperatorHybridEvidenceDetail | null;
+  /** Linked execution attempt, or null when the decision is unconsumed. */
+  executionAttempt: OperatorExecutionAttemptDetail | null;
+  /** Realized P&L linkage, or null when no execution attempt exists. */
+  realizedPnl: OperatorDecisionRealizedPnlDetail | null;
+  /** Non-fatal diagnostics such as malformed optional JSON. */
+  diagnostics: string[];
+  /** Provenance metadata for this detail payload. */
+  provenance: OperatorProvenance;
+}
+
+/** Governance-history detail row for a strategy drill-down page. */
+export interface OperatorGovernanceDecisionDetail {
+  /** Governance decision row ID. */
+  id: number;
+  /** Market profile ID. */
+  marketId: string;
+  /** Governance verdict. */
+  verdict: string;
+  /** Previous lifecycle phase. */
+  previousPhase: string;
+  /** New lifecycle phase. */
+  newPhase: string;
+  /** Human-readable rationale. */
+  rationale: string;
+  /** Walk-forward winner row ID referenced by this governance event, or null. */
+  winnerId: number | null;
+  /** Parsed evidence JSON, or null when absent/malformed. */
+  evidence: Record<string, unknown> | null;
+  /** ISO-8601 timestamp when recorded. */
+  recordedAt: string;
+}
+
+/** Walk-forward summary row attached to a strategy detail page. */
+export interface OperatorStrategyWalkForwardDetail {
+  /** Walk-forward run row ID. */
+  runId: number;
+  /** Run label. */
+  label: string;
+  /** Market profile ID. */
+  marketId: string;
+  /** Run status. */
+  status: string;
+  /** Number of windows in the run. */
+  windowCount: number;
+  /** Total trials recorded for the run. */
+  totalTrials: number;
+  /** Winner row ID, or null when selection has not been persisted. */
+  winnerId: number | null;
+  /** Winner result, or null when selection has not been persisted. */
+  result: string | null;
+  /** Selection strategy, or null. */
+  selectionStrategy: string | null;
+  /** Selected trial ID, or null. */
+  selectedTrialId: number | null;
+  /** Selected trial label, or null. */
+  selectedTrialLabel: string | null;
+  /** Selected-trial merged score, or null. */
+  mergedScore: number | null;
+  /** Selected-trial Sharpe ratio, or null. */
+  sharpeRatio: number | null;
+  /** Selected-trial total return percentage, or null. */
+  totalReturnPct: number | null;
+  /** Selected-trial max drawdown percentage, or null. */
+  maxDrawdownPct: number | null;
+  /** Selected-trial win rate, or null. */
+  winRate: number | null;
+  /** Human-readable winner or hold rationale, or null. */
+  rationale: string | null;
+  /** ISO-8601 winner-selection timestamp, or null. */
+  selectedAt: string | null;
+}
+
+/** Operator-facing strategy drill-down contract keyed by strategyId + strategyVersion. */
+export interface OperatorStrategyDetail {
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Current performance summary for this strategy version across persisted trading evidence. */
+  performance: {
+    totalReturnPct: number;
+    sharpeRatio: number | null;
+    maxDrawdownPct: number | null;
+    tradeCount: number;
+    winRate: number | null;
+    profitFactor: number | null;
+    realizedPnl: number;
+    unrealizedPnl: number;
+  };
+  /** Recent per-decision execution outcomes for this strategy version. */
+  recentDecisions: OperatorDecisionPerformance[];
+  /** Current lifecycle states across all matching markets. */
+  currentStates: OperatorLifecycleState[];
+  /** Governance history across all matching markets. */
+  governanceHistory: OperatorGovernanceDecisionDetail[];
+  /** Promotion-only history across all matching markets. */
+  promotionHistory: OperatorPromotionHistory[];
+  /** Related walk-forward evidence across all matching markets. */
+  walkForwardRuns: OperatorStrategyWalkForwardDetail[];
+  /** Non-fatal diagnostics such as malformed governance evidence JSON. */
+  diagnostics: string[];
+  /** Provenance metadata for this detail payload. */
+  provenance: OperatorProvenance;
+}
+
+/** Parsed per-window evidence row shown on a backtest detail page. */
+export interface OperatorBacktestWindowEvidenceDetail {
+  /** Trial-window evidence row ID. */
+  id: number;
+  /** Parent trial row ID. */
+  trialId: number;
+  /** Parent window row ID. */
+  windowId: number;
+  /** In-sample or out-of-sample. */
+  windowType: string;
+  /** Trial window total return percentage. */
+  totalReturnPct: number;
+  /** Sharpe ratio, or null. */
+  sharpeRatio: number | null;
+  /** Max drawdown percentage, or null. */
+  maxDrawdownPct: number | null;
+  /** Win rate, or null. */
+  winRate: number | null;
+  /** Trade count. */
+  tradeCount: number;
+  /** Profit factor, or null. */
+  profitFactor: number | null;
+  /** Parsed metrics envelope, or null when absent/malformed. */
+  metrics: Record<string, unknown> | null;
+}
+
+/** Selected-trial detail block for a backtest drill-down page. */
+export interface OperatorBacktestSelectedTrialDetail {
+  /** Trial row ID. */
+  id: number;
+  /** Parent run row ID. */
+  runId: number;
+  /** 0-based trial index. */
+  trialIndex: number;
+  /** Trial label. */
+  label: string;
+  /** Parsed params JSON, or null when malformed. */
+  params: Record<string, unknown> | null;
+  /** Merged score. */
+  mergedScore: number;
+  /** Deterministic score. */
+  deterministicScore: number;
+  /** LLM score, or null. */
+  llmScore: number | null;
+  /** LLM consultation status, or null. */
+  llmStatus: string | null;
+  /** Rank within the run. */
+  rank: number;
+  /** Ordered per-window evidence. */
+  windowEvidence: OperatorBacktestWindowEvidenceDetail[];
+}
+
+/** Operator-facing backtest drill-down contract keyed by runId. */
+export interface OperatorBacktestDetail {
+  /** Walk-forward run row ID. */
+  runId: number;
+  /** Run label. */
+  label: string;
+  /** Strategy identity. */
+  strategyId: string;
+  /** Strategy version. */
+  strategyVersion: string;
+  /** Market profile ID. */
+  marketId: string;
+  /** Run status. */
+  status: string;
+  /** Number of windows in the run. */
+  windowCount: number;
+  /** Total trials in the run. */
+  totalTrials: number;
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+  /** ISO-8601 started timestamp, or null. */
+  startedAt: string | null;
+  /** ISO-8601 completed timestamp, or null. */
+  completedAt: string | null;
+  /** Winner row ID. */
+  winnerId: number;
+  /** Selection result (selected/no_winner/pending). */
+  result: string;
+  /** Selected trial ID, or null. */
+  selectedTrialId: number | null;
+  /** Selection strategy used. */
+  selectionStrategy: string;
+  /** Parsed selection config JSON, or null when malformed. */
+  selectionConfig: Record<string, unknown> | null;
+  /** Human-readable rationale. */
+  rationale: string;
+  /** Parsed artifact paths, or null when absent/malformed. */
+  artifactPaths: string[] | null;
+  /** ISO-8601 selection timestamp. */
+  selectedAt: string;
+  /** Selected trial detail, or null for no-winner outcomes. */
+  selectedTrial: OperatorBacktestSelectedTrialDetail | null;
+  /** Ranked candidates at selection time. */
+  rankedCandidates: Array<{
+    trialId: number;
+    rank: number;
+    label: string;
+    params: Record<string, unknown> | null;
+    mergedScore: number;
+    deterministicScore: number;
+    llmScore: number | null;
+    llmStatus: string | null;
+    windowCount: number;
+  }>;
+  /** Non-fatal diagnostics such as malformed optional JSON. */
+  diagnostics: string[];
+  /** Provenance metadata for this detail payload. */
+  provenance: OperatorProvenance;
+}

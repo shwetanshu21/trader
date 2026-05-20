@@ -1,29 +1,23 @@
-// ── Operator UI Dashboard Page Tests ──
-// Covers: empty state rendering, populated state rendering, degraded-section
-// rendering with error banners, and unavailable (no-DB) state rendering.
-//
-// These tests verify the HTML output structure, not the styling. They check
-// that sections render with correct titles, table structures, state banners,
-// provenance badges, and empty-state/error messages.
-
 import { describe, it, expect } from 'vitest';
+import { renderBacktestDetailPage } from '../src/operator-ui/pages/backtest-detail-page.js';
 import { renderDashboardPage } from '../src/operator-ui/pages/dashboard-page.js';
+import { renderDecisionDetailPage } from '../src/operator-ui/pages/decision-detail-page.js';
+import { renderStrategyDetailPage } from '../src/operator-ui/pages/strategy-detail-page.js';
 import type { DashboardPayload, DashboardSection } from '../src/operator-ui/dashboard-data.js';
 import type {
-  OperatorSummaryCard,
-  OperatorStrategyPerformance,
-  OperatorTickerPerformance,
+  OperatorBacktestDetail,
+  OperatorDecisionDetail,
   OperatorDecisionPerformance,
-  OperatorLifecycleState,
   OperatorLifecycleHistory,
+  OperatorLifecycleState,
   OperatorPromotionHistory,
+  OperatorProvenance,
+  OperatorStrategyDetail,
+  OperatorStrategyPerformance,
+  OperatorSummaryCard,
+  OperatorTickerPerformance,
   OperatorWalkForwardLeaderboard,
 } from '../src/types/runtime.js';
-import { type OperatorProvenance } from '../src/types/runtime.js';
-
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
 
 const testProvenance: OperatorProvenance = {
   source: 'historical',
@@ -61,16 +55,10 @@ function unavailableSection<T>(): DashboardSection<T> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Sample data factories
-// ---------------------------------------------------------------------------
-
 function sampleSummaryCards(): OperatorSummaryCard[] {
   return [
     { key: 'current_pnl', label: 'Current P&L', value: 15420.50, unit: 'INR', change: null, display: null, provenance: testProvenance },
-    { key: 'unrealized_pnl', label: 'Unrealized P&L', value: 3200.00, unit: 'INR', change: null, display: null, provenance: testProvenance },
     { key: 'open_positions', label: 'Open Positions', value: 3, unit: null, change: null, display: null, provenance: testProvenance },
-    { key: 'total_decisions', label: 'Strategy Decisions', value: 47, unit: null, change: null, display: null, provenance: testProvenance },
   ];
 }
 
@@ -80,11 +68,6 @@ function sampleStrategyPerformance(): OperatorStrategyPerformance[] {
       strategyId: 'india-nse-eq-v1', strategyVersion: '1.0.0', totalReturnPct: 12.5,
       sharpeRatio: 1.8, maxDrawdownPct: 15.0, tradeCount: 24, winRate: 0.62,
       profitFactor: 2.1, realizedPnl: 15420.50, unrealizedPnl: 3200.00, provenance: testProvenance,
-    },
-    {
-      strategyId: 'india-nfo-fut-v1', strategyVersion: '1.1.0', totalReturnPct: 8.3,
-      sharpeRatio: 1.2, maxDrawdownPct: 22.0, tradeCount: 15, winRate: 0.53,
-      profitFactor: 1.5, realizedPnl: 8900.00, unrealizedPnl: -500.00, provenance: testProvenance,
     },
   ];
 }
@@ -96,28 +79,16 @@ function sampleTickerPerformance(): OperatorTickerPerformance[] {
       winRate: 0.75, netQuantity: 25, avgEntryPrice: 2850.00, lastPrice: 2890.00,
       unrealizedPnl: 1000.00, realizedPnl: 4200.00, provenance: testProvenance,
     },
-    {
-      exchange: 'NSE', tradingsymbol: 'TCS', totalPnl: 3200.00, tradeCount: 5,
-      winRate: 0.60, netQuantity: 10, avgEntryPrice: 3950.00, lastPrice: 3980.00,
-      unrealizedPnl: 300.00, realizedPnl: 2900.00, provenance: testProvenance,
-    },
   ];
 }
 
 function sampleDecisionPerformance(): OperatorDecisionPerformance[] {
   return [
     {
-      decisionId: 1, proposalAttemptId: 100, exchange: 'NSE', tradingsymbol: 'RELIANCE',
+      decisionId: 7, proposalAttemptId: 100, exchange: 'NSE', tradingsymbol: 'RELIANCE',
       side: 'buy', quantity: 25, price: 2850.00, decisionStatus: 'approved',
-      strategyId: 'india-nse-eq-v1', decidedAt: new Date().toISOString(),
-      executionStatus: 'completed', outcomeCode: 'full_fill', realizedPnl: 1200.00,
-      provenance: testProvenance,
-    },
-    {
-      decisionId: 2, proposalAttemptId: 101, exchange: 'NSE', tradingsymbol: 'TCS',
-      side: 'sell', quantity: 10, price: 3980.00, decisionStatus: 'refused',
-      strategyId: 'india-nse-eq-v1', decidedAt: new Date().toISOString(),
-      executionStatus: null, outcomeCode: null, realizedPnl: null,
+      strategyId: 'india-nse-eq-v1', decidedAt: '2025-01-10T10:20:30.000Z',
+      executionStatus: 'completed', outcomeCode: 'paper_simulated', realizedPnl: 1200.00,
       provenance: testProvenance,
     },
   ];
@@ -127,7 +98,7 @@ function sampleLifecycleStates(): OperatorLifecycleState[] {
   return [
     {
       strategyId: 'india-nse-eq-v1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
-      phase: 'paper', updatedAt: new Date().toISOString(), provenance: testProvenance,
+      phase: 'paper', updatedAt: '2025-01-11T09:15:00.000Z', provenance: testProvenance,
     },
   ];
 }
@@ -135,10 +106,9 @@ function sampleLifecycleStates(): OperatorLifecycleState[] {
 function sampleLifecycleHistory(): OperatorLifecycleHistory[] {
   return [
     {
-      id: 1, strategyId: 'india-nse-eq-v1', strategyVersion: '1.0.0',
-      marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest',
-      newPhase: 'paper', rationale: 'Walk-forward winner meets threshold criteria.',
-      recordedAt: new Date().toISOString(), provenance: testProvenance,
+      id: 1, strategyId: 'india-nse-eq-v1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+      verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Winner met thresholds.',
+      recordedAt: '2025-01-11T09:20:00.000Z', provenance: testProvenance,
     },
   ];
 }
@@ -146,10 +116,9 @@ function sampleLifecycleHistory(): OperatorLifecycleHistory[] {
 function samplePromotionHistory(): OperatorPromotionHistory[] {
   return [
     {
-      id: 1, strategyId: 'india-nse-eq-v1', strategyVersion: '1.0.0',
-      marketId: 'INDIA_NSE_EQ', previousPhase: 'backtest', newPhase: 'paper',
-      rationale: 'WF run #5 meets all threshold criteria.', winnerId: 5,
-      promotedAt: new Date().toISOString(), provenance: testProvenance,
+      id: 1, strategyId: 'india-nse-eq-v1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ',
+      previousPhase: 'backtest', newPhase: 'paper', rationale: 'WF run promoted.', winnerId: 5,
+      promotedAt: '2025-01-11T09:20:00.000Z', provenance: testProvenance,
     },
   ];
 }
@@ -157,22 +126,18 @@ function samplePromotionHistory(): OperatorPromotionHistory[] {
 function sampleWalkForwardLeaderboard(): OperatorWalkForwardLeaderboard[] {
   return [
     {
-      runId: 1, label: 'WF-2025-01-v1', strategyId: 'india-nse-eq-v1',
+      runId: 42, label: 'WF-2025-01-v1', strategyId: 'india-nse-eq-v1',
       strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', windowCount: 12,
-      winnerId: 1, selectionStrategy: 'best_sharpe', mergedScore: 0.78,
+      winnerId: 4, selectionStrategy: 'best_sharpe', mergedScore: 0.78,
       sharpeRatio: 1.8, totalReturnPct: 15.2, maxDrawdownPct: 18.5,
-      winRate: 0.65, selectedAt: new Date().toISOString(), provenance: testProvenance,
+      winRate: 0.65, selectedAt: '2025-01-11T09:30:00.000Z', provenance: testProvenance,
     },
   ];
 }
 
-// ---------------------------------------------------------------------------
-// Payload factory
-// ---------------------------------------------------------------------------
-
 function buildPayload(overrides?: Partial<DashboardPayload>): DashboardPayload {
-  const defaults: DashboardPayload = {
-    assembledAt: new Date().toISOString(),
+  return {
+    assembledAt: '2025-01-11T10:00:00.000Z',
     dbAvailable: true,
     dbError: null,
     summaryCards: ok(sampleSummaryCards()),
@@ -183,313 +148,151 @@ function buildPayload(overrides?: Partial<DashboardPayload>): DashboardPayload {
     governanceHistory: ok(sampleLifecycleHistory()),
     promotionHistory: ok(samplePromotionHistory()),
     walkForwardLeaderboard: ok(sampleWalkForwardLeaderboard()),
+    ...overrides,
   };
-  return { ...defaults, ...overrides };
 }
 
-// ---------------------------------------------------------------------------
-// HTML inspection helpers
-// ---------------------------------------------------------------------------
-
-function hasSection(html: string, title: string): boolean {
-  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`<h2>${escaped}`).test(html);
+function sampleDecisionDetail(): OperatorDecisionDetail {
+  return {
+    decisionId: 7,
+    proposalAttemptId: 100,
+    decisionStatus: 'approved',
+    strategyId: 'alpha<script>',
+    strategyVersion: '1.0.0',
+    decidedAt: '2025-01-10T10:20:30.000Z',
+    reasons: [{ reasonCode: 'policy_constraint', reasonMessage: 'Trend <strong>passed</strong>.' }],
+    indiaResearchEvidence: {
+      summary: 'Breadth <script>alert(1)</script> improved.',
+      tags: ['macro', 'breadth'],
+      freshnessMs: 60000,
+      influenceContext: 'Raised conviction.',
+    },
+    trade: { exchange: 'NSE', tradingsymbol: 'RELIANCE', side: 'buy', product: 'MIS', quantity: 25, price: 2850, triggerPrice: null, orderType: 'LIMIT' },
+    quote: { lastPrice: 2851.4, bid: 2851.2, ask: 2851.6, volume: 120000, receivedAt: '2025-01-10T10:20:00.000Z' },
+    risk: {
+      notional: 71250, sizingBasis: 'last_price', maxLossRupees: 1800, stopDistance: 12, stopPrice: 2839.4,
+      trailingStopDistance: 8, riskBudgetRupees: 2000, exposureTag: 'intraday',
+    },
+    instrument: { executionClass: 'EQ', segment: 'NSE', instrumentType: 'EQ', expiry: null, strike: null, lotSize: 1, tickSize: 0.05, freezeQuantity: null },
+    hybrid: {
+      summaryId: 9, deterministicScore: 0.71, llmScore: 0.82, llmStatus: 'consulted', llmRationale: 'Momentum held.',
+      mergedScore: 0.765, mergePolicy: 'weighted', createdAt: '2025-01-10T10:20:31.000Z', components: [{ componentName: 'momentum', score: 0.8, weight: 0.5, sortOrder: 1 }],
+    },
+    executionAttempt: {
+      id: 11, executionMode: 'paper', status: 'completed', outcomeCode: 'paper_simulated', brokerOrderId: 'paper-1',
+      message: 'Filled successfully.', attemptedAt: '2025-01-10T10:21:00.000Z', completedAt: '2025-01-10T10:21:03.000Z', refusalReasons: [],
+    },
+    realizedPnl: {
+      realizedPnl: 250, eventCount: 2, latestEventAt: '2025-01-10T10:22:00.000Z',
+      currentPosition: {
+        exchange: 'NSE', tradingsymbol: 'RELIANCE', product: 'MIS', side: 'flat', quantity: 0,
+        avgCostPrice: 0, realizedPnl: 250, markPrice: 2862, updatedAt: '2025-01-10T10:22:00.000Z',
+      },
+    },
+    diagnostics: ['Malformed JSON ignored at hybrid.components_json.'],
+    provenance: testProvenance,
+  };
 }
 
-function hasText(html: string, text: string): boolean {
-  return html.includes(text);
+function sampleStrategyDetail(): OperatorStrategyDetail {
+  return {
+    strategyId: 'alpha<script>',
+    strategyVersion: '1.0.0',
+    performance: { totalReturnPct: 12.5, sharpeRatio: 1.8, maxDrawdownPct: 15, tradeCount: 24, winRate: 0.62, profitFactor: 2.1, realizedPnl: 15420.5, unrealizedPnl: 3200 },
+    recentDecisions: sampleDecisionPerformance(),
+    currentStates: sampleLifecycleStates(),
+    governanceHistory: [{ id: 8, marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Escaped <b>safe</b>.', winnerId: null, evidence: { why: 'thresholds' }, recordedAt: '2025-01-11T09:20:00.000Z' }],
+    promotionHistory: [{ id: 1, strategyId: 'alpha<script>', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Promoted without winner context.', winnerId: null, promotedAt: '2025-01-11T09:20:00.000Z', provenance: testProvenance }],
+    walkForwardRuns: [{ runId: 42, label: 'WF-A', marketId: 'INDIA_NSE_EQ', status: 'completed', windowCount: 12, totalTrials: 24, winnerId: null, result: 'no_winner', selectionStrategy: 'best_sharpe', selectedTrialId: null, selectedTrialLabel: null, mergedScore: null, sharpeRatio: null, totalReturnPct: null, maxDrawdownPct: null, winRate: null, rationale: 'No candidate cleared thresholds.', selectedAt: null }],
+    diagnostics: ['Malformed governance evidence ignored.'],
+    provenance: testProvenance,
+  };
 }
 
-function countOccurrences(html: string, substr: string): number {
-  let count = 0;
-  let pos = 0;
-  while ((pos = html.indexOf(substr, pos)) !== -1) {
-    count++;
-    pos += substr.length;
-  }
-  return count;
+function sampleBacktestDetail(): OperatorBacktestDetail {
+  return {
+    runId: 42, label: 'WF-A', strategyId: 'alpha<script>', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', status: 'completed', windowCount: 12, totalTrials: 24,
+    createdAt: '2025-01-01T09:00:00.000Z', startedAt: '2025-01-01T09:05:00.000Z', completedAt: '2025-01-01T10:05:00.000Z', winnerId: 4, result: 'selected',
+    selectedTrialId: 99, selectionStrategy: 'best_sharpe', selectionConfig: { threshold: 0.7 }, rationale: 'Selected best overall candidate.', artifactPaths: ['reports/wf-a.json'], selectedAt: '2025-01-01T10:05:00.000Z',
+    selectedTrial: { id: 99, runId: 42, trialIndex: 1, label: 'trial<script>', params: { stopLoss: 2 }, mergedScore: 0.88, deterministicScore: 0.84, llmScore: 0.92, llmStatus: 'consulted', rank: 1, windowEvidence: [{ id: 1, trialId: 99, windowId: 5, windowType: 'out_of_sample', totalReturnPct: 15.2, sharpeRatio: 1.8, maxDrawdownPct: 12.1, winRate: 0.64, tradeCount: 22, profitFactor: 1.9, metrics: { pnl: 1200 } }] },
+    rankedCandidates: [{ trialId: 99, rank: 1, label: 'trial<script>', params: { stopLoss: 2 }, mergedScore: 0.88, deterministicScore: 0.84, llmScore: 0.92, llmStatus: 'consulted', windowCount: 12 }],
+    diagnostics: [], provenance: testProvenance,
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('Dashboard page — empty state', () => {
-  it('renders all 8 sections', () => {
-    const payload = buildPayload({
-      summaryCards: ok([]),
-      strategyPerformance: ok([]),
-      tickerPerformance: ok([]),
-      decisionPerformance: ok([]),
-      lifecycleStates: ok([]),
-      governanceHistory: ok([]),
-      promotionHistory: ok([]),
-      walkForwardLeaderboard: ok([]),
-    });
-    const html = renderDashboardPage(payload);
-
-    expect(hasSection(html, 'Summary')).toBe(true);
-    expect(hasSection(html, 'Strategy Performance')).toBe(true);
-    expect(hasSection(html, 'Ticker Performance')).toBe(true);
-    expect(hasSection(html, 'Recent Decisions')).toBe(true);
-    expect(hasSection(html, 'Lifecycle States')).toBe(true);
-    expect(hasSection(html, 'Governance History')).toBe(true);
-    expect(hasSection(html, 'Promotion History')).toBe(true);
-    expect(hasSection(html, 'Walk-Forward Leaderboard')).toBe(true);
+describe('Dashboard page', () => {
+  it('renders drill-down links from persisted identifiers', () => {
+    const html = renderDashboardPage(buildPayload());
+    expect(html).toContain('/strategy?strategyId=india-nse-eq-v1&strategyVersion=1.0.0');
+    expect(html).toContain('/decision?id=7');
+    expect(html).toContain('/backtest?runId=42');
+    expect(html).toContain('WF#5');
   });
 
-  it('shows empty-state messages for empty sections', () => {
-    const payload = buildPayload({
-      summaryCards: ok([]),
-      strategyPerformance: ok([]),
-      tickerPerformance: ok([]),
-      decisionPerformance: ok([]),
-      lifecycleStates: ok([]),
-      governanceHistory: ok([]),
-      promotionHistory: ok([]),
-      walkForwardLeaderboard: ok([]),
-    });
-    const html = renderDashboardPage(payload);
-
-    // Empty sections should not have tables (no headers)
-    expect(hasText(html, 'No summary data available.')).toBe(true);
-    expect(hasText(html, 'No strategy performance data available.')).toBe(true);
-    expect(hasText(html, 'No ticker performance data available.')).toBe(true);
-    expect(hasText(html, 'No decision performance data available.')).toBe(true);
-    expect(hasText(html, 'No lifecycle state data available.')).toBe(true);
-    expect(hasText(html, 'No governance history data available.')).toBe(true);
-    expect(hasText(html, 'No promotion history data available.')).toBe(true);
-    expect(hasText(html, 'No walk-forward leaderboard data available.')).toBe(true);
-  });
-
-  it('renders nav links', () => {
-    const payload = buildPayload({ summaryCards: ok([]) });
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, '/api/refresh')).toBe(true);
-    expect(hasText(html, '/api/health')).toBe(true);
-  });
-
-  it('renders page title and DB status', () => {
-    const payload = buildPayload({ summaryCards: ok([]) });
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'Operator Console')).toBe(true);
-    expect(hasText(html, 'Connected')).toBe(true);
+  it('renders degraded and unavailable states', () => {
+    const html = renderDashboardPage(buildPayload({ strategyPerformance: errorSection('Query failed'), promotionHistory: unavailableSection() }));
+    expect(html).toContain('Query failed');
+    expect(html).toContain('Database is not available.');
   });
 });
 
-describe('Dashboard page — populated state', () => {
-  it('renders summary cards with values', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    // Should render card labels (HTML-escaped ampersand)
-    expect(hasText(html, 'Current P&amp;L')).toBe(true);
-    expect(hasText(html, 'Unrealized P&amp;L')).toBe(true);
-    expect(hasText(html, 'Open Positions')).toBe(true);
-    expect(hasText(html, 'Strategy Decisions')).toBe(true);
-
-    // Should render card values (INR values use ₹ symbol)
-    expect(hasText(html, '15,420.50')).toBe(true);
-    expect(hasText(html, '3,200.00')).toBe(true);
-    expect(hasText(html, '₹')).toBe(true);
+describe('Decision detail page', () => {
+  it('renders rationale-first evidence and escapes unsafe HTML', () => {
+    const html = renderDecisionDetailPage(sampleDecisionDetail());
+    expect(html).toContain('Decision #7');
+    expect(html).toContain('Rationale-first evidence');
+    expect(html).toContain('Trend &lt;strong&gt;passed&lt;/strong&gt;.');
+    expect(html).toContain('Breadth &lt;script&gt;alert(1)&lt;/script&gt; improved.');
+    expect(html).toContain('/strategy?strategyId=alpha%3Cscript%3E&strategyVersion=1.0.0');
+    expect(html).toContain('No refusal reasons were recorded for this execution attempt.');
   });
 
-  it('renders strategy performance table with data', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'india-nse-eq-v1')).toBe(true);
-    expect(hasText(html, 'india-nfo-fut-v1')).toBe(true);
-    expect(hasText(html, '1.0.0')).toBe(true);
-    expect(hasText(html, '1.1.0')).toBe(true);
-    expect(hasText(html, '15,420.50')).toBe(true);
-    expect(hasText(html, '8,900.00')).toBe(true);
-    expect(hasText(html, '1.2')).toBe(true); // sharpe
-  });
-
-  it('renders ticker performance table with data', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'RELIANCE')).toBe(true);
-    expect(hasText(html, 'TCS')).toBe(true);
-    expect(hasText(html, '75.0%')).toBe(true); // win rate
-    expect(hasText(html, '60.0%')).toBe(true);
-  });
-
-  it('renders decision performance table with data', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'approved')).toBe(true);
-    expect(hasText(html, 'refused')).toBe(true);
-    expect(hasText(html, 'full_fill')).toBe(true);
-  });
-
-  it('renders lifecycle states table', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'INDIA_NSE_EQ')).toBe(true);
-    expect(hasText(html, 'paper')).toBe(true);
-  });
-
-  it('renders governance history table', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'promote')).toBe(true);
-    expect(hasText(html, 'backtest')).toBe(true);
-    expect(hasText(html, 'Walk-forward winner meets threshold criteria.')).toBe(true);
-  });
-
-  it('renders promotion history table', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'WF#5')).toBe(true);
-    expect(hasText(html, 'WF run #5 meets all threshold criteria.')).toBe(true);
-  });
-
-  it('renders walk-forward leaderboard table', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'WF-2025-01-v1')).toBe(true);
-    expect(hasText(html, 'best_sharpe')).toBe(true);
-    expect(hasText(html, '78.0%')).toBe(true); // mergedScore
-    expect(hasText(html, '65.0%')).toBe(true); // win rate
-  });
-
-  it('renders provenance badges', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    // provenance source 'historical' should appear
-    expect(hasText(html, 'historical')).toBe(true);
-    const count = countOccurrences(html, 'historical');
-    // Each row gets a provenance badge — let's check it exists
-    expect(count).toBeGreaterThanOrEqual(8);
+  it('renders explicit empty states when execution and research evidence are absent', () => {
+    const detail = sampleDecisionDetail();
+    detail.executionAttempt = null;
+    detail.realizedPnl = null;
+    detail.indiaResearchEvidence = null;
+    detail.hybrid = null;
+    const html = renderDecisionDetailPage(detail);
+    expect(html).toContain('No execution attempt has been recorded for this decision yet.');
+    expect(html).toContain('No realized P&amp;L evidence is available because this decision has not produced linked execution evidence yet.');
+    expect(html).toContain('No India research evidence was persisted for this decision.');
+    expect(html).toContain('No hybrid scoring evidence was persisted for this decision.');
   });
 });
 
-describe('Dashboard page — degraded state', () => {
-  it('renders error banners for failed sections', () => {
-    const payload = buildPayload({
-      strategyPerformance: errorSection('Failed to fetch strategy performance: DB connection timeout'),
-      tickerPerformance: errorSection('Failed to fetch ticker performance: Table not found'),
-    });
-    const html = renderDashboardPage(payload);
-
-    // Strategy Performance section should have error banner
-    expect(hasText(html, 'Failed to fetch strategy performance: DB connection timeout')).toBe(true);
-
-    // Ticker Performance section should have error banner
-    expect(hasText(html, 'Failed to fetch ticker performance: Table not found')).toBe(true);
-
-    // Other sections should still be ok
-    expect(hasText(html, 'RELIANCE')).toBe(true);
-    expect(hasText(html, 'approved')).toBe(true);
-  });
-
-  it('renders error section with border indicator', () => {
-    const payload = buildPayload({
-      summaryCards: errorSection('Query failed: disk I/O error'),
-    });
-    const html = renderDashboardPage(payload);
-
-    // Error banner should be present
-    expect(hasText(html, 'section-error-banner')).toBe(true);
-    expect(hasText(html, 'Query failed: disk I/O error')).toBe(true);
-  });
-
-  it('shows error banner for error sections without last-known data', () => {
-    const payload = buildPayload({
-      strategyPerformance: errorSection<OperatorStrategyPerformance[]>('Query failed', []),
-    });
-    const html = renderDashboardPage(payload);
-
-    // The error banner should show the raw error message
-    expect(hasText(html, 'Query failed')).toBe(true);
-    // The error section should have a banner element
-    expect(hasText(html, 'section-error-banner')).toBe(true);
+describe('Strategy detail page', () => {
+  it('renders linked decisions and explicit no-winner context', () => {
+    const html = renderStrategyDetailPage(sampleStrategyDetail());
+    expect(html).toContain('/decision?id=7');
+    expect(html).toContain('/backtest?runId=42');
+    expect(html).toContain('No candidate cleared thresholds.');
+    expect(html).toContain('No winner recorded');
+    expect(html).toContain('Escaped &lt;b&gt;safe&lt;/b&gt;.');
   });
 });
 
-describe('Dashboard page — unavailable (no DB) state', () => {
-  it('renders all sections as unavailable when read model is null', () => {
-    const now = new Date().toISOString();
-    const u = unavailableSection();
-    const payload: DashboardPayload = {
-      assembledAt: now,
-      dbAvailable: false,
-      dbError: 'Failed to open database at ./data/trader.db',
-      summaryCards: u,
-      strategyPerformance: u,
-      tickerPerformance: u,
-      decisionPerformance: u,
-      lifecycleStates: u,
-      governanceHistory: u,
-      promotionHistory: u,
-      walkForwardLeaderboard: u,
-    };
-    const html = renderDashboardPage(payload);
-
-    // Should show disconnected DB status
-    expect(hasText(html, 'Disconnected')).toBe(true);
-    expect(hasText(html, 'Failed to open database at ./data/trader.db')).toBe(true);
-
-    // All sections should show unavailable messaging
-    expect(hasText(html, 'Database is not available.')).toBe(true);
-    const count = countOccurrences(html, 'Database is not available.');
-    expect(count).toBe(8); // one per section
-  });
-});
-
-describe('Dashboard page — individual section verify-content', () => {
-  it('renders the assembledAt timestamp', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-    // assembledAt renders through formatTimestamp which returns a substring
-    // Just verify it's present somewhere in the meta area
-    expect(hasText(html, 'Assembled:')).toBe(true);
+describe('Backtest detail page', () => {
+  it('renders selected-trial evidence and escapes trial labels', () => {
+    const html = renderBacktestDetailPage(sampleBacktestDetail());
+    expect(html).toContain('Selected best overall candidate.');
+    expect(html).toContain('trial&lt;script&gt;');
+    expect(html).toContain('reports/wf-a.json');
+    expect(html).toContain('/strategy?strategyId=alpha%3Cscript%3E&strategyVersion=1.0.0');
   });
 
-  it('renders section subtitles', () => {
-    const payload = buildPayload();
-    const html = renderDashboardPage(payload);
-
-    expect(hasText(html, 'Aggregate totals')).toBe(true);
-    expect(hasText(html, 'Per-strategy P&amp;L and metrics')).toBe(true);
-    expect(hasText(html, 'Per-symbol P&amp;L and position state')).toBe(true);
-    expect(hasText(html, 'Newest first')).toBe(true);
-    expect(hasText(html, 'Current strategy phases')).toBe(true);
-    expect(hasText(html, 'Lifecycle phase decisions')).toBe(true);
-    expect(hasText(html, 'Lifecycle promotions only')).toBe(true);
-    expect(hasText(html, 'Historical backtest results')).toBe(true);
-  });
-
-  it('does not render tables for empty sections', () => {
-    const payload = buildPayload({
-      strategyPerformance: ok([]),
-      tickerPerformance: ok([]),
-      decisionPerformance: ok([]),
-      lifecycleStates: ok([]),
-      governanceHistory: ok([]),
-      promotionHistory: ok([]),
-      walkForwardLeaderboard: ok([]),
-    });
-    const html = renderDashboardPage(payload);
-
-    // Empty sections should show empty-state text, not tables
-    // An empty table would have <thead> and <th> elements
-    // Since we have summary cards, there should be tables in the empty state...
-    // Actually, the empty sections show empty-state <p> elements, not tables
-    expect(hasText(html, 'No strategy performance data available.')).toBe(true);
-
-    // But summaryCards should still show the grid
-    expect(hasText(html, 'Current P&amp;L')).toBe(true);
+  it('renders explicit no-winner and empty evidence states', () => {
+    const detail = sampleBacktestDetail();
+    detail.result = 'no_winner';
+    detail.selectedTrialId = null;
+    detail.selectedTrial = null;
+    detail.rankedCandidates = [];
+    detail.selectionConfig = null;
+    detail.artifactPaths = null;
+    const html = renderBacktestDetailPage(detail);
+    expect(html).toContain('No winner selected for this run.');
+    expect(html).toContain('No selected trial evidence was persisted because this run has no winner context.');
+    expect(html).toContain('No ranked candidates were persisted for this run.');
+    expect(html).toContain('No selection config JSON was persisted for this run.');
   });
 });

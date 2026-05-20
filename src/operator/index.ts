@@ -25,6 +25,7 @@ export type { OpenOperatorDbResult } from './read-only-db.js';
 
 // ── Read model ─────────────────────────────────────────────────────────
 export { OperatorReadModel } from './operator-read-model.js';
+export { OperatorDetailReadModel, OperatorDetailReadModelError } from './operator-detail-read-model.js';
 
 // ── Operator DTOs ──────────────────────────────────────────────────────
 export type {
@@ -37,4 +38,16 @@ export type {
   OperatorLifecycleHistory,
   OperatorPromotionHistory,
   OperatorWalkForwardLeaderboard,
+  OperatorDecisionReasonDetail,
+  OperatorHybridComponentDetail,
+  OperatorHybridEvidenceDetail,
+  OperatorExecutionAttemptDetail,
+  OperatorDecisionRealizedPnlDetail,
+  OperatorDecisionDetail,
+  OperatorGovernanceDecisionDetail,
+  OperatorStrategyWalkForwardDetail,
+  OperatorStrategyDetail,
+  OperatorBacktestWindowEvidenceDetail,
+  OperatorBacktestSelectedTrialDetail,
+  OperatorBacktestDetail,
 } from '../types/runtime.js';
