@@ -32,6 +32,7 @@ function ok<T>(data: T): DashboardSection<T> {
     errorMessage: null,
     stalenessMs: null,
     lastFetchedAt: new Date().toISOString(),
+    isCachedData: false,
   };
 }
 
@@ -42,6 +43,7 @@ function errorSection<T>(message: string, lastKnown?: T): DashboardSection<T> {
     errorMessage: message,
     stalenessMs: null,
     lastFetchedAt: null,
+    isCachedData: false,
   };
 }
 
@@ -52,6 +54,7 @@ function unavailableSection<T>(): DashboardSection<T> {
     errorMessage: 'Database is not available.',
     stalenessMs: null,
     lastFetchedAt: null,
+    isCachedData: false,
   };
 }
 
@@ -233,6 +236,22 @@ describe('Dashboard page', () => {
     const html = renderDashboardPage(buildPayload({ strategyPerformance: errorSection('Query failed'), promotionHistory: unavailableSection() }));
     expect(html).toContain('Query failed');
     expect(html).toContain('Database is not available.');
+  });
+
+  it('renders stale sections with preserved rows and warning banner', () => {
+    const html = renderDashboardPage(buildPayload({
+      strategyPerformance: {
+        state: 'stale',
+        data: sampleStrategyPerformance(),
+        errorMessage: 'Failed to refresh strategy performance: timeout',
+        stalenessMs: 45_000,
+        lastFetchedAt: '2025-01-11T09:59:15.000Z',
+        isCachedData: true,
+      },
+    }));
+    expect(html).toContain('Data may be stale');
+    expect(html).toContain('india-nse-eq-v1');
+    expect(html).toContain('45s ago');
   });
 });
 

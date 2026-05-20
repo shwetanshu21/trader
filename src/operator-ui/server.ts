@@ -12,7 +12,7 @@ import {
 } from './auth.js';
 import type { OperatorReadModel } from '../operator/operator-read-model.js';
 import { OperatorDetailReadModel, OperatorDetailReadModelError } from '../operator/operator-detail-read-model.js';
-import { fetchDashboardPayload } from './dashboard-data.js';
+import { DashboardPayloadAssembler } from './dashboard-data.js';
 import { renderStatusPage } from './render-utils.js';
 import { renderBacktestDetailPage } from './pages/backtest-detail-page.js';
 import { renderDashboardPage } from './pages/dashboard-page.js';
@@ -31,6 +31,7 @@ export interface OperatorUIServerOptions {
 export function createOperatorUIServer(options: OperatorUIServerOptions): http.Server {
   const { config, authenticator, db, dbError, readModel } = options;
   const detailReadModel = options.detailReadModel ?? (db !== null ? new OperatorDetailReadModel(db) : null);
+  const dashboardPayloadAssembler = new DashboardPayloadAssembler();
   const corsOrigin = `http://${config.host === '0.0.0.0' ? '127.0.0.1' : config.host}`;
 
   return http.createServer((req, res) => {
@@ -55,7 +56,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleDashboardHtml(res, readModel, dbError);
+          handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError);
           return;
         }
 
@@ -83,7 +84,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/api/refresh': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleApiRefresh(res, readModel, dbError);
+          handleApiRefresh(res, dashboardPayloadAssembler, readModel, dbError);
           return;
         }
 
@@ -150,6 +151,7 @@ function handleLiveness(
 
 function handleDashboardHtml(
   res: http.ServerResponse,
+  dashboardPayloadAssembler: DashboardPayloadAssembler,
   readModel: OperatorReadModel | null,
   dbError: string | null,
 ): void {
@@ -164,7 +166,7 @@ function handleDashboardHtml(
   }
 
   try {
-    const payload = fetchDashboardPayload(readModel, dbError);
+    const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
     respondHtml(res, 200, renderDashboardPage(payload));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
@@ -339,71 +341,27 @@ function handleBacktestDetail(
 
 function handleApiRefresh(
   res: http.ServerResponse,
+  dashboardPayloadAssembler: DashboardPayloadAssembler,
   readModel: OperatorReadModel | null,
   dbError: string | null,
 ): void {
-  if (readModel === null) {
-    res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Database unavailable', detail: dbError }));
-    return;
-  }
-
   try {
-    const payload = fetchDashboardPayload(readModel, dbError);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
+    res.writeHead(payload.dbAvailable ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       assembledAt: payload.assembledAt,
       dbAvailable: payload.dbAvailable,
       dbError: payload.dbError,
+      error: payload.dbAvailable ? null : 'Database unavailable',
       sections: {
-        summaryCards: {
-          state: payload.summaryCards.state,
-          count: payload.summaryCards.data.length,
-          data: payload.summaryCards.data,
-          errorMessage: payload.summaryCards.errorMessage,
-        },
-        strategyPerformance: {
-          state: payload.strategyPerformance.state,
-          count: payload.strategyPerformance.data.length,
-          data: payload.strategyPerformance.data,
-          errorMessage: payload.strategyPerformance.errorMessage,
-        },
-        tickerPerformance: {
-          state: payload.tickerPerformance.state,
-          count: payload.tickerPerformance.data.length,
-          data: payload.tickerPerformance.data,
-          errorMessage: payload.tickerPerformance.errorMessage,
-        },
-        decisionPerformance: {
-          state: payload.decisionPerformance.state,
-          count: payload.decisionPerformance.data.length,
-          data: payload.decisionPerformance.data,
-          errorMessage: payload.decisionPerformance.errorMessage,
-        },
-        lifecycleStates: {
-          state: payload.lifecycleStates.state,
-          count: payload.lifecycleStates.data.length,
-          data: payload.lifecycleStates.data,
-          errorMessage: payload.lifecycleStates.errorMessage,
-        },
-        governanceHistory: {
-          state: payload.governanceHistory.state,
-          count: payload.governanceHistory.data.length,
-          data: payload.governanceHistory.data,
-          errorMessage: payload.governanceHistory.errorMessage,
-        },
-        promotionHistory: {
-          state: payload.promotionHistory.state,
-          count: payload.promotionHistory.data.length,
-          data: payload.promotionHistory.data,
-          errorMessage: payload.promotionHistory.errorMessage,
-        },
-        walkForwardLeaderboard: {
-          state: payload.walkForwardLeaderboard.state,
-          count: payload.walkForwardLeaderboard.data.length,
-          data: payload.walkForwardLeaderboard.data,
-          errorMessage: payload.walkForwardLeaderboard.errorMessage,
-        },
+        summaryCards: serializeDashboardSection(payload.summaryCards),
+        strategyPerformance: serializeDashboardSection(payload.strategyPerformance),
+        tickerPerformance: serializeDashboardSection(payload.tickerPerformance),
+        decisionPerformance: serializeDashboardSection(payload.decisionPerformance),
+        lifecycleStates: serializeDashboardSection(payload.lifecycleStates),
+        governanceHistory: serializeDashboardSection(payload.governanceHistory),
+        promotionHistory: serializeDashboardSection(payload.promotionHistory),
+        walkForwardLeaderboard: serializeDashboardSection(payload.walkForwardLeaderboard),
       },
     }, null, 2));
   } catch (err) {
@@ -413,6 +371,25 @@ function handleApiRefresh(
       detail: err instanceof Error ? err.message : 'Unknown error',
     }));
   }
+}
+
+function serializeDashboardSection<T extends { length: number }>(section: {
+  state: string;
+  data: T;
+  errorMessage: string | null;
+  stalenessMs: number | null;
+  lastFetchedAt: string | null;
+  isCachedData: boolean;
+}) {
+  return {
+    state: section.state,
+    count: section.data.length,
+    data: section.data,
+    errorMessage: section.errorMessage,
+    stalenessMs: section.stalenessMs,
+    lastFetchedAt: section.lastFetchedAt,
+    isCachedData: section.isCachedData,
+  };
 }
 
 function handleApiHealth(

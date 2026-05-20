@@ -1,10 +1,9 @@
 // ── Dashboard data orchestrator ──
 // Per-section query isolation so failures in one section don't crash the page.
-// Each section carries its own state (ok/error/stale/unavailable), error message,
-// and last-known data for graceful degradation.
-//
-// Consumption: the HTML page and JSON refresh surface both call
-// `fetchDashboardPayload()` and receive identical section-shaped results.
+// The server-owned assembler below preserves the last successful rows for each
+// section and truthfully degrades later section failures to `stale` while still
+// reserving `error` for no-cache failures and `unavailable` for DB-open/read-
+// model absence.
 
 import type { OperatorReadModel } from '../operator/operator-read-model.js';
 import type {
@@ -18,215 +17,258 @@ import type {
   OperatorWalkForwardLeaderboard,
 } from '../types/runtime.js';
 
-// ---------------------------------------------------------------------------
-// Section state types
-// ---------------------------------------------------------------------------
-
-/**
- * State of a single dashboard section.
- * - 'ok': Data was fetched successfully.
- * - 'error': Query failed; lastKnownData may be preserved.
- * - 'stale': Data is stale; re-query is needed.
- * - 'unavailable': Read model is not available (no DB connection).
- */
 export type SectionState = 'ok' | 'error' | 'stale' | 'unavailable';
 
-/**
- * A single dashboard section with state, data, and diagnostics.
- */
 export interface DashboardSection<T> {
-  /** Current section state. */
   state: SectionState;
-  /** Fresh data for this section (null on error/unavailable). */
   data: T;
-  /** Error message when state is 'error'. */
   errorMessage: string | null;
-  /** Staleness in ms when state is 'stale'. */
   stalenessMs: number | null;
-  /** ISO‑8601 timestamp when this section was last successfully fetched. */
   lastFetchedAt: string | null;
+  isCachedData: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Dashboard payload — one section per read model method
-// ---------------------------------------------------------------------------
-
-/**
- * Complete dashboard payload with section isolation.
- */
 export interface DashboardPayload {
-  /** ISO‑8601 timestamp when this payload was assembled. */
   assembledAt: string;
-  /** Summary cards (aggregate totals). */
   summaryCards: DashboardSection<OperatorSummaryCard[]>;
-  /** Per-strategy performance. */
   strategyPerformance: DashboardSection<OperatorStrategyPerformance[]>;
-  /** Per-ticker performance. */
   tickerPerformance: DashboardSection<OperatorTickerPerformance[]>;
-  /** Recent decision performance. */
   decisionPerformance: DashboardSection<OperatorDecisionPerformance[]>;
-  /** Current lifecycle states. */
   lifecycleStates: DashboardSection<OperatorLifecycleState[]>;
-  /** Lifecycle governance history. */
   governanceHistory: DashboardSection<OperatorLifecycleHistory[]>;
-  /** Promotion-only history. */
   promotionHistory: DashboardSection<OperatorPromotionHistory[]>;
-  /** Walk-forward leaderboard. */
   walkForwardLeaderboard: DashboardSection<OperatorWalkForwardLeaderboard[]>;
-  /** Whether the database was accessible at assembly time. */
   dbAvailable: boolean;
-  /** Database error message when unavailable. */
   dbError: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+type DashboardSectionMap = Pick<
+  DashboardPayload,
+  | 'summaryCards'
+  | 'strategyPerformance'
+  | 'tickerPerformance'
+  | 'decisionPerformance'
+  | 'lifecycleStates'
+  | 'governanceHistory'
+  | 'promotionHistory'
+  | 'walkForwardLeaderboard'
+>;
 
-/** Create an ok section with fetched data. */
-function ok<T>(data: T): DashboardSection<T> {
+type SectionKey = keyof DashboardSectionMap;
+
+type CachedSectionValue<T> = {
+  data: T;
+  lastFetchedAtMs: number;
+};
+
+type SectionDefinition<K extends SectionKey, T extends DashboardSectionMap[K]['data']> = {
+  key: K;
+  label: string;
+  empty: T;
+  fetch: (readModel: OperatorReadModel) => T;
+};
+
+const SECRET_PATTERN = /(authorization|token|secret|password|api[-_ ]?key)\s*[:=]\s*([^,;\s]+)/gi;
+const BEARER_PATTERN = /bearer\s+[a-z0-9._-]+/gi;
+const BASIC_PATTERN = /basic\s+[a-z0-9+/=._-]+/gi;
+
+function sanitizeDiagnostic(label: string, err: unknown): string {
+  const rawMessage = err instanceof Error
+    ? err.message
+    : typeof err === 'string'
+      ? err
+      : 'Unknown operator read failure';
+
+  const redacted = rawMessage
+    .replace(SECRET_PATTERN, (_match, key) => `${String(key)}=[redacted]`)
+    .replace(BEARER_PATTERN, 'Bearer [redacted]')
+    .replace(BASIC_PATTERN, 'Basic [redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+
+  return redacted.length > 0
+    ? `Failed to refresh ${label}: ${redacted}`
+    : `Failed to refresh ${label}.`;
+}
+
+function ensureArrayResult<T>(label: string, value: T[] | null | undefined): T[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} query returned malformed rows.`);
+  }
+  return value;
+}
+
+function toIso(timestampMs: number): string {
+  return new Date(timestampMs).toISOString();
+}
+
+function okSection<T>(data: T, fetchedAtMs: number): DashboardSection<T> {
   return {
     state: 'ok',
     data,
     errorMessage: null,
-    stalenessMs: null,
-    lastFetchedAt: new Date().toISOString(),
+    stalenessMs: 0,
+    lastFetchedAt: toIso(fetchedAtMs),
+    isCachedData: false,
   };
 }
 
-/** Create an error section, optionally preserving last-known data. */
-function error<T>(message: string, lastKnown?: T): DashboardSection<T> {
+function staleSection<T>(cached: CachedSectionValue<T>, message: string, nowMs: number): DashboardSection<T> {
+  return {
+    state: 'stale',
+    data: cached.data,
+    errorMessage: message,
+    stalenessMs: Math.max(0, nowMs - cached.lastFetchedAtMs),
+    lastFetchedAt: toIso(cached.lastFetchedAtMs),
+    isCachedData: true,
+  };
+}
+
+function errorSection<T>(empty: T, message: string): DashboardSection<T> {
   return {
     state: 'error',
-    data: lastKnown ?? ([] as unknown as T),
+    data: empty,
     errorMessage: message,
     stalenessMs: null,
     lastFetchedAt: null,
+    isCachedData: false,
   };
 }
 
-/** Create an unavailable section (read model is null). */
-function unavailable<T>(): DashboardSection<T> {
+function unavailableSection<T>(empty: T, message: string): DashboardSection<T> {
   return {
     state: 'unavailable',
-    data: [] as unknown as T,
-    errorMessage: 'Database is not available.',
+    data: empty,
+    errorMessage: message,
     stalenessMs: null,
     lastFetchedAt: null,
+    isCachedData: false,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Section fetch wrappers
-// ---------------------------------------------------------------------------
+const SECTION_DEFINITIONS: {
+  [K in SectionKey]: SectionDefinition<K, DashboardSectionMap[K]['data']>;
+} = {
+  summaryCards: {
+    key: 'summaryCards',
+    label: 'summary cards',
+    empty: [],
+    fetch: readModel => ensureArrayResult('summary cards', readModel.getSummaryCards()),
+  },
+  strategyPerformance: {
+    key: 'strategyPerformance',
+    label: 'strategy performance',
+    empty: [],
+    fetch: readModel => ensureArrayResult('strategy performance', readModel.getStrategyPerformance()),
+  },
+  tickerPerformance: {
+    key: 'tickerPerformance',
+    label: 'ticker performance',
+    empty: [],
+    fetch: readModel => ensureArrayResult('ticker performance', readModel.getTickerPerformance()),
+  },
+  decisionPerformance: {
+    key: 'decisionPerformance',
+    label: 'decision performance',
+    empty: [],
+    fetch: readModel => ensureArrayResult('decision performance', readModel.getDecisionPerformance(50)),
+  },
+  lifecycleStates: {
+    key: 'lifecycleStates',
+    label: 'lifecycle states',
+    empty: [],
+    fetch: readModel => ensureArrayResult('lifecycle states', readModel.getLifecycleStates()),
+  },
+  governanceHistory: {
+    key: 'governanceHistory',
+    label: 'governance history',
+    empty: [],
+    fetch: readModel => ensureArrayResult('governance history', readModel.getLifecycleHistory(20)),
+  },
+  promotionHistory: {
+    key: 'promotionHistory',
+    label: 'promotion history',
+    empty: [],
+    fetch: readModel => ensureArrayResult('promotion history', readModel.getPromotionHistory(20)),
+  },
+  walkForwardLeaderboard: {
+    key: 'walkForwardLeaderboard',
+    label: 'walk-forward leaderboard',
+    empty: [],
+    fetch: readModel => ensureArrayResult('walk-forward leaderboard', readModel.getWalkForwardLeaderboard()),
+  },
+};
 
-/**
- * Fetch a section with try/catch isolation.
- *
- * Each query runs independently. If one query fails, the others still return
- * their results. The failed section carries an error message and the caller
- * can optionally provide last-known data for graceful degradation.
- *
- * @param fetch - A function that returns the section data.
- * @param label - Label for error messages (e.g. 'summary cards').
- * @returns A DashboardSection with state 'ok' or 'error'.
- */
-function fetchSection<T>(
-  fetch: () => T,
-  label: string,
-): DashboardSection<T> {
-  try {
-    const data = fetch();
-    return ok(data);
-  } catch (err) {
-    const message = err instanceof Error
-      ? `Failed to fetch ${label}: ${err.message}`
-      : `Failed to fetch ${label}: Unknown error`;
-    return error<T>(message);
+function buildUnavailablePayload(assembledAt: string, dbError: string | null): DashboardPayload {
+  const message = dbError ?? 'Database is not available.';
+  return {
+    assembledAt,
+    dbAvailable: false,
+    dbError,
+    summaryCards: unavailableSection(SECTION_DEFINITIONS.summaryCards.empty, message),
+    strategyPerformance: unavailableSection(SECTION_DEFINITIONS.strategyPerformance.empty, message),
+    tickerPerformance: unavailableSection(SECTION_DEFINITIONS.tickerPerformance.empty, message),
+    decisionPerformance: unavailableSection(SECTION_DEFINITIONS.decisionPerformance.empty, message),
+    lifecycleStates: unavailableSection(SECTION_DEFINITIONS.lifecycleStates.empty, message),
+    governanceHistory: unavailableSection(SECTION_DEFINITIONS.governanceHistory.empty, message),
+    promotionHistory: unavailableSection(SECTION_DEFINITIONS.promotionHistory.empty, message),
+    walkForwardLeaderboard: unavailableSection(SECTION_DEFINITIONS.walkForwardLeaderboard.empty, message),
+  };
+}
+
+export class DashboardPayloadAssembler {
+  private readonly cache = new Map<SectionKey, CachedSectionValue<unknown>>();
+
+  fetchDashboardPayload(
+    readModel: OperatorReadModel | null,
+    dbError: string | null,
+    nowMs = Date.now(),
+  ): DashboardPayload {
+    const assembledAt = toIso(nowMs);
+
+    if (readModel === null) {
+      return buildUnavailablePayload(assembledAt, dbError);
+    }
+
+    return {
+      assembledAt,
+      dbAvailable: true,
+      dbError: null,
+      summaryCards: this.fetchSection(SECTION_DEFINITIONS.summaryCards, readModel, nowMs),
+      strategyPerformance: this.fetchSection(SECTION_DEFINITIONS.strategyPerformance, readModel, nowMs),
+      tickerPerformance: this.fetchSection(SECTION_DEFINITIONS.tickerPerformance, readModel, nowMs),
+      decisionPerformance: this.fetchSection(SECTION_DEFINITIONS.decisionPerformance, readModel, nowMs),
+      lifecycleStates: this.fetchSection(SECTION_DEFINITIONS.lifecycleStates, readModel, nowMs),
+      governanceHistory: this.fetchSection(SECTION_DEFINITIONS.governanceHistory, readModel, nowMs),
+      promotionHistory: this.fetchSection(SECTION_DEFINITIONS.promotionHistory, readModel, nowMs),
+      walkForwardLeaderboard: this.fetchSection(SECTION_DEFINITIONS.walkForwardLeaderboard, readModel, nowMs),
+    };
+  }
+
+  private fetchSection<K extends SectionKey>(
+    definition: SectionDefinition<K, DashboardSectionMap[K]['data']>,
+    readModel: OperatorReadModel,
+    nowMs: number,
+  ): DashboardSectionMap[K] {
+    try {
+      const data = definition.fetch(readModel);
+      this.cache.set(definition.key, { data, lastFetchedAtMs: nowMs });
+      return okSection(data, nowMs);
+    } catch (err) {
+      const message = sanitizeDiagnostic(definition.label, err);
+      const cached = this.cache.get(definition.key) as CachedSectionValue<DashboardSectionMap[K]['data']> | undefined;
+      if (cached) {
+        return staleSection(cached, message, nowMs);
+      }
+      return errorSection(definition.empty, message);
+    }
   }
 }
 
-// ---------------------------------------------------------------------------
-// Orchestrator
-// ---------------------------------------------------------------------------
-
-/**
- * Fetch all dashboard sections from the operator read model.
- *
- * Each section is fetched independently with try/catch isolation. The read
- * model may be null (when the database is unavailable), in which case all
- * sections return 'unavailable' state.
- *
- * @param readModel - OperatorReadModel instance, or null when DB is unavailable.
- * @param dbError - Database error message when readModel is null.
- * @returns A complete DashboardPayload with per-section state.
- */
 export function fetchDashboardPayload(
   readModel: OperatorReadModel | null,
   dbError: string | null,
 ): DashboardPayload {
-  const assembledAt = new Date().toISOString();
-  const dbAvailable = readModel !== null;
-
-  if (!dbAvailable) {
-    return {
-      assembledAt,
-      dbAvailable: false,
-      dbError,
-      summaryCards: unavailable(),
-      strategyPerformance: unavailable(),
-      tickerPerformance: unavailable(),
-      decisionPerformance: unavailable(),
-      lifecycleStates: unavailable(),
-      governanceHistory: unavailable(),
-      promotionHistory: unavailable(),
-      walkForwardLeaderboard: unavailable(),
-    };
-  }
-
-  return {
-    assembledAt,
-    dbAvailable: true,
-    dbError: null,
-
-    summaryCards: fetchSection(
-      () => readModel.getSummaryCards(),
-      'summary cards',
-    ),
-
-    strategyPerformance: fetchSection(
-      () => readModel.getStrategyPerformance(),
-      'strategy performance',
-    ),
-
-    tickerPerformance: fetchSection(
-      () => readModel.getTickerPerformance(),
-      'ticker performance',
-    ),
-
-    decisionPerformance: fetchSection(
-      () => readModel.getDecisionPerformance(50),
-      'decision performance',
-    ),
-
-    lifecycleStates: fetchSection(
-      () => readModel.getLifecycleStates(),
-      'lifecycle states',
-    ),
-
-    governanceHistory: fetchSection(
-      () => readModel.getLifecycleHistory(20),
-      'governance history',
-    ),
-
-    promotionHistory: fetchSection(
-      () => readModel.getPromotionHistory(20),
-      'promotion history',
-    ),
-
-    walkForwardLeaderboard: fetchSection(
-      () => readModel.getWalkForwardLeaderboard(),
-      'walk-forward leaderboard',
-    ),
-  };
+  return new DashboardPayloadAssembler().fetchDashboardPayload(readModel, dbError);
 }

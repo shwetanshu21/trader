@@ -155,7 +155,7 @@ function renderSummaryCardsSection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const cards = section.data.map(c => {
       const value = typeof c.value === 'number'
         ? c.unit === 'INR'
@@ -198,7 +198,7 @@ function renderStrategyPerformanceSection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const rows = section.data.map(s => {
       const sharpe = s.sharpeRatio !== null ? formatNumber(s.sharpeRatio, 2) : '—';
       const drawdown = s.maxDrawdownPct !== null ? formatRawPercent(s.maxDrawdownPct) : '—';
@@ -263,7 +263,7 @@ function renderTickerPerformanceSection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const rows = section.data.map(t => {
       const sideColor = t.netQuantity > 0 ? 'status-ok' : t.netQuantity < 0 ? 'status-err' : 'status-skip';
       const sideLabel = t.netQuantity > 0 ? 'Long' : t.netQuantity < 0 ? 'Short' : 'Flat';
@@ -330,7 +330,7 @@ function renderDecisionPerformanceSection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const rows = section.data.map(d => {
       const status = d.decisionStatus;
       const execStatus = d.executionStatus ?? '—';
@@ -397,7 +397,7 @@ function renderLifecycleStatesSection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const rows = section.data.map(s => {
       const phaseColor = statusClass(s.phase);
       const badge = renderProvenanceBadge(s.provenance);
@@ -448,7 +448,7 @@ function renderGovernanceHistorySection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const rows = section.data.map(g => {
       const verdictClass = statusClass(g.verdict);
       const badge = renderProvenanceBadge(g.provenance);
@@ -501,7 +501,7 @@ function renderPromotionHistorySection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const rows = section.data.map(p => {
       const badge = renderProvenanceBadge(p.provenance);
       const strategyHref = strategyDetailHref(p.strategyId, p.strategyVersion);
@@ -557,7 +557,7 @@ function renderWalkForwardLeaderboardSection(
 ): string {
   let content: string;
 
-  if (section.state === 'ok' && section.data.length > 0) {
+  if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
     const rows = section.data.map(w => {
       const mergedScore = w.mergedScore !== null ? formatPercent(w.mergedScore) : '—';
       const sharpe = w.sharpeRatio !== null ? formatNumber(w.sharpeRatio, 2) : '—';
