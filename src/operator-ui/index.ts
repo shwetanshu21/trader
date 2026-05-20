@@ -24,6 +24,66 @@ import { Authenticator } from './auth.js';
 import { createOperatorUIServer } from './server.js';
 import { openOperatorDb, closeOperatorDb, OperatorReadModel } from '../operator/index.js';
 
+const FAULT_METHODS = {
+  summaryCards: 'getSummaryCards',
+  strategyPerformance: 'getStrategyPerformance',
+  tickerPerformance: 'getTickerPerformance',
+  decisionPerformance: 'getDecisionPerformance',
+  lifecycleStates: 'getLifecycleStates',
+  governanceHistory: 'getLifecycleHistory',
+  promotionHistory: 'getPromotionHistory',
+  walkForwardLeaderboard: 'getWalkForwardLeaderboard',
+} as const;
+
+type FaultSection = keyof typeof FAULT_METHODS;
+
+type ReadModelMethod = keyof OperatorReadModel;
+
+function maybeWrapReadModelForInjectedFailures(readModel: OperatorReadModel | null): OperatorReadModel | null {
+  if (readModel === null) {
+    return null;
+  }
+
+  const rawSection = process.env.OPERATOR_UI_TEST_FAIL_SECTION?.trim() ?? '';
+  if (!rawSection) {
+    return readModel;
+  }
+
+  if (!(rawSection in FAULT_METHODS)) {
+    console.warn(`[operator-ui] Ignoring unknown OPERATOR_UI_TEST_FAIL_SECTION="${rawSection}".`);
+    return readModel;
+  }
+
+  const section = rawSection as FaultSection;
+  const methodName = FAULT_METHODS[section] as ReadModelMethod;
+  const failAfterSuccesses = Number(process.env.OPERATOR_UI_TEST_FAIL_AFTER_SUCCESS_COUNT ?? '1');
+  const injectedMessage = process.env.OPERATOR_UI_TEST_FAIL_MESSAGE?.trim()
+    || `Injected ${section} refresh failure for proof flow: authorization=Basic proof-secret-token`;
+  const counters = new Map<string, number>();
+
+  console.warn(
+    `[operator-ui] Test-only failure injection active for ${section} after ${Number.isFinite(failAfterSuccesses) ? failAfterSuccesses : 1} successful calls.`,
+  );
+
+  return new Proxy(readModel, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (prop !== methodName || typeof value !== 'function') {
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+
+      return (...args: unknown[]) => {
+        const invocationCount = (counters.get(section) ?? 0) + 1;
+        counters.set(section, invocationCount);
+        if (invocationCount > (Number.isFinite(failAfterSuccesses) ? failAfterSuccesses : 1)) {
+          throw new Error(injectedMessage);
+        }
+        return Reflect.apply(value as (...callArgs: unknown[]) => unknown, target, args);
+      };
+    },
+  }) as OperatorReadModel;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -56,7 +116,9 @@ function main(): void {
   }
 
   // ── Create read model (null when DB is unavailable) ───────────────────
-  const readModel = db !== null ? new OperatorReadModel(db) : null;
+  const readModel = maybeWrapReadModelForInjectedFailures(
+    db !== null ? new OperatorReadModel(db) : null,
+  );
 
   // ── Create authenticator ──────────────────────────────────────────────
   const authenticator = new Authenticator(config);
