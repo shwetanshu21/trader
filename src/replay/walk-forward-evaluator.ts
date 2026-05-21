@@ -4,6 +4,8 @@
 // seam, checkpoints durable progress, and can resume interrupted runs without
 // restarting already-persisted trials.
 
+import fs from 'node:fs';
+import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { ReplayClock } from './replay-clock.js';
 import { runReplay } from './replay-runner.js';
@@ -85,6 +87,17 @@ export interface EvaluatorRunResult {
   aggregateMetrics: WalkForwardAggregateMetrics;
 }
 
+interface ReplayExecutionTruthMetrics {
+  available: boolean;
+  tradeCount: number;
+  realizedPnl: number;
+  grossProfit: number;
+  grossLoss: number;
+  winCount: number;
+  lossCount: number;
+  maxDrawdown: number | null;
+}
+
 interface PartitionedWindow {
   index: number;
   label: string;
@@ -138,6 +151,32 @@ const DEFAULT_STEP_SIZE_MS = 1 * 86_400_000;
 const MIN_WINDOW_SIZE_MS = 3600_000;
 const MIN_STEP_SIZE_MS = 300_000;
 const WIN_SCORE_THRESHOLD = 0.6;
+const WALK_FORWARD_ARTIFACTS_ROOT = path.join('data', 'artifacts', 'walk-forward');
+
+interface WalkForwardProgressSnapshot {
+  schemaVersion: 1;
+  artifactType: 'walk-forward-progress';
+  runId: number;
+  runLabel: string;
+  strategyId: string;
+  strategyVersion: string;
+  marketId: string;
+  status: WalkForwardStatus;
+  windowCount: number;
+  totalTrials: number;
+  completedTrialCount: number;
+  lastCompletedTrialIndex: number | null;
+  checkpointCount: number;
+  resumedFromRunId: number | null;
+  activeTrialIndex: number | null;
+  activeTrialLabel: string | null;
+  activeWindowIndex: number | null;
+  activeWindowLabel: string | null;
+  activeWindowType: WalkForwardWindowType | null;
+  activeReplayLabel: string | null;
+  updatedAt: number;
+  lastError: string | null;
+}
 
 export class WalkForwardEvaluator {
   private readonly _repo: WalkForwardRepository;
@@ -183,6 +222,7 @@ export class WalkForwardEvaluator {
       label = `walk-forward-${new Date(now).toISOString().slice(0, 10)}`,
       stopAfterTrialCount,
       resumeRunId,
+      cadenceMinutes = this._clock.getCadenceMinutes(),
     } = config;
 
     const windows = this._partitionWindows(
@@ -219,6 +259,16 @@ export class WalkForwardEvaluator {
       now,
     });
 
+    this._writeProgressSnapshot(state.run, {
+      status: state.run.status,
+      completedTrialCount: this._repo.countTrialsForRun(state.run.id),
+      lastCompletedTrialIndex: this._repo.getLatestCheckpoint(state.run.id)?.lastCompletedTrialIndex ?? null,
+      checkpointCount: this._repo.countCheckpoints(state.run.id),
+      resumedFromRunId: resumeRunId ?? null,
+      updatedAt: now,
+      lastError: null,
+    });
+
     try {
       let persistedCount = this._repo.countTrialsForRun(state.run.id);
       const completedTrialIndexes = new Set(
@@ -228,21 +278,40 @@ export class WalkForwardEvaluator {
       for (let ti = 0; ti < trialConfigs.length; ti++) {
         if (completedTrialIndexes.has(ti)) continue;
 
+        const trialConfig = trialConfigs[ti];
+        const checkpointCountBeforeTrial = this._repo.countCheckpoints(state.run.id);
+        console.log(
+          `[walk-forward] run ${state.run.id} starting trial ${ti + 1}/${trialConfigs.length}: ${trialConfig.label}`,
+        );
+        this._writeProgressSnapshot(state.run, {
+          status: WalkForwardStatus.Running,
+          completedTrialCount: persistedCount,
+          lastCompletedTrialIndex: this._repo.getLatestCheckpoint(state.run.id)?.lastCompletedTrialIndex ?? null,
+          checkpointCount: checkpointCountBeforeTrial,
+          resumedFromRunId: resumeRunId ?? null,
+          activeTrialIndex: ti,
+          activeTrialLabel: trialConfig.label,
+          updatedAt: Date.now(),
+          lastError: null,
+        });
+
         const trialState = await this._evaluateTrial(
-          state.run.id,
+          state.run,
           ti,
-          trialConfigs[ti],
+          trialConfig,
           windows,
           strategyId,
           strategyVersion,
           marketId,
+          cadenceMinutes,
+          config.enablePaperExecution ?? (this._dataProvider.getResolutionMetadata?.().supportsFineGrainedExecution ?? false),
         );
 
         this._persistTrial(state.run.id, state.insertedWindows, trialState, now);
         persistedCount += 1;
         completedTrialIndexes.add(ti);
 
-        this._repo.saveCheckpoint({
+        const checkpoint = this._repo.saveCheckpoint({
           runId: state.run.id,
           completedTrialCount: persistedCount,
           lastCompletedTrialIndex: ti,
@@ -250,12 +319,45 @@ export class WalkForwardEvaluator {
             resumedFromRunId: resumeRunId ?? null,
             totalTrials: trialConfigs.length,
             windowCount: windows.length,
+            lastCompletedTrialLabel: trialConfig.label,
+            cadenceMinutes,
+            rangeStart,
+            rangeEnd,
+            windowSizeMs,
+            stepSizeMs,
+            inSampleRatio,
+            label,
+            strategyId,
+            strategyVersion,
+            marketId,
+            trialConfigs,
           }),
           savedAt: Date.now(),
+        });
+        console.log(
+          `[walk-forward] run ${state.run.id} checkpoint ${checkpoint.id} saved after trial ${ti + 1}/${trialConfigs.length}`,
+        );
+        this._writeProgressSnapshot(state.run, {
+          status: WalkForwardStatus.Running,
+          completedTrialCount: persistedCount,
+          lastCompletedTrialIndex: ti,
+          checkpointCount: this._repo.countCheckpoints(state.run.id),
+          resumedFromRunId: resumeRunId ?? null,
+          updatedAt: checkpoint.savedAt,
+          lastError: null,
         });
 
         if (stopAfterTrialCount != null && persistedCount >= stopAfterTrialCount) {
           this._repo.markInterrupted(state.run.id);
+          this._writeProgressSnapshot(state.run, {
+            status: WalkForwardStatus.Interrupted,
+            completedTrialCount: persistedCount,
+            lastCompletedTrialIndex: ti,
+            checkpointCount: this._repo.countCheckpoints(state.run.id),
+            resumedFromRunId: resumeRunId ?? null,
+            updatedAt: Date.now(),
+            lastError: `Interrupted after ${persistedCount} persisted trial(s) for resume verification`,
+          });
           throw new WalkForwardInterruptionError(
             state.run.id,
             `Interrupted after ${persistedCount} persisted trial(s) for resume verification`,
@@ -264,13 +366,32 @@ export class WalkForwardEvaluator {
       }
 
       this._finalizeRun(state.run.id);
+      this._writeProgressSnapshot(state.run, {
+        status: WalkForwardStatus.Completed,
+        completedTrialCount: persistedCount,
+        lastCompletedTrialIndex: persistedCount > 0 ? persistedCount - 1 : null,
+        checkpointCount: this._repo.countCheckpoints(state.run.id),
+        resumedFromRunId: resumeRunId ?? null,
+        updatedAt: Date.now(),
+        lastError: null,
+      });
       return this._buildResult(state.run.id);
     } catch (error) {
       if (error instanceof WalkForwardInterruptionError) {
         throw error;
       }
 
-      this._repo.markFailed(state.run.id, Date.now());
+      const failedAt = Date.now();
+      this._repo.markFailed(state.run.id, failedAt);
+      this._writeProgressSnapshot(state.run, {
+        status: WalkForwardStatus.Failed,
+        completedTrialCount: this._repo.countTrialsForRun(state.run.id),
+        lastCompletedTrialIndex: this._repo.getLatestCheckpoint(state.run.id)?.lastCompletedTrialIndex ?? null,
+        checkpointCount: this._repo.countCheckpoints(state.run.id),
+        resumedFromRunId: resumeRunId ?? null,
+        updatedAt: failedAt,
+        lastError: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
@@ -459,6 +580,9 @@ export class WalkForwardEvaluator {
     if (stepSizeMs < MIN_STEP_SIZE_MS) {
       throw new Error(`stepSizeMs (${stepSizeMs}) must be >= ${MIN_STEP_SIZE_MS}ms (5 minutes)`);
     }
+    if (config.cadenceMinutes != null && (!Number.isFinite(config.cadenceMinutes) || config.cadenceMinutes < 1)) {
+      throw new Error(`cadenceMinutes (${config.cadenceMinutes}) must be >= 1 minute`);
+    }
     if (stepSizeMs > windowSizeMs) {
       throw new Error(`stepSizeMs (${stepSizeMs}) must not exceed windowSizeMs (${windowSizeMs})`);
     }
@@ -537,13 +661,15 @@ export class WalkForwardEvaluator {
   }
 
   private async _evaluateTrial(
-    runId: number,
+    run: WalkForwardRunRow,
     trialIndex: number,
     config: WalkForwardTrialConfig,
     windows: PartitionedWindow[],
     strategyId: string,
     strategyVersion: string,
     marketId: string,
+    cadenceMinutes: number,
+    enablePaperExecution: boolean,
   ): Promise<TrialState> {
     const windowMetrics: TrialState['windowMetrics'] = [];
     let aggregateMergedSum = 0;
@@ -555,8 +681,33 @@ export class WalkForwardEvaluator {
     const llmStatuses = new Set<string>();
 
     for (const window of windows) {
+      const inReplayLabel = this._buildReplayLabel({
+        runId: run.id,
+        trialIndex,
+        trialLabel: config.label,
+        window,
+        windowType: WalkForwardWindowType.InSample,
+      });
+      console.log(
+        `[walk-forward] run ${run.id} trial ${trialIndex + 1} window ${window.index + 1}/${windows.length} in-sample replay ${inReplayLabel}`,
+      );
+      this._writeProgressSnapshot(run, {
+        status: WalkForwardStatus.Running,
+        completedTrialCount: this._repo.countTrialsForRun(run.id),
+        lastCompletedTrialIndex: this._repo.getLatestCheckpoint(run.id)?.lastCompletedTrialIndex ?? null,
+        checkpointCount: this._repo.countCheckpoints(run.id),
+        activeTrialIndex: trialIndex,
+        activeTrialLabel: config.label,
+        activeWindowIndex: window.index,
+        activeWindowLabel: window.label,
+        activeWindowType: WalkForwardWindowType.InSample,
+        activeReplayLabel: inReplayLabel,
+        updatedAt: Date.now(),
+        resumedFromRunId: null,
+        lastError: null,
+      });
       const inSampleMetrics = await this._evaluateWindowRange({
-        runId,
+        runId: run.id,
         trialIndex,
         trialLabel: config.label,
         strategyId,
@@ -567,6 +718,8 @@ export class WalkForwardEvaluator {
         rangeStart: window.inSampleStart,
         rangeEnd: window.inSampleEnd,
         maxCandidates: (config.params.maxCandidates as number) ?? config.llmConfig?.maxCandidates ?? 5,
+        cadenceMinutes,
+        enablePaperExecution,
       });
       windowMetrics.push({
         windowIndex: window.index,
@@ -574,8 +727,33 @@ export class WalkForwardEvaluator {
         metrics: inSampleMetrics,
       });
 
+      const outReplayLabel = this._buildReplayLabel({
+        runId: run.id,
+        trialIndex,
+        trialLabel: config.label,
+        window,
+        windowType: WalkForwardWindowType.OutOfSample,
+      });
+      console.log(
+        `[walk-forward] run ${run.id} trial ${trialIndex + 1} window ${window.index + 1}/${windows.length} out-of-sample replay ${outReplayLabel}`,
+      );
+      this._writeProgressSnapshot(run, {
+        status: WalkForwardStatus.Running,
+        completedTrialCount: this._repo.countTrialsForRun(run.id),
+        lastCompletedTrialIndex: this._repo.getLatestCheckpoint(run.id)?.lastCompletedTrialIndex ?? null,
+        checkpointCount: this._repo.countCheckpoints(run.id),
+        activeTrialIndex: trialIndex,
+        activeTrialLabel: config.label,
+        activeWindowIndex: window.index,
+        activeWindowLabel: window.label,
+        activeWindowType: WalkForwardWindowType.OutOfSample,
+        activeReplayLabel: outReplayLabel,
+        updatedAt: Date.now(),
+        resumedFromRunId: null,
+        lastError: null,
+      });
       const outOfSampleMetrics = await this._evaluateWindowRange({
-        runId,
+        runId: run.id,
         trialIndex,
         trialLabel: config.label,
         strategyId,
@@ -586,6 +764,8 @@ export class WalkForwardEvaluator {
         rangeStart: window.outOfSampleStart,
         rangeEnd: window.outOfSampleEnd,
         maxCandidates: (config.params.maxCandidates as number) ?? config.llmConfig?.maxCandidates ?? 5,
+        cadenceMinutes,
+        enablePaperExecution,
       });
       windowMetrics.push({
         windowIndex: window.index,
@@ -641,6 +821,8 @@ export class WalkForwardEvaluator {
     rangeStart: number;
     rangeEnd: number;
     maxCandidates: number;
+    cadenceMinutes: number;
+    enablePaperExecution: boolean;
   }): Promise<WindowMetrics> {
     const replayResult = await runReplay({
       db: this._db,
@@ -648,13 +830,14 @@ export class WalkForwardEvaluator {
       dataProvider: this._dataProvider,
       proposalEngine: this._proposalEngine,
       maxCandidates: options.maxCandidates,
-      cadenceMinutes: this._clock.getCadenceMinutes(),
+      cadenceMinutes: options.cadenceMinutes,
       label: this._buildReplayLabel(options),
       strategyId: options.strategyId,
       strategyVersion: options.strategyVersion,
       marketId: options.marketId,
       rangeStart: options.rangeStart,
       rangeEnd: options.rangeEnd,
+      enablePaperExecution: options.enablePaperExecution,
     });
 
     if (replayResult.session.status !== ReplaySessionStatus.Completed) {
@@ -684,6 +867,53 @@ export class WalkForwardEvaluator {
     ].join('-');
   }
 
+  private _progressPath(runId: number): string {
+    return path.join(WALK_FORWARD_ARTIFACTS_ROOT, String(runId), 'progress.json');
+  }
+
+  private _writeProgressSnapshot(
+    run: WalkForwardRunRow,
+    snapshot: Partial<Omit<WalkForwardProgressSnapshot,
+      'schemaVersion' | 'artifactType' | 'runId' | 'runLabel' | 'strategyId' | 'strategyVersion' | 'marketId' | 'windowCount' | 'totalTrials'>> & {
+      status: WalkForwardStatus;
+      completedTrialCount: number;
+      lastCompletedTrialIndex: number | null;
+      checkpointCount: number;
+      updatedAt: number;
+      lastError: string | null;
+    },
+  ): void {
+    const progressDir = path.dirname(this._progressPath(run.id));
+    fs.mkdirSync(progressDir, { recursive: true });
+
+    const payload: WalkForwardProgressSnapshot = {
+      schemaVersion: 1,
+      artifactType: 'walk-forward-progress',
+      runId: run.id,
+      runLabel: run.label,
+      strategyId: run.strategyId,
+      strategyVersion: run.strategyVersion,
+      marketId: run.marketId,
+      status: snapshot.status,
+      windowCount: run.windowCount,
+      totalTrials: run.totalTrials,
+      completedTrialCount: snapshot.completedTrialCount,
+      lastCompletedTrialIndex: snapshot.lastCompletedTrialIndex,
+      checkpointCount: snapshot.checkpointCount,
+      resumedFromRunId: snapshot.resumedFromRunId ?? null,
+      activeTrialIndex: snapshot.activeTrialIndex ?? null,
+      activeTrialLabel: snapshot.activeTrialLabel ?? null,
+      activeWindowIndex: snapshot.activeWindowIndex ?? null,
+      activeWindowLabel: snapshot.activeWindowLabel ?? null,
+      activeWindowType: snapshot.activeWindowType ?? null,
+      activeReplayLabel: snapshot.activeReplayLabel ?? null,
+      updatedAt: snapshot.updatedAt,
+      lastError: snapshot.lastError,
+    };
+
+    fs.writeFileSync(this._progressPath(run.id), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  }
+
   private _summarizeReplaySession(sessionId: number): WindowMetrics {
     const session = this._replaySessionRepo.getSession(sessionId);
     if (!session) {
@@ -710,6 +940,7 @@ export class WalkForwardEvaluator {
     const llmStatusCounts = this._countLlmStatuses(topCandidates.map(candidate => candidate.llmStatus ?? null));
     const llmStatuses = new Set(Object.keys(llmStatusCounts));
     const pluginErrorCount = topCandidates.filter(candidate => candidate.hasPluginErrors).length;
+    const executionTruth = this._summarizeReplayExecutionTruth(sessionId);
 
     const mergedMean = this._average(mergedScores);
     const mergedStd = this._stdDev(mergedScores, mergedMean);
@@ -755,7 +986,54 @@ export class WalkForwardEvaluator {
       llmStatusCounts,
       pluginErrorCount,
       errorMessage: session.errorMessage,
+      executionTruth: {
+        available: executionTruth.available,
+        source: executionTruth.available ? 'replay-paper-execution' : 'replay-session',
+        tradeCount: executionTruth.tradeCount,
+        realizedPnl: executionTruth.realizedPnl,
+        grossProfit: executionTruth.grossProfit,
+        grossLoss: executionTruth.grossLoss,
+        winCount: executionTruth.winCount,
+        lossCount: executionTruth.lossCount,
+        maxDrawdown: executionTruth.maxDrawdown,
+      },
     };
+
+    if (executionTruth.available) {
+      const profitFactor = executionTruth.grossLoss > 0
+        ? +(executionTruth.grossProfit / executionTruth.grossLoss).toFixed(4)
+        : (executionTruth.grossProfit > 0 ? 999 : null);
+      const totalClosedTrades = executionTruth.winCount + executionTruth.lossCount;
+      const extendedMetrics: WalkForwardWindowMetricsEnvelope = {
+        schemaVersion: 1,
+        source: 'replay-paper-execution',
+        replayEvidence,
+        summary: {
+          tickCount: totalClosedTrades,
+          meanMergedScore: mergedMean,
+          meanDeterministicScore: this._average(deterministicScores),
+          meanLlmScore: this._average(llmScores),
+          stdDevMergedScore: mergedStd,
+          maxMergedScore: mergedMax,
+          minMergedScore: mergedMin,
+        },
+      };
+
+      return {
+        totalReturn: +executionTruth.realizedPnl.toFixed(4),
+        sharpeRatio: null,
+        maxDrawdown: executionTruth.maxDrawdown,
+        winRate: totalClosedTrades > 0 ? +(executionTruth.winCount / totalClosedTrades).toFixed(4) : null,
+        tradeCount: executionTruth.tradeCount,
+        profitFactor,
+        deterministicScore: this._average(deterministicScores),
+        mergedScore: mergedMean != null ? +mergedMean.toFixed(4) : null,
+        extendedMetrics,
+        llmStatus: this._summarizeLlmStatus(llmStatuses),
+        llmScore: this._average(llmScores),
+        llmTickCount: consultedCandidates.length,
+      };
+    }
 
     if (mergedScores.length === 0) {
       const extendedMetrics: WalkForwardWindowMetricsEnvelope = {
@@ -821,6 +1099,76 @@ export class WalkForwardEvaluator {
       llmScore: this._average(llmScores),
       llmTickCount: consultedCandidates.length,
     };
+  }
+
+  private _summarizeReplayExecutionTruth(sessionId: number): ReplayExecutionTruthMetrics {
+    const tag = `replay-${sessionId}`;
+    try {
+      const tradeRow = this._db.prepare(`
+        SELECT
+          COUNT(DISTINCT pf.id) AS trade_count,
+          COALESCE(SUM(pe.realized_pnl), 0) AS realized_pnl,
+          COALESCE(SUM(CASE WHEN pe.realized_pnl > 0 THEN pe.realized_pnl ELSE 0 END), 0) AS gross_profit,
+          COALESCE(SUM(CASE WHEN pe.realized_pnl < 0 THEN ABS(pe.realized_pnl) ELSE 0 END), 0) AS gross_loss,
+          COALESCE(SUM(CASE WHEN pe.realized_pnl > 0 THEN 1 ELSE 0 END), 0) AS win_count,
+          COALESCE(SUM(CASE WHEN pe.realized_pnl < 0 THEN 1 ELSE 0 END), 0) AS loss_count
+        FROM proposal_attempts pa
+        INNER JOIN strategy_decisions sd ON sd.proposal_attempt_id = pa.id
+        INNER JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
+        LEFT JOIN paper_fills pf ON pf.execution_attempt_id = ea.id
+        LEFT JOIN position_events pe ON pe.execution_attempt_id = ea.id
+        WHERE pa.tag = ?
+      `).get(tag) as {
+        trade_count: number;
+        realized_pnl: number;
+        gross_profit: number;
+        gross_loss: number;
+        win_count: number;
+        loss_count: number;
+      };
+
+      const events = this._db.prepare(`
+        SELECT pe.realized_pnl AS realized_pnl
+        FROM proposal_attempts pa
+        INNER JOIN strategy_decisions sd ON sd.proposal_attempt_id = pa.id
+        INNER JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
+        INNER JOIN position_events pe ON pe.execution_attempt_id = ea.id
+        WHERE pa.tag = ?
+        ORDER BY pe.created_at ASC, pe.id ASC
+      `).all(tag) as Array<{ realized_pnl: number }>;
+
+      let cumulative = 0;
+      let peak = 0;
+      let maxDrawdown = 0;
+      for (const event of events) {
+        cumulative += event.realized_pnl;
+        peak = Math.max(peak, cumulative);
+        maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
+      }
+
+      const available = (tradeRow.trade_count ?? 0) > 0 || events.length > 0;
+      return {
+        available,
+        tradeCount: tradeRow.trade_count ?? 0,
+        realizedPnl: tradeRow.realized_pnl ?? 0,
+        grossProfit: tradeRow.gross_profit ?? 0,
+        grossLoss: tradeRow.gross_loss ?? 0,
+        winCount: tradeRow.win_count ?? 0,
+        lossCount: tradeRow.loss_count ?? 0,
+        maxDrawdown: available ? +maxDrawdown.toFixed(4) : null,
+      };
+    } catch {
+      return {
+        available: false,
+        tradeCount: 0,
+        realizedPnl: 0,
+        grossProfit: 0,
+        grossLoss: 0,
+        winCount: 0,
+        lossCount: 0,
+        maxDrawdown: null,
+      };
+    }
   }
 
   private _countLlmStatuses(statuses: Array<string | null>): Partial<Record<LLMStatus, number>> {
@@ -918,6 +1266,10 @@ export interface WalkForwardEvaluatorConfig {
   label?: string;
   trialConfigs?: WalkForwardTrialConfig[];
   paramSpace?: WalkForwardParamSpace;
+  /** Replay screening cadence override in minutes; defaults to the evaluator clock cadence. */
+  cadenceMinutes?: number;
+  /** When true, execute replay-approved candidates through paper execution state. */
+  enablePaperExecution?: boolean;
   /** Resume an interrupted or failed run instead of creating a new one. */
   resumeRunId?: number;
   /** Test/verification hook: stop after N persisted trials and mark interrupted. */

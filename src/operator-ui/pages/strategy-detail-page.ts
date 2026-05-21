@@ -34,19 +34,36 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
     renderLink(selfHref, `Permalink ${detail.strategyId}@${detail.strategyVersion}`),
   ].join('');
 
+  const lifecycleEmptyMessage = detail.hostEvidencePresence.lifecycleStates
+    ? 'Lifecycle evidence exists on this host, but none has been persisted for this strategy version.'
+    : 'No lifecycle evidence has been produced on this host yet.';
+  const governanceEmptyMessage = detail.hostEvidencePresence.governanceHistory
+    ? 'Governance evidence exists on this host, but none has been persisted for this strategy version.'
+    : 'No governance history has been produced on this host yet.';
+  const promotionEmptyMessage = detail.hostEvidencePresence.promotionHistory
+    ? 'Promotion evidence exists on this host, but none has been persisted for this strategy version.'
+    : 'No promotion history has been produced on this host yet.';
+  const walkForwardEmptyMessage = detail.hostEvidencePresence.walkForwardRuns
+    ? 'Walk-forward evidence exists on this host, but no persisted run is linked to this strategy version.'
+    : 'No walk-forward runs have been produced on this host yet.';
+
   const body = [
     renderSection('Strategy Summary', renderSummaryGrid([
       { label: 'Strategy', value: `<code>${escapeHtml(detail.strategyId)}</code>` },
       { label: 'Version', value: `<code>${escapeHtml(detail.strategyVersion)}</code>` },
       { label: 'Realized P&L', value: escapeHtml(formatCurrency(detail.performance.realizedPnl, 'INR')) },
       { label: 'Unrealized P&L', value: escapeHtml(formatCurrency(detail.performance.unrealizedPnl, 'INR')) },
-      { label: 'Total Return', value: `<span class="${detail.performance.totalReturnPct >= 0 ? 'status-ok' : 'status-err'}">${escapeHtml(formatRawPercent(detail.performance.totalReturnPct))}</span>` },
+      { label: 'Total P&L', value: `<span class="${detail.performance.realizedPnl + detail.performance.unrealizedPnl >= 0 ? 'status-ok' : 'status-err'}">${escapeHtml(formatCurrency(detail.performance.realizedPnl + detail.performance.unrealizedPnl, 'INR'))}</span>` },
+      { label: 'Trade Count', value: escapeHtml(formatInt(detail.performance.tradeCount)) },
+    ]), 'ok', null, null, 'Live/paper execution evidence only'),
+
+    renderSection('Walk-Forward Aggregate', renderSummaryGrid([
+      { label: 'Return %', value: detail.performance.totalReturnPct === null ? '—' : `<span class="${detail.performance.totalReturnPct >= 0 ? 'status-ok' : 'status-err'}">${escapeHtml(formatRawPercent(detail.performance.totalReturnPct))}</span>`, meta: 'Backtest / selection-derived, not live account return' },
       { label: 'Sharpe', value: escapeHtml(detail.performance.sharpeRatio === null ? '—' : formatNumber(detail.performance.sharpeRatio, 2)) },
       { label: 'Max Drawdown', value: escapeHtml(detail.performance.maxDrawdownPct === null ? '—' : formatRawPercent(detail.performance.maxDrawdownPct)) },
       { label: 'Win Rate', value: escapeHtml(formatPercent(detail.performance.winRate)) },
       { label: 'Profit Factor', value: escapeHtml(detail.performance.profitFactor === null ? '—' : formatNumber(detail.performance.profitFactor, 2)) },
-      { label: 'Trade Count', value: escapeHtml(formatInt(detail.performance.tradeCount)) },
-    ])),
+    ]), 'ok', null, null, 'Historical strategy-quality metrics scoped to walk-forward and governance evidence'),
 
     renderSection(
       'Current Lifecycle',
@@ -60,7 +77,7 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
               <td>${renderProvenanceBadge(state.provenance)}</td>
             </tr>`).join('')}</tbody>
           </table>`
-        : renderEmptyState('No lifecycle rows were persisted for this strategy version.'),
+        : renderEmptyState(lifecycleEmptyMessage),
       'ok',
       null,
       null,
@@ -78,7 +95,7 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
 
     renderSection(
       'Governance History',
-      renderGovernanceTable(detail.governanceHistory),
+      renderGovernanceTable(detail.governanceHistory, governanceEmptyMessage),
       'ok',
       null,
       null,
@@ -87,7 +104,7 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
 
     renderSection(
       'Promotion History',
-      renderPromotionTable(detail.promotionHistory),
+      renderPromotionTable(detail.promotionHistory, promotionEmptyMessage),
       'ok',
       null,
       null,
@@ -96,7 +113,7 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
 
     renderSection(
       'Walk-Forward Evidence',
-      renderWalkForwardTable(detail.walkForwardRuns),
+      renderWalkForwardTable(detail.walkForwardRuns, walkForwardEmptyMessage),
       'ok',
       null,
       null,
@@ -126,6 +143,7 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
     meta: `${detail.currentStates.length} active lifecycle row(s) · ${detail.walkForwardRuns.length} linked walk-forward run(s)`,
     actions,
     body,
+    navActive: 'strategies',
   });
 }
 
@@ -150,9 +168,9 @@ function renderDecisionTable(rows: OperatorDecisionPerformance[]): string {
   </table>`;
 }
 
-function renderGovernanceTable(rows: OperatorGovernanceDecisionDetail[]): string {
+function renderGovernanceTable(rows: OperatorGovernanceDecisionDetail[], emptyMessage: string): string {
   if (rows.length === 0) {
-    return renderEmptyState('No governance decisions were persisted for this strategy version.');
+    return renderEmptyState(emptyMessage);
   }
 
   return `<table>
@@ -171,9 +189,9 @@ function renderGovernanceTable(rows: OperatorGovernanceDecisionDetail[]): string
   </table>`;
 }
 
-function renderPromotionTable(rows: OperatorPromotionHistory[]): string {
+function renderPromotionTable(rows: OperatorPromotionHistory[], emptyMessage: string): string {
   if (rows.length === 0) {
-    return renderEmptyState('No promotion history has been persisted for this strategy version.');
+    return renderEmptyState(emptyMessage);
   }
 
   return `<table>
@@ -189,9 +207,9 @@ function renderPromotionTable(rows: OperatorPromotionHistory[]): string {
   </table>`;
 }
 
-function renderWalkForwardTable(rows: OperatorStrategyWalkForwardDetail[]): string {
+function renderWalkForwardTable(rows: OperatorStrategyWalkForwardDetail[], emptyMessage: string): string {
   if (rows.length === 0) {
-    return renderEmptyState('No walk-forward runs were persisted for this strategy version.');
+    return renderEmptyState(emptyMessage);
   }
 
   return `<table>

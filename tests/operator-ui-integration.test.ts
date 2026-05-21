@@ -279,7 +279,7 @@ describe('operator UI — live standalone integration', () => {
     expect(firstRefreshResponse.status).toBe(200);
     const firstRefreshPayload = await firstRefreshResponse.json();
     expect(firstRefreshPayload.sections.summaryCards.state).toBe('ok');
-    expect(firstRefreshPayload.sections.summaryCards.count).toBe(9);
+    expect(firstRefreshPayload.sections.summaryCards.count).toBe(10);
 
     const secondRefreshResponse = await fetch(`${app.baseUrl}/api/refresh`, {
       headers: { Authorization: authHeader },

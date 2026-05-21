@@ -54,6 +54,7 @@ const strategyDetail = {
   strategyVersion: '1.0.0',
   performance: { totalReturnPct: 12.5, sharpeRatio: 1.2, maxDrawdownPct: 10, tradeCount: 2, winRate: 0.5, profitFactor: 1.2, realizedPnl: 100, unrealizedPnl: 0 },
   recentDecisions: [],
+  hostEvidencePresence: { lifecycleStates: false, governanceHistory: false, promotionHistory: false, walkForwardRuns: false },
   currentStates: [],
   governanceHistory: [],
   promotionHistory: [],
@@ -113,6 +114,7 @@ function createRefreshReadModel() {
     },
     getStrategyPerformance: () => [{ strategyId: 'alpha', strategyVersion: '1.0.0', totalReturnPct: 12.5, sharpeRatio: 1.2, maxDrawdownPct: 10, tradeCount: 2, winRate: 0.5, profitFactor: 1.2, realizedPnl: 100, unrealizedPnl: 0, provenance: null }],
     getTickerPerformance: () => [{ exchange: 'NSE', tradingsymbol: 'RELIANCE', totalPnl: 10, tradeCount: 1, winRate: 1, netQuantity: 1, avgEntryPrice: 100, lastPrice: 101, unrealizedPnl: 1, realizedPnl: 9, provenance: null }],
+    getStrategyExposure: () => [{ bucketType: 'strategy', strategyId: 'alpha', strategyVersion: '1.0.0', label: 'alpha@1.0.0', openPositionCount: 1, grossOpenCostBasis: 100, grossOpenMarketValue: 101, unrealizedPnl: 1, attributionNote: null, provenance: null }],
     getDecisionPerformance: () => [{ decisionId: 7, proposalAttemptId: 100, exchange: 'NSE', tradingsymbol: 'RELIANCE', side: 'buy', quantity: 1, price: 100, decisionStatus: 'approved', strategyId: 'alpha', decidedAt: '2025-01-10T10:20:30.000Z', executionStatus: 'completed', outcomeCode: 'paper_simulated', realizedPnl: 10, provenance: null }],
     getLifecycleStates: () => [{ strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', phase: 'paper', updatedAt: '2025-01-11T09:15:00.000Z', provenance: null }],
     getLifecycleHistory: () => [{ id: 1, strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Winner met thresholds.', recordedAt: '2025-01-11T09:20:00.000Z', provenance: null }],
@@ -142,6 +144,9 @@ describe('operator-ui server detail routes', () => {
     const response = await fetch(`${baseUrl}/decision?id=7`);
     expect(response.status).toBe(401);
     expect(response.headers.get('www-authenticate')).toContain('Basic realm="Operator Console"');
+
+    const positionsResponse = await fetch(`${baseUrl}/positions`);
+    expect(positionsResponse.status).toBe(401);
   });
 
   it('renders dashboard and detail pages for valid authenticated requests', async () => {
@@ -154,6 +159,7 @@ describe('operator-ui server detail routes', () => {
         getSummaryCards: () => [{ key: 'current_pnl', label: 'Current P&L', value: 1000, unit: 'INR', change: null, display: null, provenance: null }],
         getStrategyPerformance: () => [{ strategyId: 'alpha', strategyVersion: '1.0.0', totalReturnPct: 12.5, sharpeRatio: 1.2, maxDrawdownPct: 10, tradeCount: 2, winRate: 0.5, profitFactor: 1.2, realizedPnl: 100, unrealizedPnl: 0, provenance: null }],
         getTickerPerformance: () => [{ exchange: 'NSE', tradingsymbol: 'RELIANCE', totalPnl: 10, tradeCount: 1, winRate: 1, netQuantity: 1, avgEntryPrice: 100, lastPrice: 101, unrealizedPnl: 1, realizedPnl: 9, provenance: null }],
+        getStrategyExposure: () => [{ bucketType: 'strategy', strategyId: 'alpha', strategyVersion: '1.0.0', label: 'alpha@1.0.0', openPositionCount: 1, grossOpenCostBasis: 100, grossOpenMarketValue: 101, unrealizedPnl: 1, attributionNote: null, provenance: null }],
         getDecisionPerformance: () => [{ decisionId: 7, proposalAttemptId: 100, exchange: 'NSE', tradingsymbol: 'RELIANCE', side: 'buy', quantity: 1, price: 100, decisionStatus: 'approved', strategyId: 'alpha', decidedAt: '2025-01-10T10:20:30.000Z', executionStatus: 'completed', outcomeCode: 'paper_simulated', realizedPnl: 10, provenance: null }],
         getLifecycleStates: () => [{ strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', phase: 'paper', updatedAt: '2025-01-11T09:15:00.000Z', provenance: null }],
         getLifecycleHistory: () => [{ id: 1, strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Winner met thresholds.', recordedAt: '2025-01-11T09:20:00.000Z', provenance: null }],
@@ -175,6 +181,27 @@ describe('operator-ui server detail routes', () => {
     expect(dashboardHtml).toContain('"pollIntervalMs":1000');
     expect(dashboardHtml).toContain('data-dashboard-section="summaryCards"');
     expect(dashboardHtml).toContain('data-dashboard-section="strategyPerformance"');
+    expect(dashboardHtml).toContain('Upstox Auth');
+
+    const positionsResponse = await fetch(`${baseUrl}/positions`, { headers: { Authorization: 'Basic ok' } });
+    expect(positionsResponse.status).toBe(200);
+    expect(await positionsResponse.text()).toContain('Positions &amp; Exposure');
+
+    const strategiesPageResponse = await fetch(`${baseUrl}/strategies`, { headers: { Authorization: 'Basic ok' } });
+    expect(strategiesPageResponse.status).toBe(200);
+    expect(await strategiesPageResponse.text()).toContain('Attributed Open Exposure');
+
+    const decisionsPageResponse = await fetch(`${baseUrl}/decisions`, { headers: { Authorization: 'Basic ok' } });
+    expect(decisionsPageResponse.status).toBe(200);
+    expect(await decisionsPageResponse.text()).toContain('Decision Ledger');
+
+    const governancePageResponse = await fetch(`${baseUrl}/governance`, { headers: { Authorization: 'Basic ok' } });
+    expect(governancePageResponse.status).toBe(200);
+    expect(await governancePageResponse.text()).toContain('Governance &amp; Backtests');
+
+    const healthPageResponse = await fetch(`${baseUrl}/system-health`, { headers: { Authorization: 'Basic ok' } });
+    expect(healthPageResponse.status).toBe(200);
+    expect(await healthPageResponse.text()).toContain('System Health');
 
     const decisionResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
     expect(decisionResponse.status).toBe(200);
@@ -284,7 +311,8 @@ describe('operator-ui server refresh API', () => {
     const firstPayload = await firstResponse.json();
     expect(firstPayload.pollIntervalMs).toBe(1000);
     expect(firstPayload.sections.summaryCards.state).toBe('ok');
-    expect(firstPayload.sections.summaryCards.count).toBe(1);
+    expect(firstPayload.sections.summaryCards.count).toBe(2);
+    expect(firstPayload.sections.summaryCards.data[0].key).toBe('upstox_auth');
     expect(firstPayload.sections.summaryCards.isCachedData).toBe(false);
     expect(firstPayload.sections.summaryCards.stalenessMs).toBe(0);
     expect(typeof firstPayload.sections.summaryCards.lastFetchedAt).toBe('string');
@@ -296,8 +324,9 @@ describe('operator-ui server refresh API', () => {
     expect(secondResponse.status).toBe(200);
     const secondPayload = await secondResponse.json();
     expect(secondPayload.sections.summaryCards.state).toBe('stale');
-    expect(secondPayload.sections.summaryCards.count).toBe(1);
-    expect(secondPayload.sections.summaryCards.data[0].key).toBe('current_pnl');
+    expect(secondPayload.sections.summaryCards.count).toBe(2);
+    expect(secondPayload.sections.summaryCards.data[0].key).toBe('upstox_auth');
+    expect(secondPayload.sections.summaryCards.data[1].key).toBe('current_pnl');
     expect(secondPayload.sections.summaryCards.isCachedData).toBe(true);
     expect(secondPayload.sections.summaryCards.lastFetchedAt).toBe(firstPayload.sections.summaryCards.lastFetchedAt);
     expect(secondPayload.sections.summaryCards.stalenessMs).toBeGreaterThanOrEqual(0);

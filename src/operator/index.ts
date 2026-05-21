@@ -33,6 +33,7 @@ export type {
   OperatorSummaryCard,
   OperatorStrategyPerformance,
   OperatorTickerPerformance,
+  OperatorStrategyExposure,
   OperatorDecisionPerformance,
   OperatorLifecycleState,
   OperatorLifecycleHistory,

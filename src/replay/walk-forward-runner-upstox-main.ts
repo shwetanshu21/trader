@@ -9,8 +9,11 @@ import { UpstoxRestClient } from '../upstox/upstox-rest-client.js';
 import { UpstoxHistoricalDataProvider } from './upstox-historical-data-provider.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import { resolveIndiaMarketProfile, resolveIndiaMarketConfigPath } from '../market/india-profile.js';
+import { ReplayClock } from './replay-clock.js';
 import { createOptionalProposalEngine } from './proposal-engine-factory.js';
 import { parseCliDateEnd, parseCliDateStart } from './upstox-date-range.js';
+import { loadProjectEnvFile, resolveWalkForwardDbPath } from './walk-forward-db-path.js';
+import { readWalkForwardResumeConfig } from './walk-forward-resume.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -35,6 +38,9 @@ interface RunnerOptions {
   strategyId: string;
   strategyVersion: string;
   configPath: string;
+  cadenceMinutes?: number;
+  trialLimit?: number;
+  disableProposalEngine: boolean;
 }
 
 function parseArgs(argv: string[]): RunnerOptions {
@@ -44,13 +50,14 @@ function parseArgs(argv: string[]): RunnerOptions {
     step: 1,
     ratio: 0.8,
     trials: 'default',
-    dbPath: ':memory:',
+    dbPath: resolveWalkForwardDbPath(undefined),
     label: 'cli-walk-forward-upstox',
     maxInstruments: 20,
     marketId: 'INDIA_NSE_EQ',
     strategyId: 'india-nse-eq-v1',
     strategyVersion: '1.0.0',
     configPath: 'data/nifty-500.json',
+    disableProposalEngine: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -75,6 +82,9 @@ function parseArgs(argv: string[]): RunnerOptions {
       case '--strategy-id': options.strategyId = value; i++; break;
       case '--strategy-version': options.strategyVersion = value; i++; break;
       case '--config-path': options.configPath = value; i++; break;
+      case '--cadence-minutes': options.cadenceMinutes = Number(value); i++; break;
+      case '--trial-limit': options.trialLimit = Number(value); i++; break;
+      case '--disable-proposal-engine': options.disableProposalEngine = true; break;
       default:
         throw new Error(`Unknown option: ${arg}`);
     }
@@ -109,6 +119,13 @@ function buildTrialConfigs(preset: string): WalkForwardTrialConfig[] {
   }
 }
 
+function applyTrialLimit(configs: WalkForwardTrialConfig[], trialLimit?: number): WalkForwardTrialConfig[] {
+  if (trialLimit == null || !Number.isFinite(trialLimit) || trialLimit <= 0) {
+    return configs;
+  }
+  return configs.slice(0, trialLimit);
+}
+
 // ---------------------------------------------------------------------------
 // Date helpers
 // ---------------------------------------------------------------------------
@@ -128,17 +145,37 @@ function computeDateRange(options: RunnerOptions): { rangeStart: number; rangeEn
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  loadProjectEnvFile();
   const options = parseArgs(process.argv.slice(2));
-  const { rangeStart, rangeEnd } = computeDateRange(options);
-
-  // Resolve market profile and config path
-  const marketProfile = resolveIndiaMarketProfile(options.marketId);
-  const resolvedConfigPath = options.configPath === 'data/nifty-500.json'
-    ? resolveIndiaMarketConfigPath(options.marketId)
-    : options.configPath;
 
   const dbManager = new DatabaseManager(options.dbPath);
   const repo = new WalkForwardRepository(dbManager.db);
+  const resumeConfig = options.resumeRunId != null
+    ? readWalkForwardResumeConfig(repo, options.resumeRunId)
+    : null;
+  if (options.resumeRunId != null && !resumeConfig) {
+    throw new Error(
+      `Run ${options.resumeRunId} is missing durable resume config. Re-run with the original range/window/trial arguments.`,
+    );
+  }
+
+  const effectiveMarketId = resumeConfig?.marketId ?? options.marketId;
+  const effectiveStrategyId = resumeConfig?.strategyId ?? options.strategyId;
+  const effectiveStrategyVersion = resumeConfig?.strategyVersion ?? options.strategyVersion;
+  const effectiveLabel = resumeConfig?.label ?? options.label;
+  const effectiveCadenceMinutes = resumeConfig?.cadenceMinutes ?? options.cadenceMinutes ?? 5;
+  const effectiveTrialConfigs = resumeConfig?.trialConfigs ?? applyTrialLimit(buildTrialConfigs(options.trials), options.trialLimit);
+  const rangeStart = resumeConfig?.rangeStart ?? computeDateRange(options).rangeStart;
+  const rangeEnd = resumeConfig?.rangeEnd ?? computeDateRange(options).rangeEnd;
+  const windowSizeMs = resumeConfig?.windowSizeMs ?? options.window * 86_400_000;
+  const stepSizeMs = resumeConfig?.stepSizeMs ?? options.step * 86_400_000;
+  const inSampleRatio = resumeConfig?.inSampleRatio ?? options.ratio;
+
+  // Resolve market profile and config path
+  const marketProfile = resolveIndiaMarketProfile(effectiveMarketId);
+  const resolvedConfigPath = options.configPath === 'data/nifty-500.json'
+    ? resolveIndiaMarketConfigPath(effectiveMarketId)
+    : options.configPath;
 
   // ── Create Upstox-backed data provider ──
   const restClient = new UpstoxRestClient();
@@ -150,6 +187,7 @@ async function main(): Promise<void> {
     cacheDir: options.cacheDir ?? './data/cache/upstox-candles',
     maxInstruments: options.maxInstruments,
     options: {
+      screeningCadenceMinutes: effectiveCadenceMinutes,
       executionResolutionMinutes: options.executionResolutionMinutes ?? null,
     },
   });
@@ -158,12 +196,9 @@ async function main(): Promise<void> {
     db: dbManager.db,
     marketProfile,
     dataProvider,
-    proposalEngine: createOptionalProposalEngine(),
+    proposalEngine: options.disableProposalEngine ? undefined : createOptionalProposalEngine(),
+    clock: new ReplayClock(marketProfile, effectiveCadenceMinutes),
   });
-
-  const trialConfigs = buildTrialConfigs(options.trials);
-  const windowSizeMs = options.window * 86_400_000;
-  const stepSizeMs = options.step * 86_400_000;
 
   // ── Banner ──
   console.log('─────────────────────────────────────────────────────────────');
@@ -175,12 +210,16 @@ async function main(): Promise<void> {
   console.log(`  Step:            ${options.step}d`);
   console.log(`  In-sample:       ${options.ratio}`);
   console.log(`  Trials preset:   ${options.trials}`);
+  console.log(`  Trial limit:     ${resumeConfig ? effectiveTrialConfigs.length : (options.trialLimit ?? 'none')}`);
   console.log(`  Resume run id:   ${options.resumeRunId ?? 'new run'}`);
+  console.log(`  Stop after trial:${options.interruptAfterTrial ?? 'disabled'}`);
+  console.log(`  Cadence:         ${effectiveCadenceMinutes}m`);
+  console.log(`  Proposal engine: ${options.disableProposalEngine ? 'disabled (deterministic only)' : 'enabled when env is configured'}`);
   console.log(`  Exec fidelity:   ${options.executionResolutionMinutes != null ? `${options.executionResolutionMinutes}m` : 'synthetic only'}`);
   console.log(`  Data provider:   ${dataProvider.label}`);
   console.log(`  Config path:     ${resolvedConfigPath}`);
-  console.log(`  Market:          ${options.marketId}`);
-  console.log(`  Strategy:        ${options.strategyId}@${options.strategyVersion}`);
+  console.log(`  Market:          ${effectiveMarketId}`);
+  console.log(`  Strategy:        ${effectiveStrategyId}@${effectiveStrategyVersion}`);
   console.log(`  Max instruments: ${options.maxInstruments ?? 'unlimited (default 20)'}`);
   console.log(`  Cache dir:       ${options.cacheDir ?? './data/cache/upstox-candles'}`);
   console.log(`  Range:           ${new Date(rangeStart).toISOString().slice(0, 10)} → ${new Date(rangeEnd).toISOString().slice(0, 10)}`);
@@ -192,12 +231,13 @@ async function main(): Promise<void> {
       rangeEnd,
       windowSizeMs,
       stepSizeMs,
-      inSampleRatio: options.ratio,
-      label: options.label,
-      strategyId: options.strategyId,
-      strategyVersion: options.strategyVersion,
-      marketId: options.marketId,
-      trialConfigs,
+      inSampleRatio,
+      label: effectiveLabel,
+      strategyId: effectiveStrategyId,
+      strategyVersion: effectiveStrategyVersion,
+      marketId: effectiveMarketId,
+      trialConfigs: effectiveTrialConfigs,
+      cadenceMinutes: effectiveCadenceMinutes,
       resumeRunId: options.resumeRunId,
       stopAfterTrialCount: options.interruptAfterTrial,
     });
@@ -238,6 +278,8 @@ async function main(): Promise<void> {
       console.log(`  Run ID:        ${error.runId}`);
       console.log(`  Checkpoints:   ${repo.countCheckpoints(error.runId)}`);
       console.log(`  Last CP trial: ${checkpoint?.lastCompletedTrialIndex ?? 'none'}`);
+      console.log(`  Progress file: data/artifacts/walk-forward/${error.runId}/progress.json`);
+      console.log(`  Resume cmd:    npm run run:upstox -- --resume-run-id ${error.runId}`);
       console.log(`  Message:       ${error.message}`);
       process.exitCode = 2;
       return;

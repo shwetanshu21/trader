@@ -25,6 +25,7 @@
 //   5. Persist DEMOTE or HOLD decision with evidence snapshot
 //   6. Update current lifecycle phase only on valid demotion
 
+import type Database from 'better-sqlite3';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-repo.js';
 import { ExecutionRiskRepository } from '../persistence/execution-risk-repo.js';
@@ -105,6 +106,15 @@ export interface PromotionEvidenceSnapshot {
    * Whether any window had replay evidence (metrics_json with WalkForwardWindowMetricsEnvelope).
    */
   hasReplayEvidence: boolean;
+  /** Paper-trading validation summary used for paper -> live governance, or null. */
+  paperValidation: {
+    tradeCount: number;
+    grossProfit: number;
+    grossLoss: number;
+    profitFactor: number | null;
+    realizedPnl: number;
+    available: boolean;
+  } | null;
 }
 
 /**
@@ -211,15 +221,18 @@ export class StrategyLifecycleEvaluator {
   private readonly _walkForwardRepo: WalkForwardRepository;
   private readonly _lifecycleRepo: StrategyLifecycleRepository;
   private readonly _executionRiskRepo: ExecutionRiskRepository | null;
+  private readonly _db: Database.Database | null;
 
   constructor(deps: {
     walkForwardRepo: WalkForwardRepository;
     lifecycleRepo: StrategyLifecycleRepository;
     executionRiskRepo?: ExecutionRiskRepository | null;
+    db?: Database.Database | null;
   }) {
     this._walkForwardRepo = deps.walkForwardRepo;
     this._lifecycleRepo = deps.lifecycleRepo;
     this._executionRiskRepo = deps.executionRiskRepo ?? null;
+    this._db = deps.db ?? null;
   }
 
   // -----------------------------------------------------------------------
@@ -327,6 +340,7 @@ export class StrategyLifecycleEvaluator {
       replayFidelity: fidelityEvidence.replayFidelity,
       llmConsultationRate: fidelityEvidence.llmConsultationRate,
       hasReplayEvidence: fidelityEvidence.hasReplayEvidence,
+      paperValidation: null,
     };
 
     // -----------------------------------------------------------------------
@@ -421,6 +435,35 @@ export class StrategyLifecycleEvaluator {
     );
     const promotionPrevPhase = currentState.phase;
     const promotionTargetPhase = nextPhase(promotionPrevPhase);
+
+    if (promotionPrevPhase === StrategyLifecyclePhase.Paper) {
+      const paperValidation = this._summarizePaperValidation(input.strategyId, input.strategyVersion);
+      evidenceSnapshot.paperValidation = paperValidation;
+      if (!paperValidation.available) {
+        return this._result(
+          input, evaluatedAt, thresholds, winnerContext,
+          GovernanceVerdict.Hold,
+          'Paper-to-live promotion requires persisted paper-trading validation evidence for this strategy identity. No qualifying paper execution evidence was found.',
+          evidenceSnapshot, currentState,
+        );
+      }
+      if (paperValidation.tradeCount < 1) {
+        return this._result(
+          input, evaluatedAt, thresholds, winnerContext,
+          GovernanceVerdict.Hold,
+          'Paper-to-live promotion requires at least one persisted paper trade for this strategy identity.',
+          evidenceSnapshot, currentState,
+        );
+      }
+      if ((paperValidation.profitFactor ?? 0) < 1) {
+        return this._result(
+          input, evaluatedAt, thresholds, winnerContext,
+          GovernanceVerdict.Hold,
+          `Paper-to-live promotion requires paper profit factor >= 1.0. Observed ${paperValidation.profitFactor ?? 0}.`,
+          evidenceSnapshot, currentState,
+        );
+      }
+    }
 
     if (!promotionTargetPhase) {
       return this._result(
@@ -902,6 +945,7 @@ export class StrategyLifecycleEvaluator {
       replayFidelity: null,
       llmConsultationRate: null,
       hasReplayEvidence: false,
+      paperValidation: null,
     };
 
     const decision = this._lifecycleRepo.insertDecision({
@@ -945,6 +989,63 @@ export class StrategyLifecycleEvaluator {
       decision,
       currentState: resolvedState,
     };
+  }
+
+  private _summarizePaperValidation(strategyId: string, strategyVersion: string): NonNullable<PromotionEvidenceSnapshot['paperValidation']> {
+    if (this._db === null) {
+      return {
+        tradeCount: 0,
+        grossProfit: 0,
+        grossLoss: 0,
+        profitFactor: null,
+        realizedPnl: 0,
+        available: false,
+      };
+    }
+
+    try {
+      const row = this._db.prepare(`
+        SELECT
+          COUNT(DISTINCT pf.id) AS trade_count,
+          COALESCE(SUM(pe.realized_pnl), 0) AS realized_pnl,
+          COALESCE(SUM(CASE WHEN pe.realized_pnl > 0 THEN pe.realized_pnl ELSE 0 END), 0) AS gross_profit,
+          COALESCE(SUM(CASE WHEN pe.realized_pnl < 0 THEN ABS(pe.realized_pnl) ELSE 0 END), 0) AS gross_loss
+        FROM strategy_decisions sd
+        LEFT JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
+        LEFT JOIN paper_fills pf ON pf.execution_attempt_id = ea.id
+        LEFT JOIN position_events pe ON pe.execution_attempt_id = ea.id
+        WHERE sd.strategy_id = ?
+          AND sd.strategy_version = ?
+          AND ea.execution_mode = 'paper'
+      `).get(strategyId, strategyVersion) as {
+        trade_count: number;
+        realized_pnl: number;
+        gross_profit: number;
+        gross_loss: number;
+      };
+
+      const profitFactor = row.gross_loss > 0
+        ? +(row.gross_profit / row.gross_loss).toFixed(4)
+        : (row.gross_profit > 0 ? 999 : null);
+
+      return {
+        tradeCount: row.trade_count ?? 0,
+        grossProfit: row.gross_profit ?? 0,
+        grossLoss: row.gross_loss ?? 0,
+        profitFactor,
+        realizedPnl: row.realized_pnl ?? 0,
+        available: (row.trade_count ?? 0) > 0,
+      };
+    } catch {
+      return {
+        tradeCount: 0,
+        grossProfit: 0,
+        grossLoss: 0,
+        profitFactor: null,
+        realizedPnl: 0,
+        available: false,
+      };
+    }
   }
 
   // -----------------------------------------------------------------------

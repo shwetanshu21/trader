@@ -188,5 +188,6 @@ export function renderDecisionDetailPage(detail: OperatorDecisionDetail): string
     meta: `Strategy ${renderLink(strategyHref, `${detail.strategyId}@${detail.strategyVersion}`)} · Decided ${escapeHtml(formatTimestamp(detail.decidedAt))}`,
     actions,
     body,
+    navActive: 'decisions',
   });
 }

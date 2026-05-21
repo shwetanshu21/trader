@@ -575,7 +575,7 @@ export class ProposalSupervisor implements TickWork {
       const c = entry.candidate;
 
       // Check for LLM-provided proposal params in the evidence
-      let side = 'buy';
+      let side = c.side;
       let product = 'MIS';
       let quantity = 1;
       let price: number | null = null;

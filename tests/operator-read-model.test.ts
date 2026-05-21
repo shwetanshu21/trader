@@ -821,6 +821,51 @@ describe('M010 S01 — OperatorReadModel', () => {
       expect(stratB!.strategyVersion).toBe('2.0.0');
       expect(stratB!.tradeCount).toBe(2); // 2 fills: HDFC + INFY
     });
+
+    it('getStrategyExposure attributes uniquely linked open positions to a strategy', () => {
+      const results = readModel.getStrategyExposure();
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        bucketType: 'strategy',
+        strategyId: 'strategy-a',
+        strategyVersion: '1.0.0',
+        openPositionCount: 1,
+        grossOpenCostBasis: 25_000,
+        grossOpenMarketValue: 26_000,
+        unrealizedPnl: 1_000,
+      });
+    });
+
+    it('getStrategyExposure withholds ambiguous open positions into an unattributed bucket', () => {
+      db.prepare(`
+        INSERT INTO strategy_decisions
+          (id, proposal_attempt_id, decision_status, strategy_id, strategy_version,
+           decided_at, exchange, tradingsymbol, side, product, quantity, price, order_type,
+           risk_sizing_basis, execution_class, segment, instrument_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(4, 4, 'approved', 'strategy-c', '3.0.0', 18000,
+        'NSE', 'RELIANCE', 'buy', 'MIS', 5, 2525, 'LIMIT',
+        'last_price', 'EQ', 'NSE', 'EQ');
+      db.prepare(`
+        INSERT INTO execution_attempts
+          (id, strategy_decision_id, execution_mode, status, outcome_code, message, attempted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(4, 4, 'paper', 'completed', 'paper_simulated', 'OK', 18100);
+      db.prepare(`
+        INSERT INTO paper_orders (id, execution_attempt_id, exchange, tradingsymbol, side, product, quantity, price, order_type, status, broker_order_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(4, 4, 'NSE', 'RELIANCE', 'buy', 'MIS', 5, 2525, 'LIMIT', 'filled', 'ORD004', 18200);
+      db.prepare(`
+        INSERT INTO paper_fills (id, paper_order_id, execution_attempt_id, exchange, tradingsymbol, side, product, filled_quantity, filled_price, broker_order_id, filled_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(4, 4, 4, 'NSE', 'RELIANCE', 'buy', 'MIS', 5, 2525, 'ORD004', 18300);
+
+      const results = readModel.getStrategyExposure();
+      expect(results).toHaveLength(1);
+      expect(results[0].bucketType).toBe('unattributed');
+      expect(results[0].attributionNote).toContain('Multiple strategies traded');
+      expect(results[0].grossOpenMarketValue).toBe(26_000);
+    });
   });
 
   // =======================================================================

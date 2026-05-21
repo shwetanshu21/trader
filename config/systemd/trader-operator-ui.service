@@ -1,0 +1,50 @@
+# ── trader-operator-ui.service ──
+# Systemd unit for the Hetzner-hosted authenticated operator console.
+# Uses source entrypoint via tsx to match the runtime deployment shape.
+#
+# Installation:
+#   sudo cp config/systemd/trader*.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trader-operator-ui.service
+#
+# Logs:
+#   journalctl -u trader-operator-ui.service -f
+#
+# Health check:
+#   curl http://127.0.0.1:3100/health
+
+[Unit]
+Description=trader — Authenticated Operator Console
+Documentation=https://github.com/shwetanshu/trader
+After=network-online.target trader.service
+Wants=network-online.target
+Requires=trader.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/trader
+EnvironmentFile=-/root/trader/.env
+Environment=NODE_ENV=production
+Environment=OPERATOR_UI_HOST=127.0.0.1
+Environment=OPERATOR_UI_PORT=3100
+Environment=OPERATOR_UI_DB_PATH=./data/trader-upstox-static.db
+Environment=OPERATOR_UI_USERNAME=operator
+ExecStart=/usr/bin/node --env-file=/root/trader/.env --import tsx src/operator-ui/index.ts
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ReadOnlyPaths=/root/trader/data
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

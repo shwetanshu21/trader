@@ -144,13 +144,17 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
       // Binary search for the candle with timestamp closest to (<=) tick.timestamp
       const candle = this._findClosestCandle(candles, tick.timestamp);
       if (!candle) continue;
+      const featureContext = this._buildFeatureContext(candles, tick.timestamp);
+      const inferredSide = featureContext.sessionVwap != null && candle[4] < featureContext.sessionVwap
+        ? 'sell'
+        : 'buy';
 
       // candle: [timestamp_ms, open, high, low, close, volume, open_interest]
       candidates.push({
         exchange: instrument.exchange,
         tradingsymbol: instrument.trading_symbol,
         instrumentToken: null,
-        side: 'buy', // fixed default; strategy layer determines side
+        side: inferredSide,
         lastPrice: candle[4], // close
         bid: candle[3],       // low — historical bid unavailable; low is approximation
         ask: candle[2],       // high — historical ask unavailable; high is approximation
@@ -161,6 +165,7 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
         expiry: instrument.expiry != null ? new Date(instrument.expiry).toISOString().slice(0, 10) : null,
         strike: instrument.strike_price ?? null,
         freezeQuantity: instrument.freeze_quantity ?? null,
+        featureContext,
       });
     }
 
@@ -199,6 +204,62 @@ export class UpstoxHistoricalDataProvider implements HistoricalDataProvider {
   private _cachePathForKey(key: string): string | undefined {
     if (!this._cacheDir) return undefined;
     return `${this._cacheDir}/${this._sanitizeInstrumentKey(key)}.json`;
+  }
+
+  /** Build a compact ORB/VWAP feature context from historical candles. */
+  private _buildFeatureContext(candles: UpstoxHistoricalCandle[], tickTimestamp: number): {
+    sessionVwap: number | null;
+    openingRangeHigh: number | null;
+    openingRangeLow: number | null;
+    volumeRatio: number | null;
+    minutesSinceOpen: number | null;
+    sessionDate: string | null;
+  } {
+    const current = this._findClosestCandle(candles, tickTimestamp);
+    if (!current) {
+      return {
+        sessionVwap: null,
+        openingRangeHigh: null,
+        openingRangeLow: null,
+        volumeRatio: null,
+        minutesSinceOpen: null,
+        sessionDate: null,
+      };
+    }
+
+    const sessionDate = new Date(current[0]).toISOString().slice(0, 10);
+    const sessionCandles = candles.filter(c => new Date(c[0]).toISOString().slice(0, 10) === sessionDate && c[0] <= tickTimestamp);
+    const currentIndex = sessionCandles.findIndex(c => c[0] === current[0]);
+    const minutesSinceOpen = currentIndex >= 0 ? currentIndex * this._screeningCadenceMinutes : null;
+
+    const openingWindow = sessionCandles.slice(0, Math.max(3, Math.ceil(15 / this._screeningCadenceMinutes)));
+    const openingRangeHigh = openingWindow.length > 0 ? Math.max(...openingWindow.map(c => c[2])) : null;
+    const openingRangeLow = openingWindow.length > 0 ? Math.min(...openingWindow.map(c => c[3])) : null;
+
+    let vwapNumerator = 0;
+    let vwapDenominator = 0;
+    for (const candle of sessionCandles) {
+      const typicalPrice = (candle[2] + candle[3] + candle[4]) / 3;
+      const volume = candle[5] ?? 0;
+      vwapNumerator += typicalPrice * volume;
+      vwapDenominator += volume;
+    }
+    const sessionVwap = vwapDenominator > 0 ? +(vwapNumerator / vwapDenominator).toFixed(2) : null;
+
+    const lookback = sessionCandles.slice(Math.max(0, sessionCandles.length - 20));
+    const avgVolume = lookback.length > 0
+      ? lookback.reduce((sum, candle) => sum + (candle[5] ?? 0), 0) / lookback.length
+      : 0;
+    const volumeRatio = avgVolume > 0 ? +((current[5] ?? 0) / avgVolume).toFixed(2) : null;
+
+    return {
+      sessionVwap,
+      openingRangeHigh,
+      openingRangeLow,
+      volumeRatio,
+      minutesSinceOpen,
+      sessionDate,
+    };
   }
 
   /** Load config and pre-fetch candles on first access. */

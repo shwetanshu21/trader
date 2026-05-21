@@ -3,6 +3,11 @@ import { renderBacktestDetailPage } from '../src/operator-ui/pages/backtest-deta
 import { renderDashboardPage } from '../src/operator-ui/pages/dashboard-page.js';
 import { renderDecisionDetailPage } from '../src/operator-ui/pages/decision-detail-page.js';
 import { renderStrategyDetailPage } from '../src/operator-ui/pages/strategy-detail-page.js';
+import { renderPositionsPage } from '../src/operator-ui/pages/positions-page.js';
+import { renderStrategiesPage } from '../src/operator-ui/pages/strategies-page.js';
+import { renderDecisionsPage } from '../src/operator-ui/pages/decisions-page.js';
+import { renderGovernancePage } from '../src/operator-ui/pages/governance-page.js';
+import { renderSystemHealthPage } from '../src/operator-ui/pages/system-health-page.js';
 import type { DashboardPayload, DashboardSection } from '../src/operator-ui/dashboard-data.js';
 import type {
   OperatorBacktestDetail,
@@ -13,6 +18,7 @@ import type {
   OperatorPromotionHistory,
   OperatorProvenance,
   OperatorStrategyDetail,
+  OperatorStrategyExposure,
   OperatorStrategyPerformance,
   OperatorSummaryCard,
   OperatorTickerPerformance,
@@ -60,6 +66,7 @@ function unavailableSection<T>(): DashboardSection<T> {
 
 function sampleSummaryCards(): OperatorSummaryCard[] {
   return [
+    { key: 'upstox_auth', label: 'Upstox Auth', value: 0, unit: null, change: null, display: 'Healthy', provenance: testProvenance },
     { key: 'current_pnl', label: 'Current P&L', value: 15420.50, unit: 'INR', change: null, display: null, provenance: testProvenance },
     { key: 'open_positions', label: 'Open Positions', value: 3, unit: null, change: null, display: null, provenance: testProvenance },
   ];
@@ -92,6 +99,35 @@ function sampleDecisionPerformance(): OperatorDecisionPerformance[] {
       side: 'buy', quantity: 25, price: 2850.00, decisionStatus: 'approved',
       strategyId: 'india-nse-eq-v1', decidedAt: '2025-01-10T10:20:30.000Z',
       executionStatus: 'completed', outcomeCode: 'paper_simulated', realizedPnl: 1200.00,
+      provenance: testProvenance,
+    },
+  ];
+}
+
+function sampleStrategyExposure(): OperatorStrategyExposure[] {
+  return [
+    {
+      bucketType: 'strategy',
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      label: 'india-nse-eq-v1@1.0.0',
+      openPositionCount: 1,
+      grossOpenCostBasis: 71250,
+      grossOpenMarketValue: 72250,
+      unrealizedPnl: 1000,
+      attributionNote: null,
+      provenance: testProvenance,
+    },
+    {
+      bucketType: 'unattributed',
+      strategyId: null,
+      strategyVersion: null,
+      label: 'Unattributed Exposure',
+      openPositionCount: 1,
+      grossOpenCostBasis: 50000,
+      grossOpenMarketValue: 51000,
+      unrealizedPnl: 1000,
+      attributionNote: 'Multiple strategies traded one or more open positions, so exposure is withheld from per-strategy attribution.',
       provenance: testProvenance,
     },
   ];
@@ -203,6 +239,12 @@ function sampleStrategyDetail(): OperatorStrategyDetail {
     strategyVersion: '1.0.0',
     performance: { totalReturnPct: 12.5, sharpeRatio: 1.8, maxDrawdownPct: 15, tradeCount: 24, winRate: 0.62, profitFactor: 2.1, realizedPnl: 15420.5, unrealizedPnl: 3200 },
     recentDecisions: sampleDecisionPerformance(),
+    hostEvidencePresence: {
+      lifecycleStates: true,
+      governanceHistory: true,
+      promotionHistory: true,
+      walkForwardRuns: true,
+    },
     currentStates: sampleLifecycleStates(),
     governanceHistory: [{ id: 8, marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Escaped <b>safe</b>.', winnerId: null, evidence: { why: 'thresholds' }, recordedAt: '2025-01-11T09:20:00.000Z' }],
     promotionHistory: [{ id: 1, strategyId: 'alpha<script>', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Promoted without winner context.', winnerId: null, promotedAt: '2025-01-11T09:20:00.000Z', provenance: testProvenance }],
@@ -223,6 +265,42 @@ function sampleBacktestDetail(): OperatorBacktestDetail {
   };
 }
 
+describe('Top-level operator pages', () => {
+  it('renders dedicated positions and strategies pages with truthful exposure language', () => {
+    const payload = buildPayload();
+    const positionsHtml = renderPositionsPage(payload, sampleStrategyExposure());
+    expect(positionsHtml).toContain('Positions &amp; Exposure');
+    expect(positionsHtml).toContain('Exposure by Strategy');
+    expect(positionsHtml).toContain('Unattributed Exposure');
+    expect(positionsHtml).toContain('/positions');
+
+    const strategiesHtml = renderStrategiesPage(payload, sampleStrategyExposure());
+    expect(strategiesHtml).toContain('Attributed Open Exposure');
+    expect(strategiesHtml).toContain('Unattributed Open Market Value');
+    expect(strategiesHtml).toContain('/strategies');
+  });
+
+  it('renders dedicated decisions, governance, and system-health pages', () => {
+    const payload = buildPayload();
+    expect(renderDecisionsPage(payload)).toContain('Decision Ledger');
+    expect(renderGovernancePage(payload)).toContain('Governance &amp; Backtests');
+
+    const healthHtml = renderSystemHealthPage({
+      status: 'healthy',
+      version: '0.1.0',
+      service: 'operator-ui',
+      dbConnected: true,
+      dbError: null,
+      pollIntervalMs: 1000,
+      authClients: [],
+      sections: { summaryCards: { status: 'ok', count: 3 } },
+    });
+    expect(healthHtml).toContain('System Health');
+    expect(healthHtml).toContain('/api/health');
+    expect(healthHtml).toContain('Section Health');
+  });
+});
+
 describe('Dashboard page', () => {
   it('renders drill-down links, stable section hooks, and polling bootstrap metadata', () => {
     const html = renderDashboardPage(buildPayload(), { pollIntervalMs: 1_500 });
@@ -230,6 +308,8 @@ describe('Dashboard page', () => {
     expect(html).toContain('/decision?id=7');
     expect(html).toContain('/backtest?runId=42');
     expect(html).toContain('WF#5');
+    expect(html).toContain('Upstox Auth');
+    expect(html).toContain('Healthy');
     expect(html).toContain('data-dashboard-section="summaryCards"');
     expect(html).toContain('id="dashboard-section-strategyPerformance"');
     expect(html).toContain('id="dashboard-bootstrap"');
@@ -244,6 +324,19 @@ describe('Dashboard page', () => {
     expect(html).toContain('data-section-state="error"');
     expect(html).toContain('data-section-state="unavailable"');
     expect(html).toContain('No database snapshot available.');
+  });
+
+  it('uses host-scoped empty copy for lifecycle and governance evidence', () => {
+    const html = renderDashboardPage(buildPayload({
+      lifecycleStates: ok([]),
+      governanceHistory: ok([]),
+      promotionHistory: ok([]),
+      walkForwardLeaderboard: ok([]),
+    }));
+    expect(html).toContain('No lifecycle state evidence has been produced on this host yet.');
+    expect(html).toContain('No governance history has been produced on this host yet.');
+    expect(html).toContain('No promotion history has been produced on this host yet.');
+    expect(html).toContain('No walk-forward leaderboard entries are available yet.');
   });
 
   it('renders stale sections with preserved rows, last-known copy, and timestamps', () => {
@@ -314,6 +407,26 @@ describe('Strategy detail page', () => {
     expect(html).toContain('No candidate cleared thresholds.');
     expect(html).toContain('No winner recorded');
     expect(html).toContain('Escaped &lt;b&gt;safe&lt;/b&gt;.');
+  });
+
+  it('distinguishes host-wide absence from strategy-local absence for empty sections', () => {
+    const detail = sampleStrategyDetail();
+    detail.currentStates = [];
+    detail.governanceHistory = [];
+    detail.promotionHistory = [];
+    detail.walkForwardRuns = [];
+    detail.hostEvidencePresence = {
+      lifecycleStates: false,
+      governanceHistory: true,
+      promotionHistory: false,
+      walkForwardRuns: true,
+    };
+
+    const html = renderStrategyDetailPage(detail);
+    expect(html).toContain('No lifecycle evidence has been produced on this host yet.');
+    expect(html).toContain('Governance evidence exists on this host, but none has been persisted for this strategy version.');
+    expect(html).toContain('No promotion history has been produced on this host yet.');
+    expect(html).toContain('Walk-forward evidence exists on this host, but no persisted run is linked to this strategy version.');
   });
 });
 

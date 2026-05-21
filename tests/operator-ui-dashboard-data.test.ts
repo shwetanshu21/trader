@@ -30,7 +30,8 @@ describe('DashboardPayloadAssembler', () => {
 
     expect(payload.dbAvailable).toBe(true);
     expect(payload.summaryCards.state).toBe('ok');
-    expect(payload.summaryCards.data).toHaveLength(1);
+    expect(payload.summaryCards.data).toHaveLength(2);
+    expect(payload.summaryCards.data[0].key).toBe('upstox_auth');
     expect(payload.summaryCards.lastFetchedAt).toBe('1970-01-01T00:00:01.000Z');
     expect(payload.summaryCards.stalenessMs).toBe(0);
     expect(payload.summaryCards.isCachedData).toBe(false);

@@ -161,11 +161,29 @@ export class FixtureHistoricalDataProvider implements HistoricalDataProvider {
         ? +(c.ask * driftFactor).toFixed(2)
         : null;
 
+      const minutesSinceOpen = 15 + tick.index * this._screeningCadenceMinutes;
+      const sessionVwap = driftedPrice != null ? +(driftedPrice * 0.9975).toFixed(2) : null;
+      const openingRangeHigh = driftedPrice != null ? +(driftedPrice * 0.995).toFixed(2) : null;
+      const openingRangeLow = driftedPrice != null ? +(driftedPrice * 0.985).toFixed(2) : null;
+      const volumeRatio = c.volume != null ? +(1.2 + Math.min(tick.index * 0.05, 1.3)).toFixed(2) : null;
+      const derivedSide = driftedPrice != null && sessionVwap != null
+        ? driftedPrice >= sessionVwap ? 'buy' : 'sell'
+        : c.side;
+
       return {
         ...c,
+        side: derivedSide,
         lastPrice: driftedPrice,
         bid: driftedBid,
         ask: driftedAsk,
+        featureContext: c.featureContext ?? {
+          sessionVwap,
+          openingRangeHigh,
+          openingRangeLow,
+          volumeRatio,
+          minutesSinceOpen,
+          sessionDate: new Date(tick.timestamp).toISOString().slice(0, 10),
+        },
       };
     });
   }

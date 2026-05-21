@@ -15,9 +15,14 @@ import { OperatorDetailReadModel, OperatorDetailReadModelError } from '../operat
 import { DashboardPayloadAssembler } from './dashboard-data.js';
 import { renderStatusPage } from './render-utils.js';
 import { renderBacktestDetailPage } from './pages/backtest-detail-page.js';
-import { renderDashboardPage, renderDashboardSectionHtml } from './pages/dashboard-page.js';
+import { renderDashboardPage, renderDashboardSectionHtml, renderOverviewHero } from './pages/dashboard-page.js';
 import { renderDecisionDetailPage } from './pages/decision-detail-page.js';
 import { renderStrategyDetailPage } from './pages/strategy-detail-page.js';
+import { renderPositionsPage } from './pages/positions-page.js';
+import { renderStrategiesPage } from './pages/strategies-page.js';
+import { renderDecisionsPage } from './pages/decisions-page.js';
+import { renderGovernancePage } from './pages/governance-page.js';
+import { renderSystemHealthPage, type OperatorSystemHealthViewModel } from './pages/system-health-page.js';
 
 export interface OperatorUIServerOptions {
   config: OperatorUIConfig;
@@ -57,6 +62,41 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
           handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs);
+          return;
+        }
+
+        case '/positions': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, payload => renderPositionsPage(payload, readModel?.getStrategyExposure() ?? []));
+          return;
+        }
+
+        case '/strategies': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, payload => renderStrategiesPage(payload, readModel?.getStrategyExposure() ?? []));
+          return;
+        }
+
+        case '/decisions': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderDecisionsPage);
+          return;
+        }
+
+        case '/governance': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderGovernancePage);
+          return;
+        }
+
+        case '/system-health': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          handleSystemHealthHtml(res, config, db, dbError, authenticator, readModel);
           return;
         }
 
@@ -175,6 +215,36 @@ function handleDashboardHtml(
       detail: err instanceof Error ? err.message : 'Unknown error while assembling dashboard payload.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Retry dashboard</a>',
+    }));
+  }
+}
+
+function handleTopLevelDashboardPage(
+  res: http.ServerResponse,
+  dashboardPayloadAssembler: DashboardPayloadAssembler,
+  readModel: OperatorReadModel | null,
+  dbError: string | null,
+  renderPage: (payload: ReturnType<DashboardPayloadAssembler['fetchDashboardPayload']>) => string,
+): void {
+  if (readModel === null) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Database Unavailable',
+      detail: dbError ?? 'Failed to open operator database.',
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to overview</a>',
+    }));
+    return;
+  }
+
+  try {
+    const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
+    respondHtml(res, 200, renderPage(payload));
+  } catch (err) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Operator Page Unavailable',
+      detail: err instanceof Error ? err.message : 'Unknown error while assembling operator payload.',
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/">Back to overview</a>',
     }));
   }
 }
@@ -357,6 +427,7 @@ function handleApiRefresh(
       dbError: payload.dbError,
       pollIntervalMs,
       error: payload.dbAvailable ? null : 'Database unavailable',
+      heroHtml: renderOverviewHero(payload),
       sections: {
         summaryCards: serializeDashboardSection(payload.summaryCards, sectionHtml.summaryCards),
         strategyPerformance: serializeDashboardSection(payload.strategyPerformance, sectionHtml.strategyPerformance),
@@ -397,14 +468,13 @@ function serializeDashboardSection<T extends { length: number }>(section: {
   };
 }
 
-function handleApiHealth(
-  res: http.ServerResponse,
+function buildOperatorHealthPayload(
   config: OperatorUIConfig,
   db: Database.Database | null,
   dbError: string | null,
   authenticator: Authenticator,
   readModel: OperatorReadModel | null,
-): void {
+): OperatorSystemHealthViewModel {
   const dbOk = db !== null;
   const sections: Record<string, unknown> = {};
 
@@ -438,6 +508,13 @@ function handleApiHealth(
     }
 
     try {
+      const exposure = readModel.getStrategyExposure();
+      sections.strategyExposure = { status: 'ok', count: exposure.length };
+    } catch (err) {
+      sections.strategyExposure = { status: 'error', error: err instanceof Error ? err.message : String(err) };
+    }
+
+    try {
       const lifecycle = readModel.getLifecycleStates();
       sections.lifecycle = { status: 'ok', count: lifecycle.length };
     } catch (err) {
@@ -447,8 +524,7 @@ function handleApiHealth(
     sections.summaryCards = { status: 'unavailable', error: dbError ?? 'Read model not initialized' };
   }
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({
+  return {
     status: dbOk ? 'healthy' : 'degraded',
     version: '0.1.0',
     service: 'operator-ui',
@@ -457,7 +533,30 @@ function handleApiHealth(
     pollIntervalMs: config.pollIntervalMs,
     authClients: authenticator.getStateSummary(),
     sections,
-  }));
+  };
+}
+
+function handleSystemHealthHtml(
+  res: http.ServerResponse,
+  config: OperatorUIConfig,
+  db: Database.Database | null,
+  dbError: string | null,
+  authenticator: Authenticator,
+  readModel: OperatorReadModel | null,
+): void {
+  respondHtml(res, 200, renderSystemHealthPage(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel)));
+}
+
+function handleApiHealth(
+  res: http.ServerResponse,
+  config: OperatorUIConfig,
+  db: Database.Database | null,
+  dbError: string | null,
+  authenticator: Authenticator,
+  readModel: OperatorReadModel | null,
+): void {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel)));
 }
 
 function parseRequiredInt(url: URL, key: string, label: string):

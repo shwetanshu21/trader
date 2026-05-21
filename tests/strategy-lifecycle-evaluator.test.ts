@@ -76,8 +76,67 @@ function createContext(): TestContext {
   const evaluator = new StrategyLifecycleEvaluator({
     walkForwardRepo: repo,
     lifecycleRepo,
+    db,
   });
   return { repo, lifecycleRepo, evaluator, db };
+}
+
+function seedPaperValidationTrade(
+  db: ReturnType<DatabaseManager['db']>,
+  options?: {
+    strategyId?: string;
+    strategyVersion?: string;
+    exchange?: string;
+    tradingsymbol?: string;
+    realizedPnl?: number;
+    side?: 'buy' | 'sell';
+  },
+): void {
+  const strategyId = options?.strategyId ?? STRATEGY_ID;
+  const strategyVersion = options?.strategyVersion ?? STRATEGY_VERSION;
+  const exchange = options?.exchange ?? 'NSE';
+  const tradingsymbol = options?.tradingsymbol ?? 'RELIANCE';
+  const realizedPnl = options?.realizedPnl ?? 250;
+  const side = options?.side ?? 'buy';
+
+  db.prepare(`
+    INSERT INTO proposal_attempts
+      (id, exchange, tradingsymbol, instrument_token, side, product, quantity, price, trigger_price, order_type, tag, proposal_status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, exchange, tradingsymbol, null, side, 'MIS', 1, null, null, 'MARKET', 'paper-validation', 'accepted', NOW);
+
+  db.prepare(`
+    INSERT INTO strategy_decisions
+      (id, proposal_attempt_id, decision_status, strategy_id, strategy_version, decided_at, exchange, tradingsymbol, side, product, quantity, price, trigger_price, order_type,
+       quote_last_price, quote_bid, quote_ask, quote_volume, quote_received_at,
+       risk_notional, risk_sizing_basis, risk_max_loss_rupees, risk_stop_distance, risk_stop_price, risk_trailing_stop_distance, risk_budget_rupees,
+       execution_class, segment, instrument_type, expiry, strike, lot_size, tick_size, freeze_quantity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 'approved', strategyId, strategyVersion, NOW, exchange, tradingsymbol, side, 'MIS', 1, null, null, 'MARKET', 100, 100, 101, 1000, NOW, 100, 'paper_validation', 1, 1, 99, 1, 1, 'EQ', exchange, 'EQ', null, null, 1, 0.05, null);
+
+  db.prepare(`
+    INSERT INTO execution_attempts
+      (id, strategy_decision_id, execution_mode, status, outcome_code, broker_order_id, message, attempted_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 'paper', 'completed', 'paper_simulated', 'paper-9001', 'ok', NOW, NOW + 1000);
+
+  db.prepare(`
+    INSERT INTO paper_orders
+      (id, execution_attempt_id, exchange, tradingsymbol, side, product, quantity, price, order_type, status, broker_order_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, exchange, tradingsymbol, side, 'MIS', 1, 100, 'MARKET', 'filled', 'paper-9001', NOW);
+
+  db.prepare(`
+    INSERT INTO paper_fills
+      (id, paper_order_id, execution_attempt_id, exchange, tradingsymbol, side, product, filled_quantity, filled_price, broker_order_id, filled_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 9001, exchange, tradingsymbol, side, 'MIS', 1, 100, 'paper-9001', NOW);
+
+  db.prepare(`
+    INSERT INTO position_events
+      (id, paper_order_id, paper_fill_id, execution_attempt_id, event_type, exchange, tradingsymbol, product, quantity_delta, price, previous_quantity, previous_avg_cost, new_quantity, new_avg_cost, realized_pnl, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 9001, 9001, 'exit', exchange, tradingsymbol, 'MIS', 0, 100, 1, 100, 0, 0, realizedPnl, NOW + 2000);
 }
 
 // ---------------------------------------------------------------------------
@@ -298,9 +357,10 @@ describe('StrategyLifecycleEvaluator', () => {
       expect(result.rationale).toContain('paper');
     });
 
-    it('promotes from paper to live when strategy is already at paper', () => {
-      const { repo, lifecycleRepo, evaluator } = createContext();
+    it('promotes from paper to live when strategy is already at paper and paper validation exists', () => {
+      const { repo, lifecycleRepo, evaluator, db } = createContext();
       const { runId } = seedPromotableRun(repo);
+      seedPaperValidationTrade(db);
 
       // Seed current phase as Paper
       lifecycleRepo.upsertCurrentState({
@@ -317,6 +377,7 @@ describe('StrategyLifecycleEvaluator', () => {
       expect(result.previousPhase).toBe(StrategyLifecyclePhase.Paper);
       expect(result.newPhase).toBe(StrategyLifecyclePhase.Live);
       expect(result.stateUpdated).toBe(true);
+      expect(result.evidenceSnapshot.paperValidation?.available).toBe(true);
     });
 
     it('holds when strategy is already at live (max phase)', () => {
@@ -788,7 +849,7 @@ describe('StrategyLifecycleEvaluator', () => {
       expect(first.evidenceSnapshot.mergedScore).toBe(second.evidenceSnapshot.mergedScore);
     });
 
-    it('produces consistent PROMOTE results on repeated evaluation', () => {
+    it('produces consistent promotion then hold results on repeated evaluation without paper validation evidence', () => {
       const { repo, evaluator } = createContext();
       const { runId } = seedPromotableRun(repo);
 
@@ -796,29 +857,24 @@ describe('StrategyLifecycleEvaluator', () => {
       const second = evaluator.evaluate(defaultInput(runId));
 
       expect(first.verdict).toBe(GovernanceVerdict.Promote);
-      expect(second.verdict).toBe(GovernanceVerdict.Promote);
+      expect(second.verdict).toBe(GovernanceVerdict.Hold);
       expect(first.rationale).toContain('All promotion thresholds met');
-      expect(second.rationale).toContain('All promotion thresholds met');
+      expect(second.rationale).toContain('Paper-to-live promotion requires persisted paper-trading validation evidence');
     });
 
-    it('does not duplicate lifecycle state on repeated promote', () => {
+    it('does not escalate beyond paper on repeated promote without paper validation evidence', () => {
       const { repo, lifecycleRepo, evaluator } = createContext();
       const { runId } = seedPromotableRun(repo);
 
       evaluator.evaluate(defaultInput(runId));
       evaluator.evaluate(defaultInput(runId));
 
-      // After first promote: backtest -> paper.
-      // After second promote (same winner still qualifies): paper -> live.
-      // This is correct — the evaluator doesn't gate on which winner was used;
-      // repeated evaluation with qualifying evidence escalates through phases.
       const state = lifecycleRepo.getCurrentState(STRATEGY_ID, STRATEGY_VERSION, MARKET_ID);
-      expect(state.phase).toBe(StrategyLifecyclePhase.Live);
+      expect(state.phase).toBe(StrategyLifecyclePhase.Paper);
 
-      // Should have 2 governance decisions (append-only)
       const decisions = lifecycleRepo.getDecisionsForStrategy(STRATEGY_ID, STRATEGY_VERSION, MARKET_ID, 10);
       expect(decisions.length).toBe(2);
-      expect(decisions[0].verdict).toBe(GovernanceVerdict.Promote);
+      expect(decisions[0].verdict).toBe(GovernanceVerdict.Hold);
       expect(decisions[1].verdict).toBe(GovernanceVerdict.Promote);
     });
   });

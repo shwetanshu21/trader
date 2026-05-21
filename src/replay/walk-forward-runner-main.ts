@@ -5,6 +5,7 @@ import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
 import type { BoundedCandidate } from '../types/runtime.js';
 import { createOptionalProposalEngine } from './proposal-engine-factory.js';
+import { loadProjectEnvFile, resolveWalkForwardDbPath } from './walk-forward-db-path.js';
 
 interface RunnerOptions {
   days: number;
@@ -26,7 +27,7 @@ function parseArgs(argv: string[]): RunnerOptions {
     step: 1,
     ratio: 0.8,
     trials: 'default',
-    dbPath: ':memory:',
+    dbPath: resolveWalkForwardDbPath(undefined),
     label: 'cli-walk-forward',
   };
 
@@ -95,6 +96,7 @@ function createFixtureCandidates(): BoundedCandidate[] {
 }
 
 async function main(): Promise<void> {
+  loadProjectEnvFile();
   const options = parseArgs(process.argv.slice(2));
   const now = Date.now();
   const rangeEnd = now;

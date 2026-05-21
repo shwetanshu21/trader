@@ -87,7 +87,7 @@ interface StrategyPerformanceRow {
   trade_count: number;
   realized_pnl: number;
   unrealized_pnl: number;
-  total_return_pct: number;
+  total_return_pct: number | null;
   avg_sharpe: number | null;
   avg_max_drawdown: number | null;
   avg_win_rate: number | null;
@@ -388,6 +388,13 @@ export class OperatorDetailReadModel {
         recordedAt: this._iso(row.recorded_at),
       }));
 
+      const hostEvidencePresence = {
+        lifecycleStates: this._countRows('SELECT COUNT(*) AS cnt FROM strategy_lifecycle_state') > 0,
+        governanceHistory: this._countRows('SELECT COUNT(*) AS cnt FROM governance_decisions') > 0,
+        promotionHistory: this._countRows("SELECT COUNT(*) AS cnt FROM governance_decisions WHERE verdict = 'promote'") > 0,
+        walkForwardRuns: this._countRows('SELECT COUNT(*) AS cnt FROM walk_forward_runs') > 0,
+      };
+
       return {
         strategyId,
         strategyVersion,
@@ -402,6 +409,7 @@ export class OperatorDetailReadModel {
           unrealizedPnl: performanceRow.unrealized_pnl,
         },
         recentDecisions,
+        hostEvidencePresence,
         currentStates: currentStates.map<OperatorLifecycleState>(row => ({
           strategyId: row.strategy_id,
           strategyVersion: row.strategy_version,
@@ -560,7 +568,7 @@ export class OperatorDetailReadModel {
             THEN (pp.mark_price - pp.avg_cost_price) * ABS(pp.quantity)
           ELSE 0
         END), 0) AS unrealized_pnl,
-        COALESCE(AVG(wtw.total_return), 0) AS total_return_pct,
+        AVG(wtw.total_return) AS total_return_pct,
         AVG(wtw.sharpe_ratio) AS avg_sharpe,
         AVG(wtw.max_drawdown) AS avg_max_drawdown,
         AVG(wtw.win_rate) AS avg_win_rate,
@@ -586,7 +594,7 @@ export class OperatorDetailReadModel {
       trade_count: 0,
       realized_pnl: 0,
       unrealized_pnl: 0,
-      total_return_pct: 0,
+      total_return_pct: null,
       avg_sharpe: null,
       avg_max_drawdown: null,
       avg_win_rate: null,
@@ -638,6 +646,11 @@ export class OperatorDetailReadModel {
       realizedPnl: row.ea_status ? row.pe_realized_pnl : null,
       provenance: this._provenance('historical', 'strategy_decisions+execution_attempts+position_events'),
     }));
+  }
+
+  private _countRows(sql: string, ...params: Array<string | number>): number {
+    const row = this._db.prepare(sql).get(...params) as CountRow | undefined;
+    return row?.cnt ?? 0;
   }
 
   private _safeParseJson<T>(raw: string | null, label: string, diagnostics: string[]): T | null {

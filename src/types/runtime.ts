@@ -1989,6 +1989,21 @@ export interface StrategyPluginIdentity {
   version: string;
 }
 
+export interface BoundedCandidateFeatureContext {
+  /** Session VWAP at the candidate timestamp, or null when unavailable. */
+  sessionVwap: number | null;
+  /** Opening-range high for the configured opening window, or null when unavailable. */
+  openingRangeHigh: number | null;
+  /** Opening-range low for the configured opening window, or null when unavailable. */
+  openingRangeLow: number | null;
+  /** Volume / average-volume ratio, or null when unavailable. */
+  volumeRatio: number | null;
+  /** Minutes elapsed since market open, or null when unknown. */
+  minutesSinceOpen: number | null;
+  /** Session date in YYYY-MM-DD, or null when unknown. */
+  sessionDate: string | null;
+}
+
 /**
  * A bounded candidate — an instrument+quote pair that has already been
  * filtered through the eligible universe, ready for strategy plugin evaluation.
@@ -2026,6 +2041,8 @@ export interface BoundedCandidate {
   strike: number | null;
   /** Freeze quantity from broker instrument master, or null when unavailable. */
   freezeQuantity: number | null;
+  /** Optional derived intraday features used by richer deterministic strategies. */
+  featureContext?: BoundedCandidateFeatureContext | null;
 }
 
 /**
@@ -2775,8 +2792,11 @@ export interface OperatorStrategyPerformance {
   strategyId: string;
   /** Strategy version (e.g. '1.0.0'). */
   strategyVersion: string;
-  /** Total return as a percentage (e.g. 12.5 for 12.5%). */
-  totalReturnPct: number;
+  /**
+   * Total return as a percentage (e.g. 12.5 for 12.5%), or null when the
+   * backend cannot provide a truthful denominator for live/operator display.
+   */
+  totalReturnPct: number | null;
   /** Sharpe ratio, or null when not computable. */
   sharpeRatio: number | null;
   /** Maximum drawdown as a percentage (0-100), or null. */
@@ -2821,6 +2841,36 @@ export interface OperatorTickerPerformance {
   unrealizedPnl: number;
   /** Realized P&L in rupees. */
   realizedPnl: number;
+  /** Provenance metadata. */
+  provenance: OperatorProvenance;
+}
+
+/**
+ * Conservative open-exposure attribution bucket.
+ *
+ * Rows are attributed to a strategy only when the current open position can be
+ * linked to exactly one strategy via persisted paper fill evidence. Otherwise
+ * exposure is grouped into an explicit unattributed bucket rather than guessed.
+ */
+export interface OperatorStrategyExposure {
+  /** strategy when attribution is unique; unattributed otherwise. */
+  bucketType: 'strategy' | 'unattributed';
+  /** Strategy identity, or null for unattributed rows. */
+  strategyId: string | null;
+  /** Strategy version, or null for unattributed rows. */
+  strategyVersion: string | null;
+  /** Human-readable label for the row. */
+  label: string;
+  /** Number of currently open positions represented by this bucket. */
+  openPositionCount: number;
+  /** Gross open cost basis proxy in rupees. */
+  grossOpenCostBasis: number;
+  /** Gross open market value proxy in rupees. */
+  grossOpenMarketValue: number;
+  /** Unrealized P&L across the bucket in rupees. */
+  unrealizedPnl: number;
+  /** Why attribution was withheld, or null when attributed. */
+  attributionNote: string | null;
   /** Provenance metadata. */
   provenance: OperatorProvenance;
 }
@@ -3210,7 +3260,7 @@ export interface OperatorStrategyDetail {
   strategyVersion: string;
   /** Current performance summary for this strategy version across persisted trading evidence. */
   performance: {
-    totalReturnPct: number;
+    totalReturnPct: number | null;
     sharpeRatio: number | null;
     maxDrawdownPct: number | null;
     tradeCount: number;
@@ -3221,6 +3271,13 @@ export interface OperatorStrategyDetail {
   };
   /** Recent per-decision execution outcomes for this strategy version. */
   recentDecisions: OperatorDecisionPerformance[];
+  /** Host-wide evidence presence flags used to explain empty states truthfully. */
+  hostEvidencePresence: {
+    lifecycleStates: boolean;
+    governanceHistory: boolean;
+    promotionHistory: boolean;
+    walkForwardRuns: boolean;
+  };
   /** Current lifecycle states across all matching markets. */
   currentStates: OperatorLifecycleState[];
   /** Governance history across all matching markets. */

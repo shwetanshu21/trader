@@ -6,6 +6,7 @@
 // model absence.
 
 import type { OperatorReadModel } from '../operator/operator-read-model.js';
+import { getBridgeAuthSummaryCard } from './bridge-auth-status.js';
 import type {
   OperatorSummaryCard,
   OperatorStrategyPerformance,
@@ -253,8 +254,11 @@ export class DashboardPayloadAssembler {
   ): DashboardSectionMap[K] {
     try {
       const data = definition.fetch(readModel);
-      this.cache.set(definition.key, { data, lastFetchedAtMs: nowMs });
-      return okSection(data, nowMs) as DashboardSectionMap[K];
+      const normalizedData = definition.key === 'summaryCards'
+        ? [getBridgeAuthSummaryCard(), ...(data as OperatorSummaryCard[])] as DashboardSectionMap[K]['data']
+        : data;
+      this.cache.set(definition.key, { data: normalizedData, lastFetchedAtMs: nowMs });
+      return okSection(normalizedData, nowMs) as DashboardSectionMap[K];
     } catch (err) {
       const message = sanitizeDiagnostic(definition.label, err);
       const cached = this.cache.get(definition.key) as CachedSectionValue<DashboardSectionMap[K]['data']> | undefined;

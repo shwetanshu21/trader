@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { WalkForwardRepository } from '../src/persistence/walk-forward-repo.js';
+import { ReplaySessionRepository } from '../src/persistence/replay-session-repo.js';
 import { WalkForwardEvaluator, WalkForwardInterruptionError, type WalkForwardTrialConfig } from '../src/replay/walk-forward-evaluator.js';
 import { FixtureHistoricalDataProvider } from '../src/replay/historical-data-provider.js';
 import { WalkForwardStatus, type WalkForwardWindowMetricsEnvelope } from '../src/replay/walk-forward-types.js';
@@ -98,57 +99,118 @@ afterEach(() => {
 });
 
 describe('WalkForwardEvaluator', () => {
+  it('writes durable progress snapshots and persists cadence override into replay sessions', async () => {
+    const cwd = process.cwd();
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-progress-'));
+    tmpDirs.push(workDir);
+    process.chdir(workDir);
+
+    try {
+      const ctx = createEvaluator();
+
+      const result = await ctx.evaluator.evaluate({
+        rangeStart: ctx.rangeStart,
+        rangeEnd: ctx.rangeEnd,
+        windowSizeMs: 4 * DAY_MS,
+        stepSizeMs: 2 * DAY_MS,
+        inSampleRatio: 0.75,
+        label: 'progress-proof',
+        trialConfigs: [{ label: 'Config A', params: { maxCandidates: 3 } }],
+        cadenceMinutes: 30,
+      });
+
+      const progressPath = path.join(workDir, 'data', 'artifacts', 'walk-forward', '1', 'progress.json');
+      const progress = JSON.parse(fs.readFileSync(progressPath, 'utf8')) as {
+        status: string;
+        checkpointCount: number;
+        completedTrialCount: number;
+        activeTrialIndex: number | null;
+        activeWindowIndex: number | null;
+      };
+
+      expect(progress.status).toBe(WalkForwardStatus.Completed);
+      expect(progress.checkpointCount).toBe(1);
+      expect(progress.completedTrialCount).toBe(1);
+      expect(progress.activeTrialIndex).toBeNull();
+      expect(progress.activeWindowIndex).toBeNull();
+
+      const firstEnvelope = parseWindowMetrics(result.trials[0].windowEvidence[0].metricsJson);
+      const replaySessionRepo = new ReplaySessionRepository(ctx.dbManager.db);
+      const replaySession = replaySessionRepo.getSession(firstEnvelope.replayEvidence.replaySessionId);
+      expect(replaySession?.cadenceMinutes).toBe(30);
+
+      ctx.dbManager.close();
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   it('checkpoints persisted trials and resumes an interrupted run without duplicating completed work', async () => {
-    const dbPath = createDbPath();
-    const first = createEvaluator({ dbPath });
+    const cwd = process.cwd();
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-resume-'));
+    tmpDirs.push(workDir);
+    process.chdir(workDir);
 
-    await expect(first.evaluator.evaluate({
-      rangeStart: first.rangeStart,
-      rangeEnd: first.rangeEnd,
-      windowSizeMs: 4 * DAY_MS,
-      stepSizeMs: 2 * DAY_MS,
-      inSampleRatio: 0.75,
-      label: 'resume-proof',
-      trialConfigs,
-      stopAfterTrialCount: 1,
-    })).rejects.toBeInstanceOf(WalkForwardInterruptionError);
+    try {
+      const dbPath = createDbPath();
+      const first = createEvaluator({ dbPath });
 
-    const interruptedRun = first.repo.getRun(1);
-    expect(interruptedRun?.status).toBe(WalkForwardStatus.Interrupted);
-    expect(first.repo.countTrialsForRun(1)).toBe(1);
-    expect(first.repo.countCheckpoints(1)).toBe(1);
-    expect(first.repo.getLatestCheckpoint(1)?.lastCompletedTrialIndex).toBe(0);
+      await expect(first.evaluator.evaluate({
+        rangeStart: first.rangeStart,
+        rangeEnd: first.rangeEnd,
+        windowSizeMs: 4 * DAY_MS,
+        stepSizeMs: 2 * DAY_MS,
+        inSampleRatio: 0.75,
+        label: 'resume-proof',
+        trialConfigs,
+        stopAfterTrialCount: 1,
+      })).rejects.toBeInstanceOf(WalkForwardInterruptionError);
 
-    const firstTrial = first.repo.getTrialForRunByIndex(1, 0);
-    expect(firstTrial?.mergedScore).toBeGreaterThanOrEqual(0);
-    const firstTrialEvidence = first.repo.getTrialWindowEvidence(firstTrial!.id);
-    const firstEnvelope = parseWindowMetrics(firstTrialEvidence[0].metricsJson);
-    expect(firstEnvelope.source).toBe('replay-session');
-    expect(firstEnvelope.replayEvidence.replaySessionId).toBeGreaterThan(0);
-    expect(firstEnvelope.replayEvidence.checkpointCount).toBeGreaterThan(0);
-    expect(firstEnvelope.replayEvidence.strategyRunCount).toBeGreaterThan(0);
-    first.dbManager.close();
+      const interruptedRun = first.repo.getRun(1);
+      expect(interruptedRun?.status).toBe(WalkForwardStatus.Interrupted);
+      const interruptedProgress = JSON.parse(
+        fs.readFileSync(path.join(workDir, 'data', 'artifacts', 'walk-forward', '1', 'progress.json'), 'utf8'),
+      ) as { status: string; lastCompletedTrialIndex: number | null; completedTrialCount: number };
+      expect(interruptedProgress.status).toBe(WalkForwardStatus.Interrupted);
+      expect(interruptedProgress.lastCompletedTrialIndex).toBe(0);
+      expect(interruptedProgress.completedTrialCount).toBe(1);
+      expect(first.repo.countTrialsForRun(1)).toBe(1);
+      expect(first.repo.countCheckpoints(1)).toBe(1);
+      expect(first.repo.getLatestCheckpoint(1)?.lastCompletedTrialIndex).toBe(0);
 
-    const resumed = createEvaluator({ dbPath });
-    const result = await resumed.evaluator.evaluate({
-      rangeStart: resumed.rangeStart,
-      rangeEnd: resumed.rangeEnd,
-      windowSizeMs: 4 * DAY_MS,
-      stepSizeMs: 2 * DAY_MS,
-      inSampleRatio: 0.75,
-      label: 'resume-proof',
-      trialConfigs,
-      resumeRunId: 1,
-    });
+      const firstTrial = first.repo.getTrialForRunByIndex(1, 0);
+      expect(firstTrial?.mergedScore).toBeGreaterThanOrEqual(0);
+      const firstTrialEvidence = first.repo.getTrialWindowEvidence(firstTrial!.id);
+      const firstEnvelope = parseWindowMetrics(firstTrialEvidence[0].metricsJson);
+      expect(firstEnvelope.source).toBe('replay-session');
+      expect(firstEnvelope.replayEvidence.replaySessionId).toBeGreaterThan(0);
+      expect(firstEnvelope.replayEvidence.checkpointCount).toBeGreaterThan(0);
+      expect(firstEnvelope.replayEvidence.strategyRunCount).toBeGreaterThan(0);
+      first.dbManager.close();
 
-    expect(result.run.id).toBe(1);
-    expect(result.run.status).toBe(WalkForwardStatus.Completed);
-    expect(resumed.repo.countTrialsForRun(1)).toBe(2);
-    expect(resumed.repo.getTrialsForRunByIndex(1).map(trial => trial.trialIndex)).toEqual([0, 1]);
-    expect(resumed.repo.countCheckpoints(1)).toBe(2);
-    expect(resumed.repo.getLatestCheckpoint(1)?.lastCompletedTrialIndex).toBe(1);
-    expect(resumed.repo.getWindowsForRun(1).every(window => window.status === 'completed')).toBe(true);
-    resumed.dbManager.close();
+      const resumed = createEvaluator({ dbPath });
+      const result = await resumed.evaluator.evaluate({
+        rangeStart: resumed.rangeStart,
+        rangeEnd: resumed.rangeEnd,
+        windowSizeMs: 4 * DAY_MS,
+        stepSizeMs: 2 * DAY_MS,
+        inSampleRatio: 0.75,
+        label: 'resume-proof',
+        trialConfigs,
+        resumeRunId: 1,
+      });
+
+      expect(result.run.id).toBe(1);
+      expect(result.run.status).toBe(WalkForwardStatus.Completed);
+      expect(resumed.repo.countTrialsForRun(1)).toBe(2);
+      expect(resumed.repo.getTrialsForRunByIndex(1).map(trial => trial.trialIndex)).toEqual([0, 1]);
+      expect(resumed.repo.countCheckpoints(1)).toBe(2);
+      expect(resumed.repo.getLatestCheckpoint(1)?.lastCompletedTrialIndex).toBe(1);
+      expect(resumed.repo.getWindowsForRun(1).every(window => window.status === 'completed')).toBe(true);
+      resumed.dbManager.close();
+    } finally {
+      process.chdir(cwd);
+    }
   });
 
   it('persists replay-backed evidence handles for every trial window', async () => {
@@ -176,7 +238,12 @@ describe('WalkForwardEvaluator', () => {
       expect(trial.windowEvidence.length).toBeGreaterThan(0);
       for (const evidence of trial.windowEvidence) {
         const envelope = parseWindowMetrics(evidence.metricsJson);
-        expect(envelope.source).toBe('replay-session');
+        if (envelope.replayEvidence.executionTruth.available) {
+          expect(envelope.source).toBe('replay-paper-execution');
+          expect(envelope.replayEvidence.executionTruth.tradeCount).toBeGreaterThan(0);
+        } else {
+          expect(envelope.source).toBe('replay-session');
+        }
         expect(envelope.replayEvidence.replaySessionId).toBeGreaterThan(0);
         expect(envelope.replayEvidence.replayStatus).toBe('completed');
         // Verify cap evidence is present in replay evidence

@@ -31,7 +31,7 @@ WorkingDirectory=/root/trader
 EnvironmentFile=-/root/trader/.env
 Environment=NODE_ENV=production
 Environment=TRADER_PORT=3001
-Environment=TRADER_DB_PATH=./data/trader-upstox.db
+Environment=TRADER_DB_PATH=./data/trader-upstox-static.db
 Environment=TRADER_SCHEDULER_INTERVAL_MS=60000
 Environment=TRADER_LOG_LEVEL=info
 Environment=TRADER_MARKET_TIMEZONE=Asia/Kolkata

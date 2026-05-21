@@ -351,6 +351,17 @@ export interface WalkForwardReplayEvidence {
   llmStatusCounts: Record<string, number> | Partial<Record<string, number>>;
   pluginErrorCount: number;
   errorMessage: string | null;
+  executionTruth: {
+    available: boolean;
+    source: 'replay-paper-execution' | 'replay-session';
+    tradeCount: number;
+    realizedPnl: number;
+    grossProfit: number;
+    grossLoss: number;
+    winCount: number;
+    lossCount: number;
+    maxDrawdown: number | null;
+  };
 }
 
 /**
@@ -358,7 +369,7 @@ export interface WalkForwardReplayEvidence {
  */
 export interface WalkForwardWindowMetricsEnvelope {
   schemaVersion: 1;
-  source: 'replay-session';
+  source: 'replay-session' | 'replay-paper-execution';
   replayEvidence: WalkForwardReplayEvidence;
   summary: {
     tickCount: number;

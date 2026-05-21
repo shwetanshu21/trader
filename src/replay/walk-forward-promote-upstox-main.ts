@@ -12,6 +12,7 @@ import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-repo.js';
 import { StrategyLifecycleEvaluator } from '../lifecycle/strategy-lifecycle-evaluator.js';
 import { GovernanceVerdict } from '../types/runtime.js';
+import { loadProjectEnvFile, resolveWalkForwardDbPath } from './walk-forward-db-path.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -33,7 +34,7 @@ interface PromoteOptions {
 
 function parseArgs(argv: string[]): PromoteOptions {
   const options: PromoteOptions = {
-    dbPath: 'data/trader-upstox.db',
+    dbPath: resolveWalkForwardDbPath(undefined),
     runId: null,
     strategyId: 'india-nse-eq-v1',
     strategyVersion: '1.0.0',
@@ -113,6 +114,7 @@ Options:
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  loadProjectEnvFile();
   const options = parseArgs(process.argv.slice(2));
   const dbManager = new DatabaseManager(options.dbPath);
   const walkForwardRepo = new WalkForwardRepository(dbManager.db);
@@ -120,6 +122,7 @@ async function main(): Promise<void> {
   const evaluator = new StrategyLifecycleEvaluator({
     walkForwardRepo,
     lifecycleRepo,
+    db: dbManager.db,
   });
 
   // Resolve run ID: use the provided one, or find the latest winner

@@ -18,6 +18,7 @@ import {
   type OperatorSummaryCard,
   type OperatorStrategyPerformance,
   type OperatorTickerPerformance,
+  type OperatorStrategyExposure,
   type OperatorDecisionPerformance,
   type OperatorLifecycleState,
   type OperatorLifecycleHistory,
@@ -48,6 +49,7 @@ interface PaperFillRow {
 interface PaperPositionRow {
   exchange: string;
   tradingsymbol: string;
+  product: string;
   side: string;
   quantity: number;
   avg_cost_price: number;
@@ -559,7 +561,10 @@ export class OperatorReadModel {
         results.push({
           strategyId: row.strategy_id,
           strategyVersion: row.strategy_version,
-          totalReturnPct: row.total_realized_pnl > 0 ? row.total_realized_pnl : 0,
+          // Intentionally withheld for operator surfaces until a truthful live
+          // denominator/capital base is persisted. Rendering raw realized P&L as
+          // a percentage produced misleading values such as 95720.6%.
+          totalReturnPct: null,
           sharpeRatio: null, // Not computable from fill-level data alone
           maxDrawdownPct: null,
           tradeCount: row.trade_count,
@@ -703,6 +708,110 @@ export class OperatorReadModel {
     }
 
     return results;
+  }
+
+  // -----------------------------------------------------------------------
+  // Conservative strategy exposure attribution
+  // -----------------------------------------------------------------------
+
+  /**
+   * Return open exposure proxy buckets by strategy when attribution is unique.
+   *
+   * If an open position can be linked to exactly one strategy through persisted
+   * paper fill evidence, its current exposure is attributed to that strategy.
+   * If zero or multiple strategies are linked, the position is grouped into an
+   * explicit unattributed bucket rather than guessed.
+   */
+  getStrategyExposure(): OperatorStrategyExposure[] {
+    const results = new Map<string, OperatorStrategyExposure>();
+
+    try {
+      const positions = this._db.prepare(`
+        SELECT exchange, tradingsymbol, product, side, quantity, avg_cost_price, realized_pnl, mark_price
+        FROM paper_positions
+        WHERE quantity != 0
+        ORDER BY exchange, tradingsymbol, product
+      `).all() as PaperPositionRow[];
+
+      const distinctStrategies = this._db.prepare(`
+        SELECT DISTINCT sd.strategy_id, sd.strategy_version
+        FROM paper_fills pf
+        INNER JOIN execution_attempts ea ON ea.id = pf.execution_attempt_id
+        INNER JOIN strategy_decisions sd ON sd.id = ea.strategy_decision_id
+        WHERE pf.exchange = ?
+          AND pf.tradingsymbol = ?
+          AND pf.product = ?
+      `);
+
+      for (const position of positions) {
+        const relatedStrategies = distinctStrategies.all(
+          position.exchange,
+          position.tradingsymbol,
+          position.product,
+        ) as Array<{ strategy_id: string; strategy_version: string }>;
+
+        const grossOpenCostBasis = Math.abs(position.quantity) * position.avg_cost_price;
+        const grossOpenMarketValue = Math.abs(position.quantity) * (position.mark_price ?? position.avg_cost_price);
+        const unrealizedPnl = position.mark_price !== null && position.avg_cost_price !== 0
+          ? (position.mark_price - position.avg_cost_price) * Math.abs(position.quantity)
+          : 0;
+
+        let key: string;
+        let bucket: OperatorStrategyExposure;
+
+        if (relatedStrategies.length === 1) {
+          const strategy = relatedStrategies[0];
+          key = `strategy:${strategy.strategy_id}:${strategy.strategy_version}`;
+          bucket = results.get(key) ?? {
+            bucketType: 'strategy',
+            strategyId: strategy.strategy_id,
+            strategyVersion: strategy.strategy_version,
+            label: `${strategy.strategy_id}@${strategy.strategy_version}`,
+            openPositionCount: 0,
+            grossOpenCostBasis: 0,
+            grossOpenMarketValue: 0,
+            unrealizedPnl: 0,
+            attributionNote: null,
+            provenance: this._provenance('historical', 'paper_positions+paper_fills+execution_attempts+strategy_decisions'),
+          };
+        } else {
+          const isAmbiguous = relatedStrategies.length > 1;
+          key = isAmbiguous ? 'unattributed:ambiguous' : 'unattributed:unlinked';
+          bucket = results.get(key) ?? {
+            bucketType: 'unattributed',
+            strategyId: null,
+            strategyVersion: null,
+            label: isAmbiguous ? 'Unattributed Exposure' : 'Unlinked Exposure',
+            openPositionCount: 0,
+            grossOpenCostBasis: 0,
+            grossOpenMarketValue: 0,
+            unrealizedPnl: 0,
+            attributionNote: isAmbiguous
+              ? 'Multiple strategies traded one or more open positions, so exposure is withheld from per-strategy attribution.'
+              : 'One or more open positions have no linked strategy fill evidence, so exposure remains unattributed.',
+            provenance: this._provenance('historical', 'paper_positions+paper_fills+execution_attempts+strategy_decisions'),
+          };
+        }
+
+        bucket.openPositionCount += 1;
+        bucket.grossOpenCostBasis += grossOpenCostBasis;
+        bucket.grossOpenMarketValue += grossOpenMarketValue;
+        bucket.unrealizedPnl += unrealizedPnl;
+        results.set(key, bucket);
+      }
+    } catch {
+      return [];
+    }
+
+    return Array.from(results.values()).sort((a, b) => {
+      if (a.bucketType !== b.bucketType) {
+        return a.bucketType === 'strategy' ? -1 : 1;
+      }
+      if (b.grossOpenMarketValue !== a.grossOpenMarketValue) {
+        return b.grossOpenMarketValue - a.grossOpenMarketValue;
+      }
+      return a.label.localeCompare(b.label);
+    });
   }
 
   // -----------------------------------------------------------------------

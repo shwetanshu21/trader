@@ -151,5 +151,6 @@ export function renderBacktestDetailPage(detail: OperatorBacktestDetail): string
     meta: `Strategy ${renderLink(strategyHref, `${detail.strategyId}@${detail.strategyVersion}`)} · Result ${escapeHtml(detail.result)}`,
     actions,
     body,
+    navActive: 'governance',
   });
 }

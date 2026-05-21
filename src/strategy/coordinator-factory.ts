@@ -14,6 +14,7 @@
 
 import { StrategyCoordinator } from './framework.js';
 import { DeterministicScreenerPlugin } from './deterministic-screener-plugin.js';
+import { OrbVwapSignalPlugin } from './orb-vwap-signal-plugin.js';
 import { LlmRankingStrategy } from './llm-ranking-strategy.js';
 import type { ProposalEngine } from '../proposals/proposal-engine.js';
 import type { StrategyPlugin } from '../types/runtime.js';
@@ -62,7 +63,10 @@ export function createStrategyCoordinator(
     parallelPlugins = true,
   } = options ?? {};
 
-  const plugins: StrategyPlugin[] = [new DeterministicScreenerPlugin()];
+  const plugins: StrategyPlugin[] = [
+    new DeterministicScreenerPlugin(),
+    new OrbVwapSignalPlugin(),
+  ];
 
   if (proposalEngine) {
     plugins.push(new LlmRankingStrategy(proposalEngine));

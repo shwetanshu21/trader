@@ -33,6 +33,7 @@ import {
   decisionDetailHref,
   renderLink,
   strategyDetailHref,
+  renderOperatorConsoleNav,
 } from '../render-utils.js';
 
 const DASHBOARD_SECTION_ORDER = [
@@ -54,6 +55,117 @@ export interface DashboardPageOptions {
   pollIntervalMs?: number;
 }
 
+function findSummaryCard(cards: OperatorSummaryCard[], key: string): OperatorSummaryCard | null {
+  return cards.find(card => card.key === key) ?? null;
+}
+
+export function renderOverviewHero(payload: DashboardPayload): string {
+  const cards = payload.summaryCards.data;
+  const metricKeys = ['current_pnl', 'unrealized_pnl', 'open_positions'];
+  const visibleCards = metricKeys
+    .map(key => findSummaryCard(cards, key))
+    .filter((card): card is OperatorSummaryCard => card !== null);
+
+  const canUseTickerPerformance = payload.tickerPerformance.state === 'ok' || payload.tickerPerformance.state === 'stale';
+  const openTickerRows = canUseTickerPerformance
+    ? payload.tickerPerformance.data.filter(row => row.netQuantity !== 0)
+    : [];
+  const openCostBasis = openTickerRows.reduce((sum, row) => sum + Math.abs(row.netQuantity) * (row.avgEntryPrice ?? 0), 0);
+  const openMarketValue = openTickerRows.reduce((sum, row) => sum + Math.abs(row.netQuantity) * (row.lastPrice ?? row.avgEntryPrice ?? 0), 0);
+  const derivedCards = [
+    {
+      key: 'open_cost_basis',
+      label: 'Open Cost Basis',
+      value: openCostBasis,
+      display: canUseTickerPerformance ? null : 'Unavailable',
+      unit: 'INR',
+      provenance: { source: 'synthetic' as const, asOf: Date.parse(payload.assembledAt), sourceLabel: 'tickerPerformance(open cost basis proxy)' },
+    },
+    {
+      key: 'open_market_value',
+      label: 'Open Market Value',
+      value: openMarketValue,
+      display: canUseTickerPerformance ? null : 'Unavailable',
+      unit: 'INR',
+      provenance: { source: 'synthetic' as const, asOf: Date.parse(payload.assembledAt), sourceLabel: 'tickerPerformance(mark value proxy)' },
+    },
+  ];
+
+  const heroCards = [...visibleCards, ...derivedCards];
+
+  const cardHtml = heroCards.map(card => {
+    const value = card.display ?? (card.unit === 'INR'
+      ? formatCurrency(card.value, card.unit)
+      : formatNumber(card.value, 0));
+    const toneClass = card.value > 0 ? 'status-ok' : card.value < 0 ? 'status-err' : 'status-default';
+    const caveat = card.key === 'open_cost_basis' || card.key === 'open_market_value'
+      ? `<div class="hero-metric-footnote">${canUseTickerPerformance ? 'Exposure proxy · not broker cash or NAV' : 'Unavailable until ticker performance refresh succeeds'}</div>`
+      : '';
+    return `<div class="hero-metric-card">
+      <div class="hero-metric-label">${escapeHtml(card.label)}</div>
+      <div class="hero-metric-value ${toneClass}">${value}</div>
+      <div class="hero-metric-meta">${renderProvenanceBadge(card.provenance)}</div>
+      ${caveat}
+    </div>`;
+  }).join('');
+
+  const sectionStates = [
+    payload.summaryCards,
+    payload.strategyPerformance,
+    payload.tickerPerformance,
+    payload.decisionPerformance,
+    payload.lifecycleStates,
+    payload.governanceHistory,
+    payload.promotionHistory,
+    payload.walkForwardLeaderboard,
+  ];
+  const staleCount = sectionStates.filter(section => section.state === 'stale').length;
+  const errorCount = sectionStates.filter(section => section.state === 'error' || section.state === 'unavailable').length;
+
+  const exceptions: string[] = [];
+  if (!payload.dbAvailable) {
+    exceptions.push('Operator database is disconnected. Existing dashboard content may be stale or incomplete.');
+  }
+  if (errorCount > 0) {
+    exceptions.push(`${errorCount} section(s) failed to refresh or are unavailable.`);
+  }
+  if (staleCount > 0) {
+    exceptions.push(`${staleCount} section(s) are showing last-known cached data.`);
+  }
+  if (!canUseTickerPerformance) {
+    exceptions.push('Exposure proxy cards are suppressed until ticker performance becomes available again.');
+  }
+  if (exceptions.length === 0) {
+    exceptions.push('No active operator exceptions. Runtime evidence and persisted sections are currently loading normally.');
+  }
+
+  return `<section class="hero-shell" id="dashboard-hero" data-dashboard-hero>
+    <div class="hero-command-strip">
+      <span class="hero-chip ${payload.dbAvailable ? 'hero-chip-ok' : 'hero-chip-err'}">${payload.dbAvailable ? 'DB connected' : 'DB unavailable'}</span>
+      <span class="hero-chip hero-chip-neutral">Assembled ${escapeHtml(formatTimestamp(payload.assembledAt))}</span>
+      <span class="hero-chip ${staleCount > 0 ? 'hero-chip-warn' : 'hero-chip-neutral'}">${staleCount} stale section(s)</span>
+      <span class="hero-chip ${errorCount > 0 ? 'hero-chip-err' : 'hero-chip-neutral'}">${errorCount} refresh issue(s)</span>
+    </div>
+    <div class="hero-grid">
+      <div class="hero-primary">
+        <div class="hero-eyebrow">Overview</div>
+        <h2>Capital, exposure proxies, and latest operator truth</h2>
+        <p class="hero-copy">The console shows realized and unrealized P&amp;L directly from persisted paper state. Exposure numbers are marked proxies derived from open positions, not broker cash or account NAV.</p>
+        <div class="hero-metrics">${cardHtml}</div>
+      </div>
+      <div class="hero-secondary">
+        <div class="hero-secondary-title">Exceptions &amp; attention</div>
+        <ul class="hero-exception-list">${exceptions.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+        <div class="hero-secondary-actions">
+          <a href="/decisions">Review recent decisions</a>
+          <a href="/strategies">Inspect strategies</a>
+          <a href="/system-health">Open system health</a>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
 // ---------------------------------------------------------------------------
 // Full dashboard page
 // ---------------------------------------------------------------------------
@@ -69,6 +181,7 @@ export function renderDashboardPage(
   const sectionHtml = renderDashboardSectionHtml(payload);
   const sections = DASHBOARD_SECTION_ORDER.map(key => sectionHtml[key]).join('\n');
   const bootstrapJson = buildDashboardBootstrapJson(payload, pollIntervalMs);
+  const overviewHero = renderOverviewHero(payload);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -78,109 +191,157 @@ export function renderDashboardPage(
 <title>Operator Console</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 1.5rem; line-height: 1.5; }
-  h1 { font-size: 1.3rem; font-weight: 600; margin-bottom: 0.25rem; }
-  h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
-  .header { margin-bottom: 1.5rem; }
-  .header .meta { font-size: 0.85rem; color: #64748b; }
-  .section { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+  :root {
+    color-scheme: dark;
+    --bg: #08111f;
+    --bg-elevated: #0f1b2d;
+    --bg-panel: #132033;
+    --border: #24364d;
+    --text: #e6edf6;
+    --muted: #8ba0ba;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --info: #60a5fa;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: radial-gradient(circle at top left, #10223b 0%, var(--bg) 42%), var(--bg);
+    color: var(--text);
+    padding: 1.25rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: #8cc0ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1 { font-size: 1.55rem; font-weight: 700; margin-bottom: 0.25rem; letter-spacing: -0.02em; }
+  h2 { font-size: 1rem; font-weight: 650; margin-bottom: 0.5rem; color: #d5deea; }
+  .console-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; align-items: start; }
+  .console-sidebar { position: sticky; top: 1.25rem; background: linear-gradient(180deg, rgba(19,32,51,0.94), rgba(12,20,34,0.98)); border: 1px solid var(--border); border-radius: 0.9rem; padding: 1rem; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22); }
+  .console-brand { padding-bottom: 0.9rem; margin-bottom: 0.9rem; border-bottom: 1px solid rgba(54,80,109,0.35); }
+  .console-brand-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; font-weight: 700; }
+  .console-brand-title { margin-top: 0.2rem; font-size: 1rem; font-weight: 700; color: #f8fbff; }
+  .console-brand-subtitle { margin-top: 0.25rem; color: var(--muted); font-size: 0.82rem; }
+  .console-nav { display: grid; gap: 0.45rem; }
+  .console-nav-link { display: block; padding: 0.7rem 0.8rem; border-radius: 0.75rem; border: 1px solid transparent; background: rgba(10, 20, 36, 0.28); transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease; }
+  .console-nav-link:hover { text-decoration: none; background: rgba(23, 38, 59, 0.9); border-color: rgba(54, 80, 109, 0.7); transform: translateY(-1px); }
+  .console-nav-link[data-active="true"] { background: rgba(24, 42, 65, 0.96); border-color: rgba(96, 165, 250, 0.55); box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.18); }
+  .console-nav-label { display: block; color: #eef4fb; font-weight: 600; font-size: 0.9rem; }
+  .console-nav-description { display: block; margin-top: 0.18rem; color: var(--muted); font-size: 0.76rem; line-height: 1.35; }
+  .console-main { min-width: 0; }
+  .page-header { margin-bottom: 1.2rem; padding: 1rem 1.1rem; background: linear-gradient(180deg, rgba(19,32,51,0.96), rgba(14,25,41,0.96)); border: 1px solid var(--border); border-radius: 0.9rem; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18); }
+  .page-meta { margin-top: 0.55rem; color: #8ba0ba; font-size: 0.85rem; }
+  .page-subtitle { color: #a6b7cc; max-width: 75rem; }
+  .section { background: linear-gradient(180deg, rgba(19,32,51,0.96), rgba(15,27,45,0.97)); border: 1px solid var(--border); border-radius: 0.85rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14); }
   .section h2 { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-  .section-subtitle { font-size: 0.75rem; color: #64748b; font-weight: normal; text-transform: none; letter-spacing: normal; }
-  .section-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; color: #94a3b8; font-size: 0.76rem; }
+  .section-subtitle { font-size: 0.75rem; color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: normal; }
+  .section-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; color: #9eb0c7; font-size: 0.76rem; }
   .section-state-pill { display: inline-flex; align-items: center; padding: 0.12rem 0.5rem; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.66rem; }
-  .section-state-ok { background: #14532d; color: #86efac; }
-  .section-state-stale { background: #78350f; color: #fcd34d; }
-  .section-state-error { background: #7f1d1d; color: #fca5a5; }
-  .section-state-unavailable { background: #334155; color: #cbd5e1; }
+  .section-state-ok { background: rgba(20, 83, 45, 0.9); color: #9cf4c7; }
+  .section-state-stale { background: rgba(120, 53, 15, 0.92); color: #fde68a; }
+  .section-state-error { background: rgba(127, 29, 29, 0.92); color: #fecaca; }
+  .section-state-unavailable { background: #334155; color: #d8e3ef; }
   table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
-  th { text-align: left; padding: 0.4rem 0.5rem; background: #1e293b; color: #64748b; font-weight: 600; border-bottom: 1px solid #334155; white-space: nowrap; }
-  td { padding: 0.35rem 0.5rem; border-bottom: 1px solid #1e293b; vertical-align: top; }
+  th { text-align: left; padding: 0.5rem 0.5rem; background: transparent; color: #9eb0c7; font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 0.45rem 0.5rem; border-bottom: 1px solid rgba(36, 54, 77, 0.65); vertical-align: top; }
   td:first-child { white-space: nowrap; }
-  .empty-state { text-align: center; color: #64748b; font-style: italic; padding: 1.5rem 0; }
-
-  /* Summary cards */
+  .empty-state { text-align: center; color: var(--muted); font-style: italic; padding: 1.5rem 0; }
   .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
-  .summary-card { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem; padding: 0.75rem; }
-  .summary-card .label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-  .summary-card .value { font-size: 1.25rem; font-weight: 700; margin-top: 0.25rem; color: #f1f5f9; font-variant-numeric: tabular-nums; }
-  .summary-card .unit { font-size: 0.7rem; color: #64748b; font-weight: normal; }
+  .summary-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.7rem; padding: 0.8rem; }
+  .summary-card .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+  .summary-card .value { font-size: 1.18rem; font-weight: 700; margin-top: 0.25rem; color: #f1f5f9; font-variant-numeric: tabular-nums; }
   .summary-card .provenance { margin-top: 0.25rem; }
-
-  /* Status classes */
-  .status-ok { color: #22c55e; font-weight: 600; }
-  .status-warn { color: #f59e0b; font-weight: 600; }
-  .status-err { color: #ef4444; font-weight: 600; }
+  .status-ok { color: var(--ok); font-weight: 650; }
+  .status-warn { color: var(--warn); font-weight: 650; }
+  .status-err { color: var(--err); font-weight: 650; }
   .status-skip { color: #64748b; }
   .status-default { color: #94a3b8; }
-
-  /* Refresh banner */
   .page-refresh-banner { display: none; align-items: center; gap: 0.6rem; padding: 0.75rem 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border: 1px solid #475569; background: #1e293b; color: #cbd5e1; }
   .page-refresh-banner[data-visible="true"] { display: flex; }
   .page-refresh-banner[data-kind="warn"] { border-color: #78350f; background: #713f1222; color: #fcd34d; }
   .page-refresh-banner[data-kind="error"] { border-color: #7f1d1d; background: #7f1d1d22; color: #fecaca; }
   .page-refresh-banner[data-kind="ok"] { border-color: #14532d; background: #14532d22; color: #86efac; }
-
-  /* Error banner */
-  .section-error-banner { display: flex; align-items: center; gap: 0.5rem; background: #7f1d1d22; border: 1px solid #7f1d1d; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
-  .section-error-icon { color: #ef4444; font-size: 1rem; }
-  .section-error-text { color: #fca5a5; font-size: 0.8125rem; }
-
-  /* Stale banner */
-  .section-stale-banner { display: flex; align-items: center; gap: 0.5rem; background: #713f1222; border: 1px solid #78350f; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
-  .section-stale-icon { color: #f59e0b; font-size: 1rem; }
-  .section-stale-text { color: #fbbf24; font-size: 0.8125rem; }
-
-  /* Unavailable banner */
-  .section-unavailable-banner { display: flex; align-items: center; gap: 0.5rem; background: #0f172a; border: 1px solid #475569; border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+  .section-error-banner { display: flex; align-items: center; gap: 0.5rem; background: rgba(127, 29, 29, 0.16); border: 1px solid rgba(248, 113, 113, 0.45); border-radius: 0.55rem; padding: 0.55rem 0.75rem; margin-bottom: 0.75rem; }
+  .section-error-icon { color: var(--err); font-size: 1rem; }
+  .section-error-text { color: #fecaca; font-size: 0.8125rem; }
+  .section-stale-banner { display: flex; align-items: center; gap: 0.5rem; background: rgba(113, 63, 18, 0.18); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 0.55rem; padding: 0.55rem 0.75rem; margin-bottom: 0.75rem; }
+  .section-stale-icon { color: var(--warn); font-size: 1rem; }
+  .section-stale-text { color: #fde68a; font-size: 0.8125rem; }
+  .section-unavailable-banner { display: flex; align-items: center; gap: 0.5rem; background: rgba(17, 24, 39, 0.45); border: 1px solid #475569; border-radius: 0.55rem; padding: 0.55rem 0.75rem; margin-bottom: 0.75rem; }
   .section-unavailable-icon { color: #cbd5e1; font-size: 1rem; }
-  .section-unavailable-text { color: #cbd5e1; font-size: 0.8125rem; }
-
-  /* Provenance badge */
-  .provenance { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-
-  /* Nav */
-  .nav { margin-top: 1rem; display: flex; gap: 1rem; font-size: 0.875rem; }
-  .nav a { color: #3b82f6; text-decoration: none; }
-  .nav a:hover { text-decoration: underline; }
-
-  /* Code */
-  code { background: #0f172a; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.75rem; }
-
-  /* Verdict badge */
-  .verdict-badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
-
-  /* Table cell: numeric alignment */
+  .section-unavailable-text { color: #dbe4ee; font-size: 0.8125rem; }
+  .provenance { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+  code { background: #0a1424; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.75rem; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   th.num { text-align: right; }
+  .hero-shell { margin-bottom: 1rem; padding: 1rem 1.1rem; background: linear-gradient(180deg, rgba(19,32,51,0.98), rgba(11,20,34,0.98)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.9rem; box-shadow: 0 18px 48px rgba(0,0,0,0.18); }
+  .hero-command-strip { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.85rem; }
+  .hero-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em; }
+  .hero-chip-ok { background: rgba(20, 83, 45, 0.92); color: #b6f5d3; }
+  .hero-chip-warn { background: rgba(120, 53, 15, 0.92); color: #fde68a; }
+  .hero-chip-err { background: rgba(127, 29, 29, 0.92); color: #fecaca; }
+  .hero-chip-neutral { background: rgba(23, 38, 59, 0.96); color: #d3deeb; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 1rem; }
+  .hero-eyebrow { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.7rem; font-weight: 700; margin-bottom: 0.3rem; }
+  .hero-copy { color: #a8b8ca; max-width: 52rem; margin-top: 0.2rem; }
+  .hero-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin-top: 0.9rem; }
+  .hero-metric-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.7rem; padding: 0.8rem; }
+  .hero-metric-label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+  .hero-metric-value { margin-top: 0.35rem; font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .hero-metric-meta { margin-top: 0.35rem; }
+  .hero-metric-footnote { margin-top: 0.4rem; color: #8da3bd; font-size: 0.74rem; }
+  .hero-secondary { background: rgba(8,17,31,0.42); border: 1px solid rgba(54, 80, 109, 0.45); border-radius: 0.75rem; padding: 0.9rem; }
+  .hero-secondary-title { font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #d5deea; }
+  .hero-exception-list { margin-top: 0.75rem; padding-left: 1rem; color: #d6dfeb; }
+  .hero-secondary-actions { margin-top: 0.85rem; display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.84rem; }
+  .section-note { margin-bottom: 0.7rem; color: #9eb0c7; font-size: 0.8rem; }
+  .summary-toolbar { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-bottom: 0.8rem; }
+  .summary-toolbar a { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.28rem 0.6rem; border-radius: 999px; border: 1px solid rgba(54, 80, 109, 0.6); background: rgba(10, 20, 36, 0.45); color: #dce7f4; font-size: 0.76rem; text-decoration: none; }
+  .summary-toolbar a:hover { background: rgba(23, 38, 59, 0.9); }
+  .stack-grid { display: grid; gap: 1rem; }
+  .page-actions { margin-top: 0.9rem; display: flex; gap: 0.85rem; flex-wrap: wrap; font-size: 0.9rem; }
+  @media (max-width: 1080px) {
+    .console-shell { grid-template-columns: 1fr; }
+    .console-sidebar { position: static; }
+    .hero-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
-<div class="header">
-  <h1>Operator Console</h1>
-  <div class="meta" id="dashboard-meta" data-dashboard-meta>
-    Assembled: ${escapeHtml(formatTimestamp(payload.assembledAt))} &mdash;
-    DB: ${payload.dbAvailable ? 'Connected' : `<span style="color:#ef4444;">Disconnected</span>`}
-    ${payload.dbError ? `&mdash; <span style="color:#ef4444;">${escapeHtml(payload.dbError)}</span>` : ''}
-  </div>
-</div>
+<div class="console-shell">
+  ${renderOperatorConsoleNav('overview')}
+  <main class="console-main">
+    <div class="page-header">
+      <div class="hero-eyebrow">Overview</div>
+      <h1>Operator Console</h1>
+      <p class="page-subtitle">Authenticated operator surface for persisted trading evidence, execution outcomes, lifecycle governance, and walk-forward backing data.</p>
+      <div class="page-meta" id="dashboard-meta" data-dashboard-meta>
+        Assembled: ${escapeHtml(formatTimestamp(payload.assembledAt))} &mdash;
+        DB: ${payload.dbAvailable ? 'Connected' : `<span style="color:#ef4444;">Disconnected</span>`}
+        ${payload.dbError ? `&mdash; <span style="color:#ef4444;">${escapeHtml(payload.dbError)}</span>` : ''}
+      </div>
+      <div class="page-actions">
+        <a href="/api/health">System Health</a>
+        <a href="#dashboard-section-decisionPerformance">Recent Decisions</a>
+        <a href="#dashboard-section-governanceHistory">Governance</a>
+      </div>
+    </div>
 
-<div class="page-refresh-banner" id="dashboard-refresh-banner" data-visible="false" data-kind="warn" role="status" aria-live="polite"></div>
+    <div class="page-refresh-banner" id="dashboard-refresh-banner" data-visible="false" data-kind="warn" role="status" aria-live="polite"></div>
 
-<main id="dashboard-root" data-poll-interval-ms="${escapeHtml(String(pollIntervalMs))}">
-${sections}
-</main>
+    ${overviewHero}
 
-<div class="nav">
-  <a href="/api/refresh">JSON Refresh</a>
-  <a href="/api/health">API Health</a>
-</div>
+    <div id="dashboard-root" class="stack-grid" data-poll-interval-ms="${escapeHtml(String(pollIntervalMs))}">
+    ${sections}
+    </div>
 
-<script type="application/json" id="dashboard-bootstrap">${bootstrapJson}</script>
-<script>
+    <script type="application/json" id="dashboard-bootstrap">${bootstrapJson}</script>
+    <script>
 (() => {
   const bootstrapNode = document.getElementById('dashboard-bootstrap');
   const refreshBanner = document.getElementById('dashboard-refresh-banner');
   const dashboardMeta = document.getElementById('dashboard-meta');
+  const overviewHero = document.getElementById('dashboard-hero');
 
   function setBanner(kind, message) {
     if (!refreshBanner) return;
@@ -244,6 +405,9 @@ ${sections}
       replaceSection(sectionKey, sectionPayload.html);
     }
 
+    if (overviewHero && typeof payload.heroHtml === 'string') {
+      overviewHero.outerHTML = payload.heroHtml.trim();
+    }
     renderHeaderMeta(payload);
 
     if (malformedSection) {
@@ -317,6 +481,8 @@ ${sections}
   }, { once: true });
 })();
 </script>
+  </main>
+</div>
 </body>
 </html>`;
 }
@@ -396,23 +562,33 @@ function renderSummaryCardsSection(
   let content: string;
 
   if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
+    const toolbar = `<div class="summary-toolbar">
+      <a href="#dashboard-section-tickerPerformance">Open positions</a>
+      <a href="#dashboard-section-strategyPerformance">Strategy review</a>
+      <a href="#dashboard-section-decisionPerformance">Decision ledger</a>
+      <a href="/api/health">System health</a>
+    </div>`;
     const cards = section.data.map(c => {
-      const value = typeof c.value === 'number'
+      const value = c.display ?? (typeof c.value === 'number'
         ? c.unit === 'INR'
           ? formatCurrency(c.value, c.unit)
           : `${escapeHtml(formatNumber(c.value))}`
-        : escapeHtml(String(c.value));
+        : escapeHtml(String(c.value)));
 
       const label = escapeHtml(c.label || c.key || '');
       const badge = renderProvenanceBadge(c.provenance);
+      const footnote = c.key === 'open_cost_basis' || c.key === 'open_market_value'
+        ? '<div class="hero-metric-footnote">Exposure proxy, not account cash or NAV</div>'
+        : '';
 
       return `<div class="summary-card">
         <div class="label">${label}</div>
         <div class="value">${value}</div>
         ${badge ? `<div class="provenance">${badge}</div>` : ''}
+        ${footnote}
       </div>`;
     }).join('\n');
-    content = `<div class="summary-grid">${cards}</div>`;
+    content = `${toolbar}<div class="summary-grid">${cards}</div>`;
   } else if (section.state === 'unavailable') {
     content = renderEmptyState('Database unavailable — summary cards cannot be loaded.');
   } else if (section.state === 'error') {
@@ -424,7 +600,7 @@ function renderSummaryCardsSection(
   return renderDashboardSectionWrapper(
     'summaryCards',
     'Summary',
-    'Aggregate totals',
+    'Live P&L, exposure proxies, and persisted operator totals',
     section,
     content,
   );
@@ -452,7 +628,6 @@ function renderStrategyPerformanceSection(
         <td class="num">${formatInt(s.tradeCount)}</td>
         <td class="num ${s.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(s.realizedPnl, 'INR')}</td>
         <td class="num ${s.unrealizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(s.unrealizedPnl, 'INR')}</td>
-        <td class="num ${s.totalReturnPct >= 0 ? 'status-ok' : 'status-err'}">${formatRawPercent(s.totalReturnPct)}</td>
         <td class="num">${sharpe}</td>
         <td class="num">${drawdown}</td>
         <td class="num">${winRate}</td>
@@ -461,14 +636,13 @@ function renderStrategyPerformanceSection(
       </tr>`;
     }).join('\n');
 
-    content = `<table>
+    content = `<div class="section-note">Return percentage is intentionally suppressed here until the backend persists a trusted denominator for live/operator display.</div><table>
       <thead><tr>
         <th>Strategy</th>
         <th>Version</th>
         <th class="num">Trades</th>
         <th class="num">Realized P&amp;L</th>
         <th class="num">Unrealized P&amp;L</th>
-        <th class="num">Return</th>
         <th class="num">Sharpe</th>
         <th class="num">Max DD</th>
         <th class="num">Win Rate</th>
@@ -488,7 +662,7 @@ function renderStrategyPerformanceSection(
   return renderDashboardSectionWrapper(
     'strategyPerformance',
     'Strategy Performance',
-    'Per-strategy P&L and metrics',
+    'Trusted per-strategy P&L with evidence-linked quality metrics',
     section,
     content,
   );
@@ -664,7 +838,7 @@ function renderLifecycleStatesSection(
   } else if (section.state === 'error') {
     content = renderEmptyState(section.errorMessage ?? 'Failed to load lifecycle states.');
   } else {
-    content = renderEmptyState('No lifecycle state data available.');
+    content = renderEmptyState('No lifecycle state evidence has been produced on this host yet.');
   }
 
   return renderDashboardSectionWrapper(
@@ -716,7 +890,7 @@ function renderGovernanceHistorySection(
   } else if (section.state === 'error') {
     content = renderEmptyState(section.errorMessage ?? 'Failed to load governance history.');
   } else {
-    content = renderEmptyState('No governance history data available.');
+    content = renderEmptyState('No governance history has been produced on this host yet.');
   }
 
   return renderDashboardSectionWrapper(
@@ -771,7 +945,7 @@ function renderPromotionHistorySection(
   } else if (section.state === 'error') {
     content = renderEmptyState(section.errorMessage ?? 'Failed to load promotion history.');
   } else {
-    content = renderEmptyState('No promotion history data available.');
+    content = renderEmptyState('No promotion history has been produced on this host yet.');
   }
 
   return renderDashboardSectionWrapper(
@@ -838,7 +1012,7 @@ function renderWalkForwardLeaderboardSection(
   } else if (section.state === 'error') {
     content = renderEmptyState(section.errorMessage ?? 'Failed to load walk-forward leaderboard.');
   } else {
-    content = renderEmptyState('No walk-forward leaderboard data available.');
+    content = renderEmptyState('No walk-forward leaderboard entries are available yet. A persisted winner or no-winner selection has not been recorded on this host yet.');
   }
 
   return renderDashboardSectionWrapper(

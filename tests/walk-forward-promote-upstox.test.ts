@@ -247,6 +247,157 @@ function seedWinner(
   return 1;
 }
 
+function seedPaperValidationTrade(db: Database.Database): void {
+  const now = Date.now();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS proposal_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      exchange TEXT NOT NULL,
+      tradingsymbol TEXT NOT NULL,
+      instrument_token INTEGER,
+      side TEXT NOT NULL,
+      product TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      price REAL,
+      trigger_price REAL,
+      order_type TEXT NOT NULL DEFAULT 'MARKET',
+      tag TEXT,
+      proposal_status TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS strategy_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      proposal_attempt_id INTEGER NOT NULL UNIQUE,
+      decision_status TEXT NOT NULL,
+      strategy_id TEXT NOT NULL,
+      strategy_version TEXT NOT NULL,
+      decided_at INTEGER NOT NULL,
+      exchange TEXT NOT NULL,
+      tradingsymbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      product TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      price REAL,
+      trigger_price REAL,
+      order_type TEXT NOT NULL,
+      quote_last_price REAL,
+      quote_bid REAL,
+      quote_ask REAL,
+      quote_volume INTEGER,
+      quote_received_at INTEGER,
+      risk_notional REAL,
+      risk_sizing_basis TEXT NOT NULL DEFAULT '',
+      risk_max_loss_rupees REAL,
+      risk_stop_distance REAL,
+      risk_stop_price REAL,
+      risk_trailing_stop_distance REAL,
+      risk_budget_rupees REAL,
+      execution_class TEXT NOT NULL DEFAULT 'EQ',
+      segment TEXT NOT NULL DEFAULT 'NSE',
+      instrument_type TEXT NOT NULL DEFAULT 'EQ',
+      expiry TEXT,
+      strike REAL,
+      lot_size INTEGER NOT NULL DEFAULT 1,
+      tick_size REAL NOT NULL DEFAULT 0.05,
+      freeze_quantity INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS execution_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      strategy_decision_id INTEGER NOT NULL UNIQUE,
+      execution_mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      outcome_code TEXT,
+      broker_order_id TEXT,
+      message TEXT NOT NULL DEFAULT '',
+      attempted_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS paper_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      execution_attempt_id INTEGER NOT NULL,
+      exchange TEXT NOT NULL,
+      tradingsymbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      product TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      price REAL,
+      order_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      broker_order_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS paper_fills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      paper_order_id INTEGER NOT NULL,
+      execution_attempt_id INTEGER NOT NULL UNIQUE,
+      exchange TEXT NOT NULL,
+      tradingsymbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      product TEXT NOT NULL,
+      filled_quantity INTEGER NOT NULL,
+      filled_price REAL NOT NULL,
+      broker_order_id TEXT NOT NULL,
+      filled_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS position_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      paper_order_id INTEGER NOT NULL,
+      paper_fill_id INTEGER,
+      execution_attempt_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      exchange TEXT NOT NULL,
+      tradingsymbol TEXT NOT NULL,
+      product TEXT NOT NULL,
+      quantity_delta INTEGER NOT NULL,
+      price REAL NOT NULL,
+      previous_quantity INTEGER NOT NULL,
+      previous_avg_cost REAL NOT NULL,
+      new_quantity INTEGER NOT NULL,
+      new_avg_cost REAL NOT NULL,
+      realized_pnl REAL NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  db.prepare(`
+    INSERT INTO proposal_attempts
+      (id, exchange, tradingsymbol, instrument_token, side, product, quantity, price, trigger_price, order_type, tag, proposal_status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 'NSE', 'RELIANCE', null, 'buy', 'MIS', 1, null, null, 'MARKET', 'paper-validation', 'accepted', now);
+
+  db.prepare(`
+    INSERT INTO strategy_decisions
+      (id, proposal_attempt_id, decision_status, strategy_id, strategy_version, decided_at, exchange, tradingsymbol, side, product, quantity, price, trigger_price, order_type,
+       quote_last_price, quote_bid, quote_ask, quote_volume, quote_received_at,
+       risk_notional, risk_sizing_basis, risk_max_loss_rupees, risk_stop_distance, risk_stop_price, risk_trailing_stop_distance, risk_budget_rupees,
+       execution_class, segment, instrument_type, expiry, strike, lot_size, tick_size, freeze_quantity)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 'approved', 'india-nse-eq-v1', '1.0.0', now, 'NSE', 'RELIANCE', 'buy', 'MIS', 1, null, null, 'MARKET', 100, 100, 101, 1000, now, 100, 'paper_validation', 1, 1, 99, 1, 1, 'EQ', 'NSE', 'EQ', null, null, 1, 0.05, null);
+
+  db.prepare(`
+    INSERT INTO execution_attempts
+      (id, strategy_decision_id, execution_mode, status, outcome_code, broker_order_id, message, attempted_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 'paper', 'completed', 'paper_simulated', 'paper-9001', 'ok', now, now + 1000);
+
+  db.prepare(`
+    INSERT INTO paper_orders
+      (id, execution_attempt_id, exchange, tradingsymbol, side, product, quantity, price, order_type, status, broker_order_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 'NSE', 'RELIANCE', 'buy', 'MIS', 1, 100, 'MARKET', 'filled', 'paper-9001', now);
+
+  db.prepare(`
+    INSERT INTO paper_fills
+      (id, paper_order_id, execution_attempt_id, exchange, tradingsymbol, side, product, filled_quantity, filled_price, broker_order_id, filled_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 9001, 'NSE', 'RELIANCE', 'buy', 'MIS', 1, 100, 'paper-9001', now);
+
+  db.prepare(`
+    INSERT INTO position_events
+      (id, paper_order_id, paper_fill_id, execution_attempt_id, event_type, exchange, tradingsymbol, product, quantity_delta, price, previous_quantity, previous_avg_cost, new_quantity, new_avg_cost, realized_pnl, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(9001, 9001, 9001, 9001, 'exit', 'NSE', 'RELIANCE', 'MIS', 0, 100, 1, 100, 0, 0, 250, now + 2000);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -271,6 +422,7 @@ describe('StrategyLifecycleEvaluator — promotion pipeline', () => {
     evaluator = new StrategyLifecycleEvaluator({
       walkForwardRepo,
       lifecycleRepo,
+      db,
     });
   });
 
@@ -444,7 +596,20 @@ describe('StrategyLifecycleEvaluator — promotion pipeline', () => {
     );
     expect(state.phase).toBe(StrategyLifecyclePhase.Paper);
 
-    // Evaluate again — should try to promote Paper → Live
+    // Without paper validation evidence, second evaluation must HOLD.
+    const holdWithoutPaperEvidence = evaluator.evaluate({
+      runId: 1,
+      strategyId: 'india-nse-eq-v1',
+      strategyVersion: '1.0.0',
+      marketId: 'INDIA_NSE_EQ',
+    });
+
+    expect(holdWithoutPaperEvidence.verdict).toBe(GovernanceVerdict.Hold);
+    expect(holdWithoutPaperEvidence.rationale).toContain('paper-trading validation evidence');
+
+    seedPaperValidationTrade(db);
+
+    // Evaluate again — now it should promote Paper → Live
     const result2 = evaluator.evaluate({
       runId: 1,
       strategyId: 'india-nse-eq-v1',
@@ -462,7 +627,7 @@ describe('StrategyLifecycleEvaluator — promotion pipeline', () => {
     );
     expect(state.phase).toBe(StrategyLifecyclePhase.Live);
 
-    // 3rd evaluation: already at Live → HOLD (no further promotion)
+    // 4th evaluation: already at Live → HOLD (no further promotion)
     const result3 = evaluator.evaluate({
       runId: 1,
       strategyId: 'india-nse-eq-v1',
@@ -472,8 +637,9 @@ describe('StrategyLifecycleEvaluator — promotion pipeline', () => {
     expect(result3.verdict).toBe(GovernanceVerdict.Hold);
     expect(result3.rationale).toContain('maximum lifecycle phase');
 
-    // Should have 3 decisions in the log
-    expect(lifecycleRepo.decisionCount()).toBe(3);
+    // Should have 4 decisions in the log:
+    // promote to paper, hold without paper evidence, promote to live, hold at max phase.
+    expect(lifecycleRepo.decisionCount()).toBe(4);
   });
 
   it('should support OOS-window and total-window threshold checks', () => {
