@@ -145,8 +145,11 @@ describe('PaperExecutionPolicy', () => {
       const result = policy.evaluate(sampleCandidate(), sampleQuote(), sampleInstrument());
       expect(result.canFill).toBe(true);
       expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
-      // Market order with valid ask: fillPrice = quote.ask = 2851
-      expect(result.fillPrice).toBeCloseTo(2851.00);
+      // Market order uses the prevailing ask plus adverse slippage.
+      expect(result.fillPrice).toBeCloseTo(2851.30);
+      expect(result.referencePrice).toBeCloseTo(2851.00);
+      expect(result.slippageAmount).toBeGreaterThan(0);
+      expect(result.fees).toBeGreaterThan(0);
       expect(result.simulatedBrokerOrderId).toContain('paper-');
       expect(result.simulatedBrokerOrderId).toContain('-buy');
       expect(result.refusalReasons).toHaveLength(0);
@@ -156,7 +159,8 @@ describe('PaperExecutionPolicy', () => {
       const quote = sampleQuote({ ask: null, lastPrice: 2845.00 });
       const result = policy.evaluate(sampleCandidate(), quote, sampleInstrument());
       expect(result.canFill).toBe(true);
-      expect(result.fillPrice).toBeCloseTo(2845.00);
+      expect(result.fillPrice).toBeCloseTo(2845.30);
+      expect(result.referencePrice).toBeCloseTo(2845.00);
     });
 
     it('refuses when both ask and lastPrice are null/zero', () => {
@@ -170,7 +174,8 @@ describe('PaperExecutionPolicy', () => {
       const candidate = sampleCandidate({ price: 2852.00, orderType: 'LIMIT' });
       const result = policy.evaluate(candidate, sampleQuote(), sampleInstrument());
       expect(result.canFill).toBe(true);
-      expect(result.fillPrice).toBeCloseTo(2852.00); // candidate.price used directly
+      expect(result.fillPrice).toBeCloseTo(2851.00);
+      expect(result.slippageAmount).toBe(0);
     });
 
     it('refuses buy limit below ask', () => {
@@ -199,7 +204,8 @@ describe('PaperExecutionPolicy', () => {
       const result = policy.evaluate(candidate, sampleQuote(), sampleInstrument());
       expect(result.canFill).toBe(true);
       expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
-      expect(result.fillPrice).toBeCloseTo(2850.00);
+      expect(result.fillPrice).toBeCloseTo(2849.70);
+      expect(result.referencePrice).toBeCloseTo(2850.00);
       expect(result.simulatedBrokerOrderId).toContain('-sell');
       expect(result.refusalReasons).toHaveLength(0);
     });
@@ -209,7 +215,8 @@ describe('PaperExecutionPolicy', () => {
       const quote = sampleQuote({ bid: null, lastPrice: 2845.00 });
       const result = policy.evaluate(candidate, quote, sampleInstrument());
       expect(result.canFill).toBe(true);
-      expect(result.fillPrice).toBeCloseTo(2845.00);
+      expect(result.fillPrice).toBeCloseTo(2844.70);
+      expect(result.referencePrice).toBeCloseTo(2845.00);
     });
 
     it('refuses when both bid and lastPrice are null/zero', () => {
@@ -224,7 +231,8 @@ describe('PaperExecutionPolicy', () => {
       const candidate = sampleCandidate({ side: 'sell', price: 2849.00, orderType: 'LIMIT' });
       const result = policy.evaluate(candidate, sampleQuote(), sampleInstrument());
       expect(result.canFill).toBe(true);
-      expect(result.fillPrice).toBeCloseTo(2849.00);
+      expect(result.fillPrice).toBeCloseTo(2850.00);
+      expect(result.slippageAmount).toBe(0);
     });
 
     it('refuses sell limit above bid', () => {
@@ -336,8 +344,9 @@ describe('PaperExecutionPolicy', () => {
       const result = policy.evaluate(candidate, quote, sampleInstrument());
       expect(result.canFill).toBe(true);
       expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
-      // Market buy uses ask price
-      expect(result.fillPrice).toBeCloseTo(21500.00);
+      // Market buy uses ask price plus adverse slippage.
+      expect(result.fillPrice).toBeCloseTo(21502.15);
+      expect(result.referencePrice).toBeCloseTo(21500.00);
     });
 
     it('evaluates FO market sell with valid bid as fillable', () => {
@@ -358,8 +367,9 @@ describe('PaperExecutionPolicy', () => {
       const result = policy.evaluate(candidate, quote, sampleInstrument());
       expect(result.canFill).toBe(true);
       expect(result.outcomeCode).toBe(ExecutionOutcomeCode.PaperSimulated);
-      // Market sell uses bid price
-      expect(result.fillPrice).toBeCloseTo(21480.00);
+      // Market sell uses bid price minus adverse slippage.
+      expect(result.fillPrice).toBeCloseTo(21477.85);
+      expect(result.referencePrice).toBeCloseTo(21480.00);
     });
 
     it('refuses FO candidate when quote is missing (same as EQ)', () => {
@@ -389,7 +399,7 @@ describe('PaperExecutionPolicy', () => {
       const result = policy.evaluate(candidate, quote, sampleInstrument());
       expect(result.canFill).toBe(true);
       expect(result.message).toContain('FINNIFTY24DEC24400PE');
-      expect(result.message).toContain('ask=148');
+      expect(result.message).toContain('ref=148');
     });
   });
 });

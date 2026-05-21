@@ -311,6 +311,10 @@ CREATE TABLE IF NOT EXISTS paper_fills (
   product               TEXT    NOT NULL,
   filled_quantity       INTEGER NOT NULL,
   filled_price          REAL    NOT NULL,
+  reference_price       REAL,
+  slippage_per_unit     REAL    NOT NULL DEFAULT 0,
+  slippage_amount       REAL    NOT NULL DEFAULT 0,
+  fees                  REAL    NOT NULL DEFAULT 0,
   broker_order_id       TEXT    NOT NULL,
   filled_at             INTEGER NOT NULL
 );
@@ -336,6 +340,7 @@ CREATE TABLE IF NOT EXISTS position_events (
   new_quantity          INTEGER NOT NULL,
   new_avg_cost          REAL    NOT NULL,
   realized_pnl          REAL    NOT NULL DEFAULT 0,
+  transaction_fees      REAL    NOT NULL DEFAULT 0,
   stop_price            REAL,
   trailing_anchor_price REAL,
   trailing_stop_distance REAL,
@@ -699,6 +704,11 @@ export class DatabaseManager {
     this._migrateAddColumnIfNotExists('position_events', 'stop_price', 'REAL');
     this._migrateAddColumnIfNotExists('position_events', 'trailing_anchor_price', 'REAL');
     this._migrateAddColumnIfNotExists('position_events', 'trailing_stop_distance', 'REAL');
+    this._migrateAddColumnIfNotExists('position_events', 'transaction_fees', 'REAL NOT NULL DEFAULT 0');
+    this._migrateAddColumnIfNotExists('paper_fills', 'reference_price', 'REAL');
+    this._migrateAddColumnIfNotExists('paper_fills', 'slippage_per_unit', 'REAL NOT NULL DEFAULT 0');
+    this._migrateAddColumnIfNotExists('paper_fills', 'slippage_amount', 'REAL NOT NULL DEFAULT 0');
+    this._migrateAddColumnIfNotExists('paper_fills', 'fees', 'REAL NOT NULL DEFAULT 0');
     this._migrateAddColumnIfNotExists('paper_positions', 'stop_price', 'REAL');
     this._migrateAddColumnIfNotExists('paper_positions', 'trailing_anchor_price', 'REAL');
     this._migrateAddColumnIfNotExists('paper_positions', 'trailing_stop_distance', 'REAL');

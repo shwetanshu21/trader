@@ -1575,8 +1575,16 @@ export interface PaperFillRow {
   product: string;
   /** Quantity actually filled (always positive). */
   filledQuantity: number;
-  /** Price at which the fill occurred. */
+  /** Gross executed price at which the fill occurred. */
   filledPrice: number;
+  /** Reference quote-side price before simulated slippage, or null when unavailable. */
+  referencePrice: number | null;
+  /** Slippage applied per unit in price terms. */
+  slippagePerUnit: number;
+  /** Aggregate slippage applied across the fill quantity. */
+  slippageAmount: number;
+  /** Aggregate transaction fees/charges for this fill. */
+  fees: number;
   /** Broker-generated paper order ID from the parent order. */
   brokerOrderId: string;
   /** Unix timestamp (ms) when the fill occurred. */
@@ -1584,7 +1592,12 @@ export interface PaperFillRow {
 }
 
 /** Shape for inserting a new paper fill (without id). */
-export type NewPaperFill = Omit<PaperFillRow, 'id'>;
+export type NewPaperFill = Omit<PaperFillRow, 'id' | 'referencePrice' | 'slippagePerUnit' | 'slippageAmount' | 'fees'> & {
+  referencePrice?: number | null;
+  slippagePerUnit?: number;
+  slippageAmount?: number;
+  fees?: number;
+};
 
 /** Type of a position event. */
 export enum PositionEventType {
@@ -1623,7 +1636,7 @@ export interface PositionEventRow {
   product: string;
   /** Quantity delta: positive for buy (increases long / reduces short), negative for sell. */
   quantityDelta: number;
-  /** Fill price or reference price for the event. */
+  /** Gross executed fill price or reference price for the event. */
   price: number;
   /** Quantity before this event. */
   previousQuantity: number;
@@ -1633,8 +1646,10 @@ export interface PositionEventRow {
   newQuantity: number;
   /** Average cost after this event. */
   newAvgCost: number;
-  /** Realized P&L from this event (0 for fills that don't close a position). */
+  /** Net realized P&L from this event after transaction fees. */
   realizedPnl: number;
+  /** Transaction fees/charges applied on this event's fill. */
+  transactionFees: number;
   /** Stop price after this event, or null. */
   stopPrice: number | null;
   /** Trailing anchor price after this event, or null. */
@@ -1646,7 +1661,9 @@ export interface PositionEventRow {
 }
 
 /** Shape for inserting a new position event (without id). */
-export type NewPositionEvent = Omit<PositionEventRow, 'id'>;
+export type NewPositionEvent = Omit<PositionEventRow, 'id' | 'transactionFees'> & {
+  transactionFees?: number;
+};
 
 /** Net position side. */
 export enum PositionSide {

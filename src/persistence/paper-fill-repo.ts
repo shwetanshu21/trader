@@ -30,9 +30,10 @@ export class PaperFillRepository {
     const stmt = this._db.prepare(`
       INSERT INTO paper_fills
         (paper_order_id, execution_attempt_id, exchange, tradingsymbol,
-         side, product, filled_quantity, filled_price,
+         side, product, filled_quantity, filled_price, reference_price,
+         slippage_per_unit, slippage_amount, fees,
          broker_order_id, filled_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -44,6 +45,10 @@ export class PaperFillRepository {
       fill.product,
       fill.filledQuantity,
       fill.filledPrice,
+      fill.referencePrice ?? null,
+      fill.slippagePerUnit ?? 0,
+      fill.slippageAmount ?? 0,
+      fill.fees ?? 0,
       fill.brokerOrderId,
       fill.filledAt,
     );
@@ -58,6 +63,10 @@ export class PaperFillRepository {
       product: fill.product,
       filledQuantity: fill.filledQuantity,
       filledPrice: fill.filledPrice,
+      referencePrice: fill.referencePrice ?? null,
+      slippagePerUnit: fill.slippagePerUnit ?? 0,
+      slippageAmount: fill.slippageAmount ?? 0,
+      fees: fill.fees ?? 0,
       brokerOrderId: fill.brokerOrderId,
       filledAt: fill.filledAt,
     };
@@ -130,6 +139,10 @@ interface PaperFillDbRow {
   product: string;
   filled_quantity: number;
   filled_price: number;
+  reference_price: number | null;
+  slippage_per_unit: number;
+  slippage_amount: number;
+  fees: number;
   broker_order_id: string;
   filled_at: number;
 }
@@ -145,6 +158,10 @@ function mapFillRow(row: PaperFillDbRow): PaperFillRow {
     product: row.product,
     filledQuantity: row.filled_quantity,
     filledPrice: row.filled_price,
+    referencePrice: row.reference_price,
+    slippagePerUnit: row.slippage_per_unit ?? 0,
+    slippageAmount: row.slippage_amount ?? 0,
+    fees: row.fees ?? 0,
     brokerOrderId: row.broker_order_id,
     filledAt: row.filled_at,
   };

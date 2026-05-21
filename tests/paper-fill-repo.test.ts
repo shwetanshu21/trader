@@ -193,6 +193,10 @@ describe('PaperFillRepository', () => {
       expect(fill.product).toBe('MIS');
       expect(fill.filledQuantity).toBe(75);
       expect(fill.filledPrice).toBe(2850.50);
+      expect(fill.referencePrice).toBeNull();
+      expect(fill.slippagePerUnit).toBe(0);
+      expect(fill.slippageAmount).toBe(0);
+      expect(fill.fees).toBe(0);
       expect(fill.brokerOrderId).toContain('paper-');
       expect(fill.filledAt).toBeGreaterThan(0);
       expect(ctx.fillRepo.count()).toBe(1);

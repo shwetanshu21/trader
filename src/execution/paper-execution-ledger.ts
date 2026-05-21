@@ -185,6 +185,10 @@ export class PaperExecutionLedger {
         product: candidate.product,
         filledQuantity: candidate.quantity,
         filledPrice: fillPrice,
+        referencePrice: evaluation.referencePrice ?? null,
+        slippagePerUnit: evaluation.slippagePerUnit ?? 0,
+        slippageAmount: evaluation.slippageAmount ?? 0,
+        fees: evaluation.fees ?? 0,
         brokerOrderId: evaluation.simulatedBrokerOrderId!,
         filledAt: now,
       };
@@ -197,7 +201,13 @@ export class PaperExecutionLedger {
       );
 
       const positionEvent = this._computePositionEvent(
-        candidate, fillPrice, currentPosition, orderRow.id, fillRow.id, attemptRow.id, now,
+        candidate,
+        fillRow,
+        currentPosition,
+        orderRow.id,
+        fillRow.id,
+        attemptRow.id,
+        now,
       );
       const eventRow = this._positionRepo.insertEvent(positionEvent);
 
@@ -248,7 +258,7 @@ export class PaperExecutionLedger {
    */
   private _computePositionEvent(
     candidate: StrategyApprovedCandidate,
-    fillPrice: number,
+    fill: PaperFillRow,
     currentPosition: PaperPositionRow | null,
     paperOrderId: number,
     paperFillId: number,
@@ -257,6 +267,10 @@ export class PaperExecutionLedger {
   ): NewPositionEvent {
     const prevQty = currentPosition?.quantity ?? 0;
     const prevAvgCost = currentPosition?.avgCostPrice ?? 0;
+    const fillPrice = fill.filledPrice;
+    const transactionFees = fill.fees;
+    const feePerUnit = candidate.quantity > 0 ? transactionFees / candidate.quantity : 0;
+    const economicFillPrice = this._computeEconomicFillPrice(fillPrice, feePerUnit, candidate.side);
 
     // Quantity delta: buy → +qty (long), sell → -qty (short)
     const qtyDelta = candidate.side.toLowerCase() === 'buy'
@@ -273,7 +287,7 @@ export class PaperExecutionLedger {
     if (prevQty === 0) {
       // Opening a new position from flat
       eventType = PositionEventType.Open;
-      newAvgCost = fillPrice;
+      newAvgCost = economicFillPrice;
       realizedPnl = 0;
     } else if ((prevQty > 0 && qtyDelta > 0) || (prevQty < 0 && qtyDelta < 0)) {
       // Increasing same-direction position — weighted average
@@ -281,7 +295,7 @@ export class PaperExecutionLedger {
       const absPrev = Math.abs(prevQty);
       const absDelta = Math.abs(qtyDelta);
       const totalQty = absPrev + absDelta;
-      const totalCost = absPrev * prevAvgCost + absDelta * fillPrice;
+      const totalCost = absPrev * prevAvgCost + absDelta * economicFillPrice;
       newAvgCost = totalQty > 0 ? totalCost / totalQty : prevAvgCost;
       realizedPnl = 0;
     } else {
@@ -290,12 +304,12 @@ export class PaperExecutionLedger {
       const absDelta = Math.abs(qtyDelta);
       const reduceQty = Math.min(absPrev, absDelta);
 
-      // Realized P&L: for long positions being reduced, (fillPrice - avgCost) * qty
-      //               for short positions being reduced, (avgCost - fillPrice) * qty
+      // Realized P&L: for long positions being reduced, (exit - avgCost) * qty
+      //               for short positions being reduced, (avgCost - exit) * qty
       if (prevQty > 0) {
-        realizedPnl = (fillPrice - prevAvgCost) * reduceQty;
+        realizedPnl = (economicFillPrice - prevAvgCost) * reduceQty;
       } else {
-        realizedPnl = (prevAvgCost - fillPrice) * reduceQty;
+        realizedPnl = (prevAvgCost - economicFillPrice) * reduceQty;
       }
 
       if (newQty === 0) {
@@ -309,7 +323,7 @@ export class PaperExecutionLedger {
       } else {
         // Full close then open in the opposite direction
         eventType = PositionEventType.Adjust;
-        newAvgCost = fillPrice;
+        newAvgCost = economicFillPrice;
       }
     }
 
@@ -339,11 +353,22 @@ export class PaperExecutionLedger {
       newQuantity: newQty,
       newAvgCost,
       realizedPnl,
+      transactionFees,
       stopPrice: newQty === 0 ? null : nextStopPrice,
       trailingAnchorPrice: newQty === 0 ? null : nextTrailingAnchorPrice,
       trailingStopDistance: newQty === 0 ? null : nextTrailingStopDistance,
       createdAt: now,
     };
+  }
+
+  private _computeEconomicFillPrice(
+    fillPrice: number,
+    feePerUnit: number,
+    side: string,
+  ): number {
+    return side.toLowerCase() === 'buy'
+      ? fillPrice + feePerUnit
+      : fillPrice - feePerUnit;
   }
 
   /**

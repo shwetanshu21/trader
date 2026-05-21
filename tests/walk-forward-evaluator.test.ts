@@ -241,6 +241,8 @@ describe('WalkForwardEvaluator', () => {
         if (envelope.replayEvidence.executionTruth.available) {
           expect(envelope.source).toBe('replay-paper-execution');
           expect(envelope.replayEvidence.executionTruth.tradeCount).toBeGreaterThan(0);
+          expect(envelope.replayEvidence.executionTruth.totalFees).toBeGreaterThan(0);
+          expect(envelope.replayEvidence.executionTruth.totalSlippage).toBeGreaterThan(0);
         } else {
           expect(envelope.source).toBe('replay-session');
         }

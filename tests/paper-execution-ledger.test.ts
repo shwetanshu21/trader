@@ -237,6 +237,10 @@ describe('PaperExecutionLedger', () => {
       expect(result.fill.executionAttemptId).toBe(result.attempt.id);
       expect(result.fill.filledQuantity).toBe(75);
       expect(result.fill.filledPrice).toBe(2851.00);
+      expect(result.fill.referencePrice).toBeNull();
+      expect(result.fill.slippagePerUnit).toBe(0);
+      expect(result.fill.slippageAmount).toBe(0);
+      expect(result.fill.fees).toBe(0);
       expect(result.fill.brokerOrderId).toBe(evaluation.simulatedBrokerOrderId);
       expect(result.fill.side).toBe('buy');
 
@@ -332,20 +336,26 @@ describe('PaperExecutionLedger', () => {
       expect(result.position.side).toBe(PositionSide.Long);
     });
 
-    it('opens a short position on first sell', () => {
+    it('bakes transaction fees into economic cost basis and realized pnl', () => {
       const ctx = createContext();
-      const candidate = seedCandidate(ctx, { side: 'sell', quantity: 100 });
-      const evaluation = successEvaluation({
-        fillPrice: 2800.00,
-        simulatedBrokerOrderId: 'paper-sell-001',
-      });
 
-      const result = ctx.ledger.writeSuccessfulPaperFill(candidate, evaluation);
+      const open = seedCandidate(ctx, { side: 'buy', quantity: 10 });
+      ctx.ledger.writeSuccessfulPaperFill(open, successEvaluation({
+        fillPrice: 100.00,
+        fees: 1.00,
+        simulatedBrokerOrderId: 'paper-fee-open',
+      }));
 
-      expect(result.positionEvent.eventType).toBe(PositionEventType.Open);
-      expect(result.positionEvent.newQuantity).toBe(-100);
-      expect(result.position.side).toBe(PositionSide.Short);
-      expect(result.position.quantity).toBe(-100);
+      const close = seedCandidate(ctx, { side: 'sell', quantity: 10 });
+      const result = ctx.ledger.writeSuccessfulPaperFill(close, successEvaluation({
+        fillPrice: 110.00,
+        fees: 1.10,
+        simulatedBrokerOrderId: 'paper-fee-close',
+      }));
+
+      expect(result.positionEvent.transactionFees).toBeCloseTo(1.10, 4);
+      expect(result.positionEvent.realizedPnl).toBeCloseTo(97.90, 2);
+      expect(result.position.realizedPnl).toBeCloseTo(97.90, 2);
     });
 
     it('adjusts position with weighted avg cost on same-direction buy', () => {

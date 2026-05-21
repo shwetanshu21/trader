@@ -360,6 +360,8 @@ export interface WalkForwardReplayEvidence {
     grossLoss: number;
     winCount: number;
     lossCount: number;
+    totalFees: number;
+    totalSlippage: number;
     maxDrawdown: number | null;
   };
 }

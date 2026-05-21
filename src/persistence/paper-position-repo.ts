@@ -40,8 +40,8 @@ export class PaperPositionRepository {
         (paper_order_id, paper_fill_id, execution_attempt_id, event_type,
          exchange, tradingsymbol, product, quantity_delta, price,
          previous_quantity, previous_avg_cost, new_quantity, new_avg_cost,
-         realized_pnl, stop_price, trailing_anchor_price, trailing_stop_distance, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         realized_pnl, transaction_fees, stop_price, trailing_anchor_price, trailing_stop_distance, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -59,6 +59,7 @@ export class PaperPositionRepository {
       event.newQuantity,
       event.newAvgCost,
       event.realizedPnl,
+      event.transactionFees ?? 0,
       event.stopPrice,
       event.trailingAnchorPrice,
       event.trailingStopDistance,
@@ -81,6 +82,7 @@ export class PaperPositionRepository {
       newQuantity: event.newQuantity,
       newAvgCost: event.newAvgCost,
       realizedPnl: event.realizedPnl,
+      transactionFees: event.transactionFees ?? 0,
       stopPrice: event.stopPrice,
       trailingAnchorPrice: event.trailingAnchorPrice,
       trailingStopDistance: event.trailingStopDistance,
@@ -346,6 +348,7 @@ interface PositionEventDbRow {
   new_quantity: number;
   new_avg_cost: number;
   realized_pnl: number;
+  transaction_fees: number;
   stop_price: number | null;
   trailing_anchor_price: number | null;
   trailing_stop_distance: number | null;
@@ -369,6 +372,7 @@ function mapEventRow(row: PositionEventDbRow): PositionEventRow {
     newQuantity: row.new_quantity,
     newAvgCost: row.new_avg_cost,
     realizedPnl: row.realized_pnl,
+    transactionFees: row.transaction_fees ?? 0,
     stopPrice: row.stop_price,
     trailingAnchorPrice: row.trailing_anchor_price,
     trailingStopDistance: row.trailing_stop_distance,

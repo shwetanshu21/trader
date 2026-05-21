@@ -95,6 +95,8 @@ interface ReplayExecutionTruthMetrics {
   grossLoss: number;
   winCount: number;
   lossCount: number;
+  totalFees: number;
+  totalSlippage: number;
   maxDrawdown: number | null;
 }
 
@@ -995,6 +997,8 @@ export class WalkForwardEvaluator {
         grossLoss: executionTruth.grossLoss,
         winCount: executionTruth.winCount,
         lossCount: executionTruth.lossCount,
+        totalFees: executionTruth.totalFees,
+        totalSlippage: executionTruth.totalSlippage,
         maxDrawdown: executionTruth.maxDrawdown,
       },
     };
@@ -1111,7 +1115,9 @@ export class WalkForwardEvaluator {
           COALESCE(SUM(CASE WHEN pe.realized_pnl > 0 THEN pe.realized_pnl ELSE 0 END), 0) AS gross_profit,
           COALESCE(SUM(CASE WHEN pe.realized_pnl < 0 THEN ABS(pe.realized_pnl) ELSE 0 END), 0) AS gross_loss,
           COALESCE(SUM(CASE WHEN pe.realized_pnl > 0 THEN 1 ELSE 0 END), 0) AS win_count,
-          COALESCE(SUM(CASE WHEN pe.realized_pnl < 0 THEN 1 ELSE 0 END), 0) AS loss_count
+          COALESCE(SUM(CASE WHEN pe.realized_pnl < 0 THEN 1 ELSE 0 END), 0) AS loss_count,
+          COALESCE(SUM(pf.fees), 0) AS total_fees,
+          COALESCE(SUM(pf.slippage_amount), 0) AS total_slippage
         FROM proposal_attempts pa
         INNER JOIN strategy_decisions sd ON sd.proposal_attempt_id = pa.id
         INNER JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
@@ -1125,6 +1131,8 @@ export class WalkForwardEvaluator {
         gross_loss: number;
         win_count: number;
         loss_count: number;
+        total_fees: number;
+        total_slippage: number;
       };
 
       const events = this._db.prepare(`
@@ -1155,6 +1163,8 @@ export class WalkForwardEvaluator {
         grossLoss: tradeRow.gross_loss ?? 0,
         winCount: tradeRow.win_count ?? 0,
         lossCount: tradeRow.loss_count ?? 0,
+        totalFees: tradeRow.total_fees ?? 0,
+        totalSlippage: tradeRow.total_slippage ?? 0,
         maxDrawdown: available ? +maxDrawdown.toFixed(4) : null,
       };
     } catch {
@@ -1166,6 +1176,8 @@ export class WalkForwardEvaluator {
         grossLoss: 0,
         winCount: 0,
         lossCount: 0,
+        totalFees: 0,
+        totalSlippage: 0,
         maxDrawdown: null,
       };
     }
