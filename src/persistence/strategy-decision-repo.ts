@@ -20,11 +20,11 @@ import {
 
 export class StrategyDecisionRepository {
   private readonly _db: Database.Database;
-  private readonly _decisionColumns: Set<string>;
+  private _decisionColumns: Set<string> | null;
 
   constructor(db: Database.Database) {
     this._db = db;
-    this._decisionColumns = this._loadDecisionColumns();
+    this._decisionColumns = null;
   }
 
   /**
@@ -71,7 +71,8 @@ export class StrategyDecisionRepository {
       freeze_quantity: decision.freezeQuantity ?? null,
     };
 
-    const columns = Object.keys(valuesByColumn).filter(column => this._decisionColumns.has(column));
+    const decisionColumns = this._getDecisionColumns();
+    const columns = Object.keys(valuesByColumn).filter(column => decisionColumns.has(column));
     const placeholders = columns.map(() => '?').join(', ');
     const stmt = this._db.prepare(`
       INSERT INTO strategy_decisions (${columns.join(', ')})
@@ -395,6 +396,13 @@ export class StrategyDecisionRepository {
       orderType: r.order_type,
       createdAt: r.created_at,
     }));
+  }
+
+  private _getDecisionColumns(): Set<string> {
+    if (this._decisionColumns === null) {
+      this._decisionColumns = this._loadDecisionColumns();
+    }
+    return this._decisionColumns;
   }
 
   private _loadDecisionColumns(): Set<string> {

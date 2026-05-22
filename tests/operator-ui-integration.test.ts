@@ -248,6 +248,13 @@ describe('operator UI — live standalone integration', () => {
       dbError: null,
       pollIntervalMs: 1500,
     });
+    expect(apiHealth.detailReadModelBootstrap).toMatchObject({
+      status: 'ready',
+      attempts: 1,
+      failures: 0,
+      successes: 1,
+    });
+    expect(apiHealth.detailReadModelBootstrap.lastError).toBeNull();
     expect(apiHealth.sections.summaryCards).toMatchObject({ status: 'ok', count: 9 });
     expect(apiHealth.sections.recentDecisions).toMatchObject({ status: 'ok', count: 3 });
     expect(apiHealth.sections.strategyPerformance).toMatchObject({ status: 'ok', count: 2 });

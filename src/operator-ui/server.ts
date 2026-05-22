@@ -31,11 +31,78 @@ export interface OperatorUIServerOptions {
   dbError: string | null;
   readModel: OperatorReadModel | null;
   detailReadModel?: OperatorDetailReadModel | null;
+  detailReadModelFactory?: ((db: Database.Database) => OperatorDetailReadModel) | null;
+}
+
+interface DetailReadModelBootstrapState {
+  status: 'ready' | 'retrying' | 'unavailable';
+  attempts: number;
+  successes: number;
+  failures: number;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
 }
 
 export function createOperatorUIServer(options: OperatorUIServerOptions): http.Server {
   const { config, authenticator, db, dbError, readModel } = options;
-  const detailReadModel = options.detailReadModel ?? (db !== null ? new OperatorDetailReadModel(db) : null);
+  let detailReadModel = options.detailReadModel ?? null;
+  const detailReadModelFactory = options.detailReadModelFactory ?? ((detailDb: Database.Database) => new OperatorDetailReadModel(detailDb));
+  let detailReadModelInitError: string | null = null;
+  const detailReadModelBootstrap: DetailReadModelBootstrapState = {
+    status: detailReadModel !== null ? 'ready' : (db !== null && detailReadModelFactory !== null ? 'retrying' : 'unavailable'),
+    attempts: 0,
+    successes: detailReadModel !== null ? 1 : 0,
+    failures: 0,
+    lastAttemptAt: null,
+    lastSuccessAt: detailReadModel !== null ? new Date().toISOString() : null,
+    lastFailureAt: null,
+    lastError: null,
+  };
+  const getDetailReadModel = (): OperatorDetailReadModel | null => {
+    if (detailReadModel !== null) {
+      detailReadModelBootstrap.status = 'ready';
+      return detailReadModel;
+    }
+    if (db === null || detailReadModelFactory === null) {
+      detailReadModelBootstrap.status = 'unavailable';
+      return null;
+    }
+    detailReadModelBootstrap.attempts += 1;
+    detailReadModelBootstrap.lastAttemptAt = new Date().toISOString();
+    try {
+      detailReadModel = detailReadModelFactory(db);
+      detailReadModelInitError = null;
+      detailReadModelBootstrap.status = 'ready';
+      detailReadModelBootstrap.successes += 1;
+      detailReadModelBootstrap.lastSuccessAt = detailReadModelBootstrap.lastAttemptAt;
+      detailReadModelBootstrap.lastError = null;
+      console.info('[operator-ui] Detail read model bootstrap succeeded.', JSON.stringify({
+        event: 'detail-read-model-bootstrap',
+        status: 'ready',
+        attempts: detailReadModelBootstrap.attempts,
+        successes: detailReadModelBootstrap.successes,
+        failures: detailReadModelBootstrap.failures,
+      }));
+      return detailReadModel;
+    } catch (err) {
+      detailReadModelInitError = err instanceof Error ? err.message : String(err);
+      detailReadModelBootstrap.status = 'retrying';
+      detailReadModelBootstrap.failures += 1;
+      detailReadModelBootstrap.lastFailureAt = detailReadModelBootstrap.lastAttemptAt;
+      detailReadModelBootstrap.lastError = detailReadModelInitError;
+      console.warn('[operator-ui] Detail read model unavailable during request bootstrap.', JSON.stringify({
+        event: 'detail-read-model-bootstrap',
+        status: 'retrying',
+        attempts: detailReadModelBootstrap.attempts,
+        successes: detailReadModelBootstrap.successes,
+        failures: detailReadModelBootstrap.failures,
+        error: detailReadModelInitError,
+      }));
+      return null;
+    }
+  };
   const dashboardPayloadAssembler = new DashboardPayloadAssembler();
   const corsOrigin = `http://${config.host === '0.0.0.0' ? '127.0.0.1' : config.host}`;
 
@@ -96,28 +163,28 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/system-health': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleSystemHealthHtml(res, config, db, dbError, authenticator, readModel);
+          handleSystemHealthHtml(res, config, db, dbError, authenticator, readModel, detailReadModelBootstrap);
           return;
         }
 
         case '/decision': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleDecisionDetail(res, url, detailReadModel, dbError);
+          handleDecisionDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError);
           return;
         }
 
         case '/strategy': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleStrategyDetail(res, url, detailReadModel, dbError);
+          handleStrategyDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError);
           return;
         }
 
         case '/backtest': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleBacktestDetail(res, url, detailReadModel, dbError);
+          handleBacktestDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError);
           return;
         }
 
@@ -131,7 +198,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/api/health': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleApiHealth(res, config, db, dbError, authenticator, readModel);
+          handleApiHealth(res, config, db, dbError, authenticator, readModel, detailReadModelBootstrap);
           return;
         }
 
@@ -474,6 +541,7 @@ function buildOperatorHealthPayload(
   dbError: string | null,
   authenticator: Authenticator,
   readModel: OperatorReadModel | null,
+  detailReadModelBootstrap: unknown,
 ): OperatorSystemHealthViewModel {
   const dbOk = db !== null;
   const sections: Record<string, unknown> = {};
@@ -532,6 +600,7 @@ function buildOperatorHealthPayload(
     dbError: dbOk ? null : dbError,
     pollIntervalMs: config.pollIntervalMs,
     authClients: authenticator.getStateSummary(),
+    detailReadModelBootstrap,
     sections,
   };
 }
@@ -543,8 +612,9 @@ function handleSystemHealthHtml(
   dbError: string | null,
   authenticator: Authenticator,
   readModel: OperatorReadModel | null,
+  detailReadModelBootstrap: unknown,
 ): void {
-  respondHtml(res, 200, renderSystemHealthPage(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel)));
+  respondHtml(res, 200, renderSystemHealthPage(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, detailReadModelBootstrap)));
 }
 
 function handleApiHealth(
@@ -554,9 +624,10 @@ function handleApiHealth(
   dbError: string | null,
   authenticator: Authenticator,
   readModel: OperatorReadModel | null,
+  detailReadModelBootstrap: unknown,
 ): void {
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel)));
+  res.end(JSON.stringify(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, detailReadModelBootstrap)));
 }
 
 function parseRequiredInt(url: URL, key: string, label: string):

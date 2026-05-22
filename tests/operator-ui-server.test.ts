@@ -201,7 +201,9 @@ describe('operator-ui server detail routes', () => {
 
     const healthPageResponse = await fetch(`${baseUrl}/system-health`, { headers: { Authorization: 'Basic ok' } });
     expect(healthPageResponse.status).toBe(200);
-    expect(await healthPageResponse.text()).toContain('System Health');
+    const healthPageHtml = await healthPageResponse.text();
+    expect(healthPageHtml).toContain('System Health');
+    expect(healthPageHtml).toContain('Detail Read Model Bootstrap');
 
     const decisionResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
     expect(decisionResponse.status).toBe(200);
@@ -257,6 +259,49 @@ describe('operator-ui server detail routes', () => {
     expect((await fetch(`${baseUrl}/backtest?runId=999`, { headers: { Authorization: 'Basic ok' } })).status).toBe(404);
   });
 
+  it('lazily retries detail read model construction instead of crashing startup', async () => {
+    let attempts = 0;
+    const server = createOperatorUIServer({
+      config: baseConfig,
+      authenticator: authOk as any,
+      db: {} as any,
+      dbError: null,
+      readModel: null,
+      detailReadModel: null,
+      detailReadModelFactory: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('unable to open database file');
+        }
+        return {
+          getDecisionDetail: () => decisionDetail,
+          getStrategyDetail: () => strategyDetail,
+          getBacktestDetail: () => backtestDetail,
+        } as any;
+      },
+    });
+    const baseUrl = await listen(server);
+
+    const firstResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
+    expect(firstResponse.status).toBe(503);
+    expect(await firstResponse.text()).toContain('Decision Detail Unavailable');
+
+    const healthResponse = await fetch(`${baseUrl}/api/health`, { headers: { Authorization: 'Basic ok' } });
+    expect(healthResponse.status).toBe(200);
+    const healthPayload = await healthResponse.json();
+    expect(healthPayload.detailReadModelBootstrap).toMatchObject({
+      status: 'retrying',
+      attempts: 1,
+      failures: 1,
+      successes: 0,
+    });
+    expect(healthPayload.detailReadModelBootstrap.lastError).toContain('unable to open database file');
+
+    const secondResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
+    expect(secondResponse.status).toBe(200);
+    expect(await secondResponse.text()).toContain('Decision #7');
+    expect(attempts).toBe(2);
+  });
   it('maps db-unavailable and read-model failures to truthful 503 HTML', async () => {
     const unavailableServer = createOperatorUIServer({
       config: baseConfig,
