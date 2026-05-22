@@ -107,15 +107,23 @@ function main(): void {
   console.log('[operator-ui] Starting with config:', JSON.stringify(redacted, null, 2));
 
   // ── Open operator database ────────────────────────────────────────────
-  const { db, error: dbError } = openOperatorDb(config.dbPath);
+  const { db, error: dbError, attempts: dbOpenAttempts, recoveredAfterRetry } = openOperatorDb(config.dbPath);
   if (db === null) {
-    console.warn(`[operator-ui] WARNING: Failed to open operator database at "${config.dbPath}": ${dbError}`);
+    console.warn(`[operator-ui] WARNING: Failed to open operator database at "${config.dbPath}" after ${dbOpenAttempts} attempt(s): ${dbError}`);
     console.warn('[operator-ui] HTTP server will start in degraded mode — DB-backed routes return 503.');
   } else {
-    console.log(`[operator-ui] Operator database opened (read-only): ${config.dbPath}`);
+    const retryMeta = recoveredAfterRetry ? ` after ${dbOpenAttempts} attempts` : '';
+    console.log(`[operator-ui] Operator database opened (read-only): ${config.dbPath}${retryMeta}`);
   }
 
   // ── Create read model (null when DB is unavailable) ───────────────────
+  const dbOpenBootstrap = {
+    status: db !== null ? (recoveredAfterRetry ? 'recovered' : 'ready') : 'failed',
+    attempts: dbOpenAttempts,
+    recoveredAfterRetry,
+    lastError: dbError,
+  } as const;
+
   const readModel = maybeWrapReadModelForInjectedFailures(
     db !== null ? new OperatorReadModel(db) : null,
   );
@@ -131,6 +139,7 @@ function main(): void {
     db,
     dbError,
     readModel,
+    dbOpenBootstrap,
   });
 
   server.listen(config.port, config.host, () => {

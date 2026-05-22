@@ -254,6 +254,12 @@ describe('operator UI — live standalone integration', () => {
       failures: 0,
       successes: 1,
     });
+    expect(apiHealth.dbOpenBootstrap).toMatchObject({
+      status: 'ready',
+      attempts: 1,
+      recoveredAfterRetry: false,
+      lastError: null,
+    });
     expect(apiHealth.detailReadModelBootstrap.lastError).toBeNull();
     expect(apiHealth.sections.summaryCards).toMatchObject({ status: 'ok', count: 9 });
     expect(apiHealth.sections.recentDecisions).toMatchObject({ status: 'ok', count: 3 });
@@ -364,6 +370,12 @@ describe('operator UI — live standalone integration', () => {
     const apiHealth = await apiHealthResponse.json();
     expect(apiHealth.status).toBe('degraded');
     expect(apiHealth.dbConnected).toBe(false);
+    expect(apiHealth.dbOpenBootstrap).toMatchObject({
+      status: 'failed',
+      attempts: 3,
+      recoveredAfterRetry: false,
+    });
+    expect(String(apiHealth.dbOpenBootstrap.lastError)).not.toBe('null');
     expect(apiHealth.sections.summaryCards.status).toBe('unavailable');
   });
 

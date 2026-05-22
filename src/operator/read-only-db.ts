@@ -7,12 +7,24 @@
 
 import Database from 'better-sqlite3';
 
+interface OpenOperatorDbOptions {
+  maxAttempts?: number;
+  initialBackoffMs?: number;
+  backoffMultiplier?: number;
+  openFactory?: (dbPath: string) => Database.Database;
+  sleep?: (ms: number) => void;
+}
+
 /** Result of attempting to open the operator database. */
 export interface OpenOperatorDbResult {
   /** The database handle, or null on failure. */
   db: Database.Database | null;
   /** Error message when db is null. */
   error: string | null;
+  /** Number of open attempts that were made. */
+  attempts: number;
+  /** True when the DB eventually opened only after retrying. */
+  recoveredAfterRetry: boolean;
 }
 
 /**
@@ -24,17 +36,57 @@ export interface OpenOperatorDbResult {
  * @param dbPath - Absolute or relative path to the SQLite database file.
  * @returns An OpenOperatorDbResult containing the handle (or null + error).
  */
-export function openOperatorDb(dbPath: string): OpenOperatorDbResult {
-  try {
-    const db = new Database(dbPath, {
-      readonly: true,
-      fileMustExist: true,
-    });
-    return { db, error: null };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { db: null, error: message };
+export function openOperatorDb(dbPath: string, options?: OpenOperatorDbOptions): OpenOperatorDbResult {
+  const maxAttempts = Math.max(1, options?.maxAttempts ?? 3);
+  const initialBackoffMs = Math.max(0, options?.initialBackoffMs ?? 50);
+  const backoffMultiplier = Math.max(1, options?.backoffMultiplier ?? 2);
+  const openFactory = options?.openFactory ?? ((targetPath: string) => new Database(targetPath, {
+    readonly: true,
+    fileMustExist: true,
+  }));
+  const sleep = options?.sleep ?? sleepSync;
+
+  let attempts = 0;
+  let lastError: string | null = null;
+  let backoffMs = initialBackoffMs;
+
+  while (attempts < maxAttempts) {
+    attempts += 1;
+    try {
+      const db = openFactory(dbPath);
+      return {
+        db,
+        error: null,
+        attempts,
+        recoveredAfterRetry: attempts > 1,
+      };
+    } catch (err: unknown) {
+      lastError = err instanceof Error ? err.message : String(err);
+      if (attempts >= maxAttempts || !isRetryableOpenError(lastError)) {
+        break;
+      }
+      sleep(backoffMs);
+      backoffMs *= backoffMultiplier;
+    }
   }
+
+  return {
+    db: null,
+    error: lastError,
+    attempts,
+    recoveredAfterRetry: false,
+  };
+}
+
+function isRetryableOpenError(message: string | null): boolean {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return lower.includes('unable to open database file') || lower.includes('sqlite_cantopen');
+}
+
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**

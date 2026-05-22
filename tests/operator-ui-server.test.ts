@@ -203,6 +203,7 @@ describe('operator-ui server detail routes', () => {
     expect(healthPageResponse.status).toBe(200);
     const healthPageHtml = await healthPageResponse.text();
     expect(healthPageHtml).toContain('System Health');
+    expect(healthPageHtml).toContain('Database Open Bootstrap');
     expect(healthPageHtml).toContain('Detail Read Model Bootstrap');
 
     const decisionResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
@@ -294,6 +295,12 @@ describe('operator-ui server detail routes', () => {
       attempts: 1,
       failures: 1,
       successes: 0,
+    });
+    expect(healthPayload.dbOpenBootstrap).toMatchObject({
+      status: 'ready',
+      attempts: 1,
+      recoveredAfterRetry: false,
+      lastError: null,
     });
     expect(healthPayload.detailReadModelBootstrap.lastError).toContain('unable to open database file');
 

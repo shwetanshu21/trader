@@ -213,9 +213,53 @@ describe('M010 S01 — Operator read-only DB seam', () => {
     expect(result.error).not.toBeNull();
   });
 
-  // -----------------------------------------------------------------------
-  // 4. Read-only detection
-  // -----------------------------------------------------------------------
+  it('retries a transient open failure and eventually succeeds', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trader-operator-ro-retry-'));
+    const dbPath = createWALDb(tmpDir);
+    let attempts = 0;
+
+    const result = openOperatorDb(dbPath, {
+      maxAttempts: 3,
+      initialBackoffMs: 0,
+      openFactory: (targetPath) => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('unable to open database file');
+        }
+        return new Database(targetPath, { readonly: true, fileMustExist: true });
+      },
+      sleep: () => {},
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.db).not.toBeNull();
+    expect(result.attempts).toBe(2);
+    expect(result.recoveredAfterRetry).toBe(true);
+    closeOperatorDb(result.db);
+  });
+
+  it('stops retrying after the configured attempt budget is exhausted', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trader-operator-ro-retry-fail-'));
+    const dbPath = path.join(tmpDir, 'never-opens.db');
+    let attempts = 0;
+
+    const result = openOperatorDb(dbPath, {
+      maxAttempts: 3,
+      initialBackoffMs: 0,
+      openFactory: () => {
+        attempts += 1;
+        throw new Error('unable to open database file');
+      },
+      sleep: () => {},
+    });
+
+    expect(result.db).toBeNull();
+    expect(result.error).toContain('unable to open database file');
+    expect(result.attempts).toBe(3);
+    expect(result.recoveredAfterRetry).toBe(false);
+    expect(attempts).toBe(3);
+  });
+
   it('isReadOnly returns false for a normal (writable) database', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trader-operator-ro-writable-'));
     const dbPath = path.join(tmpDir, 'writable.db');

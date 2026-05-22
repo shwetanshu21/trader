@@ -30,8 +30,16 @@ export interface OperatorUIServerOptions {
   db: Database.Database | null;
   dbError: string | null;
   readModel: OperatorReadModel | null;
+  dbOpenBootstrap?: DbOpenBootstrapState;
   detailReadModel?: OperatorDetailReadModel | null;
   detailReadModelFactory?: ((db: Database.Database) => OperatorDetailReadModel) | null;
+}
+
+interface DbOpenBootstrapState {
+  status: 'ready' | 'recovered' | 'failed';
+  attempts: number;
+  recoveredAfterRetry: boolean;
+  lastError: string | null;
 }
 
 interface DetailReadModelBootstrapState {
@@ -47,6 +55,12 @@ interface DetailReadModelBootstrapState {
 
 export function createOperatorUIServer(options: OperatorUIServerOptions): http.Server {
   const { config, authenticator, db, dbError, readModel } = options;
+  const dbOpenBootstrap: DbOpenBootstrapState = options.dbOpenBootstrap ?? {
+    status: db !== null ? 'ready' : 'failed',
+    attempts: 1,
+    recoveredAfterRetry: false,
+    lastError: db !== null ? null : dbError,
+  };
   let detailReadModel = options.detailReadModel ?? null;
   const detailReadModelFactory = options.detailReadModelFactory ?? ((detailDb: Database.Database) => new OperatorDetailReadModel(detailDb));
   let detailReadModelInitError: string | null = null;
@@ -163,7 +177,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/system-health': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleSystemHealthHtml(res, config, db, dbError, authenticator, readModel, detailReadModelBootstrap);
+          handleSystemHealthHtml(res, config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap);
           return;
         }
 
@@ -198,7 +212,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/api/health': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleApiHealth(res, config, db, dbError, authenticator, readModel, detailReadModelBootstrap);
+          handleApiHealth(res, config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap);
           return;
         }
 
@@ -541,6 +555,7 @@ function buildOperatorHealthPayload(
   dbError: string | null,
   authenticator: Authenticator,
   readModel: OperatorReadModel | null,
+  dbOpenBootstrap: DbOpenBootstrapState,
   detailReadModelBootstrap: unknown,
 ): OperatorSystemHealthViewModel {
   const dbOk = db !== null;
@@ -600,6 +615,7 @@ function buildOperatorHealthPayload(
     dbError: dbOk ? null : dbError,
     pollIntervalMs: config.pollIntervalMs,
     authClients: authenticator.getStateSummary(),
+    dbOpenBootstrap,
     detailReadModelBootstrap,
     sections,
   };
@@ -612,9 +628,10 @@ function handleSystemHealthHtml(
   dbError: string | null,
   authenticator: Authenticator,
   readModel: OperatorReadModel | null,
+  dbOpenBootstrap: DbOpenBootstrapState,
   detailReadModelBootstrap: unknown,
 ): void {
-  respondHtml(res, 200, renderSystemHealthPage(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, detailReadModelBootstrap)));
+  respondHtml(res, 200, renderSystemHealthPage(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap)));
 }
 
 function handleApiHealth(
@@ -624,10 +641,11 @@ function handleApiHealth(
   dbError: string | null,
   authenticator: Authenticator,
   readModel: OperatorReadModel | null,
+  dbOpenBootstrap: DbOpenBootstrapState,
   detailReadModelBootstrap: unknown,
 ): void {
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, detailReadModelBootstrap)));
+  res.end(JSON.stringify(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap)));
 }
 
 function parseRequiredInt(url: URL, key: string, label: string):

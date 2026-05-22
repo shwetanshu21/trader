@@ -8,6 +8,7 @@ export interface OperatorSystemHealthViewModel {
   dbError: string | null;
   pollIntervalMs: number;
   authClients: unknown[];
+  dbOpenBootstrap: unknown;
   detailReadModelBootstrap: unknown;
   sections: Record<string, unknown>;
 }
@@ -18,6 +19,7 @@ export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel): 
     { label: 'Status', value: payload.status, meta: payload.dbConnected ? 'DB connected' : 'DB degraded' },
     { label: 'Poll Interval', value: `${payload.pollIntervalMs} ms`, meta: 'Dashboard refresh cadence' },
     { label: 'Tracked Auth Clients', value: String(payload.authClients.length), meta: 'Current rate-limit / lockout state view' },
+    { label: 'DB Open', value: String((payload.dbOpenBootstrap as any)?.status ?? 'unknown'), meta: 'Initial read-only DB open result' },
     { label: 'Detail Bootstrap', value: String((payload.detailReadModelBootstrap as any)?.status ?? 'unknown'), meta: 'Detail-route read model readiness' },
   ];
 
@@ -29,6 +31,16 @@ export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel): 
     null,
     'HTML wrapper around the existing operator health JSON',
     { id: 'system-health-summary' },
+  );
+
+  const dbOpen = renderSection(
+    'Database Open Bootstrap',
+    `<pre>${formatJson(payload.dbOpenBootstrap)}</pre>`,
+    (((payload.dbOpenBootstrap as any)?.status === 'ready') || ((payload.dbOpenBootstrap as any)?.status === 'recovered')) ? 'ok' : 'stale',
+    ((payload.dbOpenBootstrap as any)?.lastError as string | null) ?? null,
+    null,
+    'Initial read-only DB open attempts, retry recovery, and last open error',
+    { id: 'system-health-db-open-bootstrap' },
   );
 
   const detailBootstrap = renderSection(
@@ -68,6 +80,6 @@ export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel): 
     meta: payload.dbConnected ? 'Healthy operator database connection.' : `Degraded: ${payload.dbError ?? 'database unavailable'}`,
     actions: '<a href="/">Back to overview</a><a href="/api/health">Raw JSON</a><a href="/positions">Positions & exposure</a>',
     navActive: 'system-health',
-    body: [summary, detailBootstrap, sections, authState].join('\n'),
+    body: [summary, dbOpen, detailBootstrap, sections, authState].join('\n'),
   });
 }
