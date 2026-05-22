@@ -669,6 +669,63 @@ describe('StrategyLifecycleEvaluator', () => {
   // -----------------------------------------------------------------------
 
   describe('hold on missing or degraded replay fidelity', () => {
+    it('promotes when replay paper execution evidence is present with full fidelity', () => {
+      const { repo, evaluator } = createContext();
+      const envelope = {
+        schemaVersion: 1,
+        source: 'replay-paper-execution',
+        replayEvidence: {
+          replaySessionId: 1,
+          replayStatus: 'completed',
+          replayLabel: 'Replay paper execution',
+          replayRangeStart: NOW,
+          replayRangeEnd: NOW + 86400000,
+          replayCompletedTicks: 10,
+          replayTotalTicks: 10,
+          checkpointCount: 3,
+          strategyRunCount: 5,
+          firstStrategyRunId: 1,
+          lastStrategyRunId: 5,
+          topCandidateCount: 5,
+          maxCandidates: 5,
+          preCapCandidateCount: 5,
+          llmStatusCounts: { consulted: 4, skipped: 1 },
+          pluginErrorCount: 0,
+          errorMessage: null,
+          executionTruth: {
+            available: true,
+            source: 'replay-paper-execution',
+            tradeCount: 3,
+            realizedPnl: 1200,
+            grossProfit: 1500,
+            grossLoss: 300,
+            winCount: 2,
+            lossCount: 1,
+            totalFees: 12,
+            totalSlippage: 18,
+            maxDrawdown: 75,
+          },
+        },
+        summary: {
+          tickCount: 10,
+          meanMergedScore: 0.85,
+          meanDeterministicScore: 0.77,
+          meanLlmScore: null,
+          stdDevMergedScore: null,
+          maxMergedScore: 0.85,
+          minMergedScore: 0.7,
+        },
+      };
+
+      const { runId } = seedPromotableRun(repo, { metricsJson: JSON.stringify(envelope) });
+      const result = evaluator.evaluate(defaultInput(runId));
+
+      expect(result.verdict).toBe(GovernanceVerdict.Promote);
+      expect(result.evidenceSnapshot.replayFidelity).toBe(1.0);
+      expect(result.evidenceSnapshot.hasReplayEvidence).toBe(true);
+      expect(result.evidenceSnapshot.llmConsultationRate).toBe(0.8);
+    });
+
     it('promotes when full replay fidelity is present (minReplayFidelity 1.0, fidelity 1.0)', () => {
       const { repo, evaluator } = createContext();
       // Full fidelity: maxCandidates == preCapCandidateCount → ratio 1.0

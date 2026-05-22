@@ -857,7 +857,12 @@ export class StrategyLifecycleEvaluator {
         continue;
       }
 
-      if (!envelope || envelope.source !== 'replay-session' || !envelope.replayEvidence) {
+      if (!envelope || !envelope.replayEvidence) {
+        continue;
+      }
+
+      const source = envelope.source;
+      if (source !== 'replay-session' && source !== 'replay-paper-execution') {
         continue;
       }
 
