@@ -97,7 +97,7 @@ export class ResearchArtifactWriter {
    */
   ensureDir(hypothesisGraphId: number): string {
     const dir = this._artifactDir(hypothesisGraphId);
-    fs.mkdirSync(dir, { recursive: true });
+    this._ensureRestrictiveDir(dir);
     return dir;
   }
 
@@ -113,7 +113,7 @@ export class ResearchArtifactWriter {
     payload: ResearchPromotionArtifact,
   ): string {
     const dir = this._artifactDir(hypothesisGraphId);
-    fs.mkdirSync(dir, { recursive: true });
+    this._ensureRestrictiveDir(dir);
     const filePath = path.join(dir, 'promotion-artifact.json');
     this._writeJSON(filePath, payload);
     return filePath;
@@ -131,7 +131,7 @@ export class ResearchArtifactWriter {
     payload: ResearchDiagnosticsArtifact,
   ): string {
     const dir = this._artifactDir(hypothesisGraphId);
-    fs.mkdirSync(dir, { recursive: true });
+    this._ensureRestrictiveDir(dir);
     const filePath = path.join(dir, 'diagnostics.json');
     this._writeJSON(filePath, payload);
     return filePath;
@@ -149,7 +149,7 @@ export class ResearchArtifactWriter {
     graph: Record<string, unknown>,
   ): string {
     const dir = this._artifactDir(hypothesisGraphId);
-    fs.mkdirSync(dir, { recursive: true });
+    this._ensureRestrictiveDir(dir);
     const filePath = path.join(dir, 'hypothesis.json');
     this._writeJSON(filePath, graph);
     return filePath;
@@ -167,10 +167,20 @@ export class ResearchArtifactWriter {
   }
 
   /**
-   * Write a JSON object to a file with pretty-printing.
+   * Write a JSON object to a file with pretty-printing and restrictive permissions.
+   * Files are created with 0600 (owner read-write only) to prevent accidental
+   * exposure of research artifacts.
    */
   private _writeJSON(filePath: string, data: unknown): void {
     const json = JSON.stringify(data, null, 2);
     fs.writeFileSync(filePath, json, 'utf-8');
+    fs.chmodSync(filePath, 0o600);
+  }
+
+  /**
+   * Ensure the directory exists with restrictive owner-only permissions (0700).
+   */
+  private _ensureRestrictiveDir(dir: string): void {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 }

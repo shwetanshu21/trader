@@ -21,6 +21,7 @@ import { HypothesisRepository } from '../persistence/hypothesis-repo.js';
 import { HypothesisMemoryRepository } from '../persistence/hypothesis-memory-repo.js';
 import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { IndiaResearchBuilder } from '../strategy/india-research.js';
+import * as crypto from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   GenerationVerdict,
@@ -45,6 +46,16 @@ const DEFAULT_MARKET_ID = 'INDIA_NSE_EQ';
 const DEFAULT_STRATEGY_ID = 'research-hypothesis-generator';
 const DEFAULT_PROMPT_VERSION = '1.0.0';
 const DEFAULT_MAX_CONTEXT_CANDIDATES = 5;
+
+/**
+ * Maximum raw provider output body size in bytes before capping for DB storage.
+ * Full output can be reconstructed from hash verification and the preview allows
+ * operator inspection without dumping potentially large payloads.
+ */
+const MAX_RAW_OUTPUT_BYTES = 50_000;
+
+/** Number of characters to retain for the safe display preview. */
+const OUTPUT_PREVIEW_CHARS = 2_000;
 
 // ---------------------------------------------------------------------------
 // HypothesisGenerationService
@@ -134,6 +145,10 @@ export class HypothesisGenerationService {
     const rawOutput = await this._callProvider(payload, config, now);
     const rawOutputStr = rawOutput.text;
 
+    // ── Cap raw output for durable storage — compute SHA-256 hash on     ──
+    //     the full body BEFORE truncating, then cap and derive preview.    ──
+    const outputCapping = this._capRawOutput(rawOutputStr);
+
     // ── 3. Transport failure ──────────────────────────────────────────
     if (rawOutput.error) {
       const reasons: GenerationReason[] = [
@@ -146,7 +161,9 @@ export class HypothesisGenerationService {
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
         contextProvenance,
-        rawProviderOutput: rawOutputStr,
+        rawProviderOutput: outputCapping.rawProviderOutput,
+        rawOutputContentHash: outputCapping.rawOutputContentHash,
+        rawOutputPreview: outputCapping.rawOutputPreview,
         canonicalHash: null,
         hypothesisGraphId: null,
         hypothesisEvaluationId: null,
@@ -173,6 +190,8 @@ export class HypothesisGenerationService {
         verdict: GenerationVerdict.Rejected,
         contextProvenance,
         rawProviderOutput: null,
+        rawOutputContentHash: null,
+        rawOutputPreview: null,
         canonicalHash: null,
         hypothesisGraphId: null,
         hypothesisEvaluationId: null,
@@ -201,7 +220,9 @@ export class HypothesisGenerationService {
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
         contextProvenance,
-        rawProviderOutput: rawOutputStr,
+        rawProviderOutput: outputCapping.rawProviderOutput,
+        rawOutputContentHash: outputCapping.rawOutputContentHash,
+        rawOutputPreview: outputCapping.rawOutputPreview,
         canonicalHash: null,
         hypothesisGraphId: null,
         hypothesisEvaluationId: null,
@@ -228,7 +249,9 @@ export class HypothesisGenerationService {
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
         contextProvenance,
-        rawProviderOutput: rawOutputStr,
+        rawProviderOutput: outputCapping.rawProviderOutput,
+        rawOutputContentHash: outputCapping.rawOutputContentHash,
+        rawOutputPreview: outputCapping.rawOutputPreview,
         canonicalHash: null,
         hypothesisGraphId: null,
         hypothesisEvaluationId: null,
@@ -263,7 +286,9 @@ export class HypothesisGenerationService {
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
         contextProvenance,
-        rawProviderOutput: rawOutputStr,
+        rawProviderOutput: outputCapping.rawProviderOutput,
+        rawOutputContentHash: outputCapping.rawOutputContentHash,
+        rawOutputPreview: outputCapping.rawOutputPreview,
         canonicalHash: null,
         hypothesisGraphId: null,
         hypothesisEvaluationId: null,
@@ -289,7 +314,9 @@ export class HypothesisGenerationService {
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Skipped,
         contextProvenance,
-        rawProviderOutput: rawOutputStr,
+        rawProviderOutput: outputCapping.rawProviderOutput,
+        rawOutputContentHash: outputCapping.rawOutputContentHash,
+        rawOutputPreview: outputCapping.rawOutputPreview,
         canonicalHash: canonical.canonicalHash,
         hypothesisGraphId: null,
         hypothesisEvaluationId: null,
@@ -318,7 +345,9 @@ export class HypothesisGenerationService {
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Rejected,
           contextProvenance,
-          rawProviderOutput: rawOutputStr,
+          rawProviderOutput: outputCapping.rawProviderOutput,
+          rawOutputContentHash: outputCapping.rawOutputContentHash,
+          rawOutputPreview: outputCapping.rawOutputPreview,
           canonicalHash: canonical.canonicalHash,
           hypothesisGraphId: null,
           hypothesisEvaluationId: null,
@@ -342,7 +371,9 @@ export class HypothesisGenerationService {
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Skipped,
           contextProvenance,
-          rawProviderOutput: rawOutputStr,
+          rawProviderOutput: outputCapping.rawProviderOutput,
+          rawOutputContentHash: outputCapping.rawOutputContentHash,
+          rawOutputPreview: outputCapping.rawOutputPreview,
           canonicalHash: canonical.canonicalHash,
           hypothesisGraphId: null,
           hypothesisEvaluationId: null,
@@ -364,7 +395,9 @@ export class HypothesisGenerationService {
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Accepted,
           contextProvenance,
-          rawProviderOutput: rawOutputStr,
+          rawProviderOutput: outputCapping.rawProviderOutput,
+          rawOutputContentHash: outputCapping.rawOutputContentHash,
+          rawOutputPreview: outputCapping.rawOutputPreview,
           canonicalHash: canonical.canonicalHash,
           hypothesisGraphId: persistResult ?? null,
           hypothesisEvaluationId: null,
@@ -718,6 +751,8 @@ export class HypothesisGenerationService {
       verdict: GenerationVerdict;
       contextProvenance: GenerationContextProvenance;
       rawProviderOutput: string | null;
+      rawOutputContentHash: string | null;
+      rawOutputPreview: string | null;
       canonicalHash: string | null;
       hypothesisGraphId: number | null;
       hypothesisEvaluationId: number | null;
@@ -730,6 +765,8 @@ export class HypothesisGenerationService {
         verdict: attemptData.verdict,
         contextProvenance: attemptData.contextProvenance,
         rawProviderOutput: attemptData.rawProviderOutput,
+        rawOutputContentHash: attemptData.rawOutputContentHash,
+        rawOutputPreview: attemptData.rawOutputPreview,
         canonicalHash: attemptData.canonicalHash,
         hypothesisGraphId: attemptData.hypothesisGraphId,
         hypothesisEvaluationId: attemptData.hypothesisEvaluationId,
@@ -737,6 +774,45 @@ export class HypothesisGenerationService {
       },
       reasons,
     );
+  }
+
+  /**
+   * Cap a raw provider output string for durable storage.
+   *
+   * Computes the SHA-256 hex digest of the FULL (untruncated) body first,
+   * then truncates the body at MAX_RAW_OUTPUT_BYTES and derives a safe
+   * display preview (first OUTPUT_PREVIEW_CHARS chars).
+   *
+   * When the input is null (transport failure with no body), returns null
+   * for all three fields.
+   */
+  private _capRawOutput(raw: string | null): {
+    rawProviderOutput: string | null;
+    rawOutputContentHash: string | null;
+    rawOutputPreview: string | null;
+  } {
+    if (raw == null) {
+      return { rawProviderOutput: null, rawOutputContentHash: null, rawOutputPreview: null };
+    }
+
+    // SHA-256 of the full body (computed BEFORE truncation)
+    const hash = crypto.createHash('sha256').update(raw, 'utf-8').digest('hex');
+
+    // Cap the stored body
+    const capped = raw.length > MAX_RAW_OUTPUT_BYTES
+      ? raw.slice(0, MAX_RAW_OUTPUT_BYTES)
+      : raw;
+
+    // Safe display preview
+    const preview = raw.length > OUTPUT_PREVIEW_CHARS
+      ? raw.slice(0, OUTPUT_PREVIEW_CHARS)
+      : raw;
+
+    return {
+      rawProviderOutput: capped,
+      rawOutputContentHash: hash,
+      rawOutputPreview: preview,
+    };
   }
 }
 

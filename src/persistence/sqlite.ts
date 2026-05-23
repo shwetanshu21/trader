@@ -661,8 +661,14 @@ CREATE TABLE IF NOT EXISTS hypothesis_generation_attempts (
   market_id                 TEXT    NOT NULL,
   strategy_id               TEXT,
 
-  -- Raw provider output (JSON string or null when absent)
+  -- Raw provider output (JSON string or null when absent); capped at MAX_RAW_OUTPUT_BYTES
   raw_provider_output       TEXT,
+
+  -- SHA-256 hex digest of the full (untruncated) provider output, computed before capping
+  raw_output_content_hash  TEXT,
+
+  -- Truncated preview of the provider output (first ~2000 chars); always safe for display
+  raw_output_preview       TEXT,
 
   -- Downstream linkage (null for rejected/skipped)
   canonical_hash            TEXT,
@@ -845,6 +851,10 @@ export class DatabaseManager {
     this._migrateAddColumnIfNotExists('paper_positions', 'trailing_stop_distance', 'REAL');
     this._migrateAddColumnIfNotExists('paper_positions', 'mark_price', 'REAL');
     this._migrateAddColumnIfNotExists('paper_positions', 'marked_at', 'INTEGER');
+
+    // T06: Add raw_output_content_hash and raw_output_preview to hypothesis_generation_attempts
+    this._migrateAddColumnIfNotExists('hypothesis_generation_attempts', 'raw_output_content_hash', 'TEXT');
+    this._migrateAddColumnIfNotExists('hypothesis_generation_attempts', 'raw_output_preview', 'TEXT');
   }
 
   /** Add a column to a table only if it does not already exist. */

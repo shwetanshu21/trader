@@ -40,10 +40,11 @@ export class HypothesisGenerationRepository {
         (verdict,
          provider_url, provider_model, prompt_version, triggered_at,
          market_id, strategy_id,
-         raw_provider_output, canonical_hash,
+         raw_provider_output, raw_output_content_hash, raw_output_preview,
+         canonical_hash,
          hypothesis_graph_id, hypothesis_evaluation_id,
          created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -55,6 +56,8 @@ export class HypothesisGenerationRepository {
       attempt.contextProvenance.marketId,
       attempt.contextProvenance.strategyId,
       attempt.rawProviderOutput,
+      attempt.rawOutputContentHash ?? null,
+      attempt.rawOutputPreview ?? null,
       attempt.canonicalHash,
       attempt.hypothesisGraphId,
       attempt.hypothesisEvaluationId,
@@ -311,6 +314,8 @@ interface GenerationAttemptDbRow {
   market_id: string;
   strategy_id: string | null;
   raw_provider_output: string | null;
+  raw_output_content_hash: string | null;
+  raw_output_preview: string | null;
   canonical_hash: string | null;
   hypothesis_graph_id: number | null;
   hypothesis_evaluation_id: number | null;
@@ -332,6 +337,8 @@ function mapAttemptRow(row: GenerationAttemptDbRow): HypothesisGenerationAttempt
     verdict: row.verdict as GenerationVerdict,
     contextProvenance,
     rawProviderOutput: row.raw_provider_output,
+    rawOutputContentHash: row.raw_output_content_hash,
+    rawOutputPreview: row.raw_output_preview,
     canonicalHash: row.canonical_hash,
     hypothesisGraphId: row.hypothesis_graph_id,
     hypothesisEvaluationId: row.hypothesis_evaluation_id,

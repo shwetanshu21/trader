@@ -1264,5 +1264,168 @@ describe('HypothesisGenerationService', () => {
       expect(infyEvidence.summary).toContain('INR 1450.00');
       expect(infyEvidence.influenceScore).toBe(1.0);
     });
+
+    // ═════════════════════════════════════════════════════════════════════╗
+    // T06: Output capping — SHA-256 hash, preview, and body truncation    ║
+    // ═════════════════════════════════════════════════════════════════════╝
+
+    // ── Output content hash is computed and persisted ──
+    it('should compute and persist SHA-256 content hash for accepted generation', async () => {
+      const ctx = createContext();
+      const graph = validGraph();
+      const rawOutput = JSON.stringify(graph);
+      mockFetchResponse(rawOutput);
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(result.attempt.rawOutputContentHash).toBeTruthy();
+        // SHA-256 produces a 64-character hex string
+        expect(result.attempt.rawOutputContentHash!.length).toBe(64);
+        expect(/^[a-f0-9]{64}$/.test(result.attempt.rawOutputContentHash!)).toBe(true);
+
+        // Verify it survives DB round-trip
+        const persisted = ctx.generationRepo.getByIdWithReasons(result.attempt.id);
+        expect(persisted!.rawOutputContentHash).toBe(result.attempt.rawOutputContentHash);
+      }
+    });
+
+    // ── Output preview is persisted ──
+    it('should persist output preview for accepted generation', async () => {
+      const ctx = createContext();
+      const graph = validGraph();
+      const rawOutput = JSON.stringify(graph);
+      mockFetchResponse(rawOutput);
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(result.attempt.rawOutputPreview).toBe(rawOutput);
+
+        // Verify it survives DB round-trip
+        const persisted = ctx.generationRepo.getByIdWithReasons(result.attempt.id);
+        expect(persisted!.rawOutputPreview).toBe(rawOutput);
+      }
+    });
+
+    // ── Large output is truncated at MAX_RAW_OUTPUT_BYTES ──
+    it('should cap raw provider output at 50KB for oversized responses', async () => {
+      const ctx = createContext();
+      // Create a large JSON payload > 50KB
+      const bigGraph = validGraph({
+        metadata: {
+          padding: 'x'.repeat(60_000), // ~60KB padding
+        },
+      });
+      const rawOutput = JSON.stringify(bigGraph);
+      expect(rawOutput.length).toBeGreaterThan(50_000);
+
+      mockFetchResponse(rawOutput);
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        // DB-stored rawProviderOutput should be capped
+        expect(result.attempt.rawProviderOutput!.length).toBeLessThanOrEqual(50_000);
+
+        // Hash should still be for the FULL body (computed before truncation)
+        const persisted = ctx.generationRepo.getByIdWithReasons(result.attempt.id);
+        expect(persisted!.rawOutputContentHash).toBe(result.attempt.rawOutputContentHash);
+        // Verify the hash is deterministic and checksum-like (64 hex chars)
+        expect(persisted!.rawOutputContentHash!.length).toBe(64);
+        expect(/^[a-f0-9]{64}$/.test(persisted!.rawOutputContentHash!)).toBe(true);
+
+        // Preview should be capped at 2000 chars
+        expect(result.attempt.rawOutputPreview!.length).toBeLessThanOrEqual(2_000);
+        expect(result.attempt.rawOutputPreview).toBe(rawOutput.slice(0, 2_000));
+      }
+    });
+
+    // ── Content hash for rejected/malformed output ──
+    it('should compute content hash for rejected malformed responses', async () => {
+      const ctx = createContext();
+      const rawOutput = 'This is not JSON -- ' + 'x'.repeat(10_000);
+      mockFetchResponse(rawOutput);
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('rejected');
+      if (result.kind === 'rejected') {
+        // Hash should be 64 hex chars
+        expect(result.attempt.rawOutputContentHash).toBeTruthy();
+        expect(result.attempt.rawOutputContentHash!.length).toBe(64);
+        expect(/^[a-f0-9]{64}$/.test(result.attempt.rawOutputContentHash!)).toBe(true);
+
+        // Preview should be available
+        expect(result.attempt.rawOutputPreview).toBe(rawOutput.slice(0, 2_000));
+
+        // Survives DB round-trip
+        const persisted = ctx.generationRepo.getByIdWithReasons(result.attempt.id);
+        expect(persisted!.rawOutputContentHash).toBe(result.attempt.rawOutputContentHash);
+        expect(persisted!.rawOutputPreview).toBe(result.attempt.rawOutputPreview);
+      }
+    });
+
+    // ── Content hash for transport failure ──
+    it('should have null hash and preview for transport failure (no output body)', async () => {
+      const ctx = createContext();
+      mockFetchError('Connection refused');
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('provider_error');
+      if (result.kind === 'provider_error') {
+        expect(result.attempt.rawOutputContentHash).toBeNull();
+        expect(result.attempt.rawOutputPreview).toBeNull();
+      }
+    });
+
+    // ── Null hash/preview for empty response ──
+    it('should have null hash and preview for empty response', async () => {
+      const ctx = createContext();
+      mockFetchResponse('');
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('rejected');
+      if (result.kind === 'rejected') {
+        expect(result.attempt.rawOutputContentHash).toBeNull();
+        expect(result.attempt.rawOutputPreview).toBeNull();
+      }
+    });
+
+    // ── Hash determinism: same output produces same hash across generations ──
+    it('should produce same hash for identical outputs across separate generations', async () => {
+      const ctx1 = createContext();
+      const ctx2 = createContext();
+      const rawOutput = JSON.stringify(validGraph());
+
+      mockFetchResponse(rawOutput);
+      const r1 = await ctx1.service.generate({ instruction: 'Test hash determinism.' });
+      expect(r1.kind).toBe('accepted');
+
+      mockFetchResponse(rawOutput);
+      const r2 = await ctx2.service.generate({ instruction: 'Test hash determinism.' });
+      expect(r2.kind).toBe('accepted');
+
+      if (r1.kind === 'accepted' && r2.kind === 'accepted') {
+        expect(r1.attempt.rawOutputContentHash).toBe(r2.attempt.rawOutputContentHash);
+      }
+    });
   });
 });

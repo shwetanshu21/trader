@@ -653,8 +653,15 @@ export interface HypothesisGenerationAttemptRow {
   verdict: GenerationVerdict;
   /** Context provenance at generation time. */
   contextProvenance: GenerationContextProvenance;
-  /** Verbatim raw provider output (JSON string or null when output was absent). */
+  /** Verbatim raw provider output (JSON string or null when output was absent).
+   *  Capped at MAX_RAW_OUTPUT_BYTES (50 KB) before persistence. */
   rawProviderOutput: string | null;
+  /** SHA-256 hex digest of the full (untruncated) provider output, computed before capping.
+   *  Null when no provider output was available (e.g. transport failure). */
+  rawOutputContentHash: string | null;
+  /** Truncated preview of the provider output (first ~2000 chars). Always safe for display.
+   *  Null when no provider output was available. */
+  rawOutputPreview: string | null;
   /** Canonical hash of the accepted hypothesis — null for rejected/skipped. */
   canonicalHash: string | null;
   /** FK → hypothesis_graphs(id) — null for rejected/skipped. */

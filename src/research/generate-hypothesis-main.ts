@@ -13,6 +13,8 @@
 //   --skip-evaluation         Skip the evaluation step even when configured.
 //   --max-candidates <number> Max context candidates from recent strategy run.
 //   --dry-run                 Validate env/config without calling the provider.
+//   --show-raw-output         Include full raw provider output in JSON (omitted by default;
+//                             output preview + content hash are always included).
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -57,6 +59,7 @@ interface GenerateOptions {
   skipEvaluation: boolean;
   maxCandidates: number;
   dryRun: boolean;
+  showRawOutput: boolean;
 }
 
 function parseArgs(argv: string[]): GenerateOptions {
@@ -66,6 +69,7 @@ function parseArgs(argv: string[]): GenerateOptions {
     skipEvaluation: false,
     maxCandidates: 5,
     dryRun: false,
+    showRawOutput: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -93,6 +97,9 @@ function parseArgs(argv: string[]): GenerateOptions {
         break;
       case '--dry-run':
         options.dryRun = true;
+        break;
+      case '--show-raw-output':
+        options.showRawOutput = true;
         break;
       default:
         if (arg.startsWith('--')) {
@@ -254,6 +261,8 @@ async function main(): Promise<void> {
         verdict: result.attempt.verdict,
         createdAt: result.attempt.createdAt,
         reasons: result.attempt.reasons,
+        outputPreview: result.attempt.rawOutputPreview,
+        outputContentHash: result.attempt.rawOutputContentHash,
       },
     };
 
@@ -276,10 +285,16 @@ async function main(): Promise<void> {
         output.lineage = auditService.assembleLineage(result.hypothesis.canonicalHash);
       }
     } else if (result.kind === 'rejected') {
-      output.rawProviderOutput = result.rawProviderOutput;
+      // By default emit preview + hash instead of full raw output
+      // Use --show-raw-output to include the full provider body
+      if (options.showRawOutput) {
+        output.rawProviderOutput = result.rawProviderOutput;
+      }
       output.reasons = result.attempt.reasons;
     } else if (result.kind === 'skipped') {
-      output.rawProviderOutput = result.rawProviderOutput;
+      if (options.showRawOutput) {
+        output.rawProviderOutput = result.rawProviderOutput;
+      }
       output.reason = result.reason;
     } else if (result.kind === 'provider_error') {
       output.error = result.error;
