@@ -4173,6 +4173,85 @@ export interface ResearchLineageSnapshot {
   artifacts: ResearchArtifactRow[] | null;
   /** Publication evidence, or null when no publication exists. */
   publicationEvidence: ResearchLineagePublicationEvidence | null;
+  /** Generation attempt evidence — null when no generation attempt produced this hash. */
+  generationAttempt: HypothesisGenerationAttemptWithReasons | null;
   /** Unix timestamp (ms) when this snapshot was assembled. */
   assembledAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Hypothesis generation result — single typed result for all provider branches
+// ---------------------------------------------------------------------------
+
+/**
+ * Structured result from HypothesisGenerationService.generate().
+ *
+ * A single discriminated union covering every provider outcome:
+ * - `accepted`: Provider returned a valid hypothesis graph that passed structural
+ *   validation and was persisted. Carries the persisted hypothesis row and
+ *   optional evaluation result.
+ * - `rejected`: Provider returned malformed, non-graph, or empty output that
+ *   cannot be persisted as a hypothesis. Carries the generation attempt with
+ *   explicit reason codes.
+ * - `skipped`: Provider returned a valid graph that is an exact duplicate of a
+ *   prior accepted or failed/rejected hypothesis. Carries the skip reason.
+ * - `provider_error`: Transport-level failure (HTTP error, timeout). Carries
+ *   the error detail and a persisted provider_error attempt.
+ */
+export type HypothesisGenerationResult =
+  | {
+      kind: 'accepted';
+      /** The persisted generation attempt with its reasons (empty for accepted). */
+      attempt: HypothesisGenerationAttemptWithReasons;
+      /** The persisted hypothesis graph row created by validateAndPersist(). */
+      hypothesis: HypothesisGraphRow;
+      /** Optional evaluation result when the evaluator was wired and invoked. */
+      evaluation: HypothesisEvaluationResult | null;
+    }
+  | {
+      kind: 'rejected';
+      /** The persisted generation attempt with its rejection reasons. */
+      attempt: HypothesisGenerationAttemptWithReasons;
+      /** Verbatim raw provider output, or null when absent. */
+      rawProviderOutput: string | null;
+    }
+  | {
+      kind: 'skipped';
+      /** The persisted generation attempt with its skip reason. */
+      attempt: HypothesisGenerationAttemptWithReasons;
+      /** Verbatim raw provider output. */
+      rawProviderOutput: string;
+      /** The single skip reason. */
+      reason: GenerationReason;
+    }
+  | {
+      kind: 'provider_error';
+      /** Human-readable error description. */
+      error: string;
+      /** The persisted generation attempt with provider_error reason(s). */
+      attempt: HypothesisGenerationAttemptWithReasons;
+    };
+
+/**
+ * Configuration for a single hypothesis generation call.
+ *
+ * Controls the generation prompt, provider routing, and downstream
+ * evaluation behavior. Sensible defaults enable quick generation;
+ * override for fine-grained control.
+ */
+export interface HypothesisGenerationConfig {
+  /** Instruction text for the provider prompt. */
+  instruction: string;
+  /** Context provenance override — auto-derived when omitted. */
+  contextProvenance?: Partial<GenerationContextProvenance>;
+  /** Market ID override. Default: 'INDIA_NSE_EQ'. */
+  marketId?: string;
+  /** Strategy identity override. Default: 'research-hypothesis-generator'. */
+  strategyId?: string;
+  /** Prompt version tag. Default: '1.0.0'. */
+  promptVersion?: string;
+  /** When true, skip evaluation even when an evaluator is wired. Default: false. */
+  skipEvaluation?: boolean;
+  /** Maximum number of recent strategy run candidates to include in context. Default: 5. */
+  maxContextCandidates?: number;
 }

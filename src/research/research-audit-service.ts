@@ -15,10 +15,12 @@ import {
   type ResearchLineageSnapshot,
   type ResearchPublicationRow,
   type StrategyLifecycleStateRow,
+  type HypothesisGenerationAttemptWithReasons,
 } from '../types/runtime.js';
 import { HypothesisRepository } from '../persistence/hypothesis-repo.js';
 import { HypothesisMemoryRepository } from '../persistence/hypothesis-memory-repo.js';
 import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-repo.js';
+import { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
 
 // ---------------------------------------------------------------------------
 // ResearchAuditService
@@ -28,15 +30,18 @@ export class ResearchAuditService {
   private readonly _hypothesisRepo: HypothesisRepository;
   private readonly _memoryRepo: HypothesisMemoryRepository;
   private readonly _lifecycleRepo: StrategyLifecycleRepository;
+  private readonly _generationRepo: HypothesisGenerationRepository | null;
 
   constructor(deps: {
     hypothesisRepo: HypothesisRepository;
     memoryRepo: HypothesisMemoryRepository;
     lifecycleRepo: StrategyLifecycleRepository;
+    generationRepo?: HypothesisGenerationRepository | null;
   }) {
     this._hypothesisRepo = deps.hypothesisRepo;
     this._memoryRepo = deps.memoryRepo;
     this._lifecycleRepo = deps.lifecycleRepo;
+    this._generationRepo = deps.generationRepo ?? null;
   }
 
   /**
@@ -47,6 +52,10 @@ export class ResearchAuditService {
    * duplicate-skip branch (memory entry present, no hypothesis) and the
    * publish-success branch (full evaluation → artifacts → publication →
    * lifecycle → governance chain).
+   *
+   * Generation-attempt evidence is loaded from the generation repository
+   * when wired, providing the complete reconstruction chain:
+   * generation → hypothesis → evaluation → publication.
    *
    * @param canonicalHash - Stable SHA-256 digest of the canonical hypothesis form.
    * @returns A fully typed snapshot with null-safe lineage segments.
@@ -70,7 +79,26 @@ export class ResearchAuditService {
       };
     }
 
-    // ── 3. Evaluation with linked run/winner snapshots ──
+    // ── 3. Generation attempt evidence ──
+    let generationAttempt: HypothesisGenerationAttemptWithReasons | null = null;
+
+    if (this._generationRepo) {
+      // Try to find the generation attempt by canonical hash (any verdict)
+      const genRow = this._generationRepo.getByCanonicalHashAnyVerdict(canonicalHash);
+
+      if (genRow) {
+        generationAttempt = this._generationRepo.getByIdWithReasons(genRow.id);
+      } else if (hypothesis) {
+        // Fallback: look up by hypothesis graph id (for accepted attempts
+        // where the canonical hash might have been populated)
+        const byGraph = this._generationRepo.getByHypothesisGraphId(hypothesis.id);
+        if (byGraph) {
+          generationAttempt = this._generationRepo.getByIdWithReasons(byGraph.id);
+        }
+      }
+    }
+
+    // ── 4. Evaluation with linked run/winner snapshots ──
     let evaluation: ResearchLineageEvaluationSnapshot | null = null;
     let artifacts: ResearchArtifactRow[] | null = null;
 
@@ -89,12 +117,12 @@ export class ResearchAuditService {
           winner: withLinked?.winner ?? null,
         };
 
-        // ── 4. Research artifacts for the evaluation ──
+        // ── 5. Research artifacts for the evaluation ──
         artifacts = this._hypothesisRepo.getResearchArtifactsByEvaluationId(evalRow.id);
       }
     }
 
-    // ── 5. Publication evidence with lifecycle/governance linkage ──
+    // ── 6. Publication evidence with lifecycle/governance linkage ──
     let publicationEvidence: ResearchLineagePublicationEvidence | null = null;
 
     // The publication is keyed by hypothesis evaluation id — we need an evaluation
@@ -116,6 +144,7 @@ export class ResearchAuditService {
       evaluation,
       artifacts,
       publicationEvidence,
+      generationAttempt,
       assembledAt,
     };
   }

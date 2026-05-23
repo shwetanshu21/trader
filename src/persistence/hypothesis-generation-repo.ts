@@ -136,6 +136,43 @@ export class HypothesisGenerationRepository {
   }
 
   /**
+   * Retrieve the most recent accepted generation attempt for a canonical hash.
+   * Returns null when no accepted attempt exists for this hash.
+   *
+   * Used by the generation service to detect duplicate-skip scenarios where
+   * an identical hypothesis graph was already generated and accepted in a
+   * prior attempt.
+   */
+  getByCanonicalHash(canonicalHash: string): HypothesisGenerationAttemptRow | null {
+    const row = this._db.prepare(`
+      SELECT * FROM hypothesis_generation_attempts
+      WHERE canonical_hash = ? AND verdict = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `).get(canonicalHash, GenerationVerdict.Accepted) as GenerationAttemptDbRow | undefined;
+
+    return row ? mapAttemptRow(row) : null;
+  }
+
+  /**
+   * Retrieve the most recent generation attempt for a canonical hash,
+   * regardless of verdict.
+   *
+   * Used by the audit service to find any generation attempt (accepted,
+   * rejected, or skipped) that produced the given canonical hash.
+   */
+  getByCanonicalHashAnyVerdict(canonicalHash: string): HypothesisGenerationAttemptRow | null {
+    const row = this._db.prepare(`
+      SELECT * FROM hypothesis_generation_attempts
+      WHERE canonical_hash = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `).get(canonicalHash) as GenerationAttemptDbRow | undefined;
+
+    return row ? mapAttemptRow(row) : null;
+  }
+
+  /**
    * Retrieve the generation attempt linked to a hypothesis graph row.
    * Returns null when the graph was not created via a generation attempt
    * (e.g. manually seeded).

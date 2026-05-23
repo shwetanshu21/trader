@@ -10,12 +10,15 @@ import { DatabaseManager } from '../../persistence/sqlite.js';
 import { HypothesisRepository } from '../../persistence/hypothesis-repo.js';
 import { HypothesisMemoryRepository } from '../../persistence/hypothesis-memory-repo.js';
 import { StrategyLifecycleRepository } from '../../persistence/strategy-lifecycle-repo.js';
+import { HypothesisGenerationRepository } from '../../persistence/hypothesis-generation-repo.js';
 import { ResearchAuditService } from '../research-audit-service.js';
 import {
   HypothesisEvaluationStatus,
   HypothesisMemoryStatus,
   HypothesisStatus,
   HypothesisValidationReasonCode,
+  GenerationVerdict,
+  GenerationReasonCode,
   ResearchArtifactType,
   ResearchPublicationStatus,
   ResearchPublishBackVerdict,
@@ -24,6 +27,7 @@ import {
   type HypothesisGraph,
   type HypothesisGraphRow,
   type HypothesisEvaluationRow,
+  type HypothesisGenerationAttemptWithReasons,
   type ResearchLineageSnapshot,
 } from '../../types/runtime.js';
 
@@ -46,25 +50,28 @@ afterEach(() => {
 });
 
 /**
- * Create an in-memory DB context with all three repositories and the audit service.
+ * Create an in-memory DB context with all repositories and the audit service.
  */
 function createContext(): {
   dbManager: DatabaseManager;
   hypothesisRepo: HypothesisRepository;
   memoryRepo: HypothesisMemoryRepository;
   lifecycleRepo: StrategyLifecycleRepository;
+  generationRepo: HypothesisGenerationRepository;
   auditService: ResearchAuditService;
 } {
   const dbManager = new DatabaseManager(':memory:');
   const hypothesisRepo = new HypothesisRepository(dbManager.db);
   const memoryRepo = new HypothesisMemoryRepository(dbManager.db);
   const lifecycleRepo = new StrategyLifecycleRepository(dbManager.db);
+  const generationRepo = new HypothesisGenerationRepository(dbManager.db);
   const auditService = new ResearchAuditService({
     hypothesisRepo,
     memoryRepo,
     lifecycleRepo,
+    generationRepo,
   });
-  return { dbManager, hypothesisRepo, memoryRepo, lifecycleRepo, auditService };
+  return { dbManager, hypothesisRepo, memoryRepo, lifecycleRepo, generationRepo, auditService };
 }
 
 function validGraph(): HypothesisGraph {
@@ -684,6 +691,242 @@ describe('ResearchAuditService', () => {
 
       expect(snapshot.publicationEvidence!.governanceDecisions[2].id).toBe(d1.id);
       expect(snapshot.publicationEvidence!.governanceDecisions[2].rationale).toBe('First promotion.');
+    });
+
+    // ── Generation evidence: null when no generation repo ──
+    it('should return null generationAttempt when generationRepo is not wired', () => {
+      // Create context WITHOUT generationRepo
+      const dbManager = new DatabaseManager(':memory:');
+      const hypothesisRepo = new HypothesisRepository(dbManager.db);
+      const memoryRepo = new HypothesisMemoryRepository(dbManager.db);
+      const lifecycleRepo = new StrategyLifecycleRepository(dbManager.db);
+      const auditService = new ResearchAuditService({
+        hypothesisRepo,
+        memoryRepo,
+        lifecycleRepo,
+        // no generationRepo
+      });
+
+      const hash = 'no-gen-repo';
+      insertValidHypothesis(hypothesisRepo, hash);
+
+      const snapshot = auditService.assembleLineage(hash);
+
+      expect(snapshot.generationAttempt).toBeNull();
+      expect(snapshot.hypothesis).not.toBeNull();
+    });
+
+    // ── Generation evidence: null for unknown hash ──
+    it('should return null generationAttempt when no generation exists for hash', () => {
+      const ctx = createContext();
+      const snapshot = ctx.auditService.assembleLineage('unknown-hash-no-gen');
+
+      expect(snapshot.generationAttempt).toBeNull();
+      expect(snapshot.hypothesis).toBeNull();
+    });
+
+    // ── Generation evidence: present for hash with accepted generation ──
+    it('should return accepted generation attempt linked to hypothesis via canonical hash', () => {
+      const ctx = createContext();
+      const hash = 'gen-accepted-hash';
+
+      // Insert a hypothesis
+      const hypothesis = insertValidHypothesis(ctx.hypothesisRepo, hash);
+
+      // Insert an accepted generation attempt with the same canonical hash
+      const now = Date.now();
+      ctx.generationRepo.insertAttemptWithReasons(
+        {
+          verdict: GenerationVerdict.Accepted,
+          contextProvenance: {
+            providerUrl: 'http://test.local',
+            providerModel: null,
+            promptVersion: '1.0.0',
+            triggeredAt: now,
+            marketId: 'INDIA_NSE_EQ',
+            strategyId: 'test-strategy',
+          },
+          rawProviderOutput: JSON.stringify({ schemaVersion: '1', signals: [], filters: [], entryRules: [], exitRules: [], riskRules: [] }),
+          canonicalHash: hash,
+          hypothesisGraphId: hypothesis.id,
+          hypothesisEvaluationId: null,
+          createdAt: now,
+        },
+        [],
+      );
+
+      const snapshot = ctx.auditService.assembleLineage(hash);
+
+      expect(snapshot.generationAttempt).not.toBeNull();
+      expect(snapshot.generationAttempt!.verdict).toBe(GenerationVerdict.Accepted);
+      expect(snapshot.generationAttempt!.canonicalHash).toBe(hash);
+      expect(snapshot.generationAttempt!.hypothesisGraphId).toBe(hypothesis.id);
+      expect(snapshot.generationAttempt!.reasons).toEqual([]);
+    });
+
+    // ── Generation evidence: rejected attempt with reasons ──
+    it('should surface generation attempt with rejection reasons', () => {
+      const ctx = createContext();
+      const hash = 'gen-rejected-hash';
+
+      // Insert a hypothesis (generation was rejected but a hypothesis may still exist)
+      insertValidHypothesis(ctx.hypothesisRepo, hash);
+
+      // Insert a generation attempt with rejection reasons
+      const now = Date.now();
+      ctx.generationRepo.insertAttemptWithReasons(
+        {
+          verdict: GenerationVerdict.Rejected,
+          contextProvenance: {
+            providerUrl: 'http://test.local',
+            providerModel: null,
+            promptVersion: '1.0.0',
+            triggeredAt: now,
+            marketId: 'INDIA_NSE_EQ',
+            strategyId: 'test-strategy',
+          },
+          rawProviderOutput: 'invalid output',
+          canonicalHash: hash,
+          hypothesisGraphId: null,
+          hypothesisEvaluationId: null,
+          createdAt: now,
+        },
+        [
+          { reasonCode: GenerationReasonCode.MalformedResponse, reasonMessage: 'Provider returned non-JSON output.' },
+        ],
+      );
+
+      const snapshot = ctx.auditService.assembleLineage(hash);
+
+      expect(snapshot.generationAttempt).not.toBeNull();
+      expect(snapshot.generationAttempt!.verdict).toBe(GenerationVerdict.Rejected);
+      expect(snapshot.generationAttempt!.canonicalHash).toBe(hash);
+      expect(snapshot.generationAttempt!.hypothesisGraphId).toBeNull();
+      expect(snapshot.generationAttempt!.reasons.length).toBe(1);
+      expect(snapshot.generationAttempt!.reasons[0].reasonCode).toBe(GenerationReasonCode.MalformedResponse);
+      expect(snapshot.generationAttempt!.reasons[0].reasonMessage).toContain('non-JSON');
+    });
+
+    // ── Generation evidence: skipped attempt ──
+    it('should surface generation attempt with skip verdict', () => {
+      const ctx = createContext();
+      const hash = 'gen-skipped-hash';
+
+      const now = Date.now();
+      ctx.generationRepo.insertAttemptWithReasons(
+        {
+          verdict: GenerationVerdict.Skipped,
+          contextProvenance: {
+            providerUrl: 'http://test.local',
+            providerModel: null,
+            promptVersion: '1.0.0',
+            triggeredAt: now,
+            marketId: 'INDIA_NSE_EQ',
+            strategyId: 'test-strategy',
+          },
+          rawProviderOutput: '{"schemaVersion":"1","signals":[],"filters":[],"entryRules":[],"exitRules":[],"riskRules":[]}',
+          canonicalHash: hash,
+          hypothesisGraphId: null,
+          hypothesisEvaluationId: null,
+          createdAt: now,
+        },
+        [
+          { reasonCode: GenerationReasonCode.DuplicateSkipped, reasonMessage: 'Exact duplicate of prior accepted hypothesis.' },
+        ],
+      );
+
+      const snapshot = ctx.auditService.assembleLineage(hash);
+
+      expect(snapshot.generationAttempt).not.toBeNull();
+      expect(snapshot.generationAttempt!.verdict).toBe(GenerationVerdict.Skipped);
+      expect(snapshot.generationAttempt!.reasons.length).toBe(1);
+      expect(snapshot.generationAttempt!.reasons[0].reasonCode).toBe(GenerationReasonCode.DuplicateSkipped);
+    });
+
+    // ── Generation evidence: linked via hypothesis graph id when canonical hash differs ──
+    it('should find generation attempt by hypothesis graph id when canonical hash lookup yields nothing', () => {
+      const ctx = createContext();
+      const hash = 'gen-by-graph-id';
+      const differentHash = 'different-hash';
+
+      // Insert a hypothesis with one hash
+      const hypothesis = insertValidHypothesis(ctx.hypothesisRepo, hash);
+
+      // Insert generation attempt linked to the hypothesis BUT with a different canonical hash
+      // (simulating a mismatch or the generation attempt having been updated)
+      const now = Date.now();
+      ctx.generationRepo.insertAttemptWithReasons(
+        {
+          verdict: GenerationVerdict.Accepted,
+          contextProvenance: {
+            providerUrl: 'http://test.local',
+            providerModel: null,
+            promptVersion: '1.0.0',
+            triggeredAt: now,
+            marketId: 'INDIA_NSE_EQ',
+            strategyId: 'test-strategy',
+          },
+          rawProviderOutput: null,
+          canonicalHash: differentHash, // different from the hypothesis hash
+          hypothesisGraphId: hypothesis.id,
+          hypothesisEvaluationId: null,
+          createdAt: now,
+        },
+        [],
+      );
+
+      // Query by the hypothesis's canonical hash
+      const snapshot = ctx.auditService.assembleLineage(hash);
+
+      // Should find the generation attempt via the hypothesis graph id fallback
+      expect(snapshot.generationAttempt).not.toBeNull();
+      expect(snapshot.generationAttempt!.verdict).toBe(GenerationVerdict.Accepted);
+      expect(snapshot.generationAttempt!.hypothesisGraphId).toBe(hypothesis.id);
+    });
+
+    // ── Assembly includes generationAttempt alongside other segments ──
+    it('should include generationAttempt in full published lineage snapshot', () => {
+      const ctx = createContext();
+      const hash = 'gen-full-published';
+
+      const { hypothesis, evaluation } = setupCompletedEvaluation(ctx, hash);
+
+      // Insert generation attempt linked to the hypothesis
+      const now = Date.now();
+      ctx.generationRepo.insertAttemptWithReasons(
+        {
+          verdict: GenerationVerdict.Accepted,
+          contextProvenance: {
+            providerUrl: 'http://test.local',
+            providerModel: 'gpt-4',
+            promptVersion: '1.0.0',
+            triggeredAt: now,
+            marketId: 'INDIA_NSE_EQ',
+            strategyId: 'test-strategy',
+          },
+          rawProviderOutput: JSON.stringify({ schemaVersion: '1', signals: [], filters: [], entryRules: [], exitRules: [], riskRules: [] }),
+          canonicalHash: hash,
+          hypothesisGraphId: hypothesis.id,
+          hypothesisEvaluationId: evaluation.id,
+          createdAt: now,
+        },
+        [],
+      );
+
+      publishEvaluation(ctx, evaluation.id);
+
+      const snapshot = ctx.auditService.assembleLineage(hash);
+
+      // Generation evidence
+      expect(snapshot.generationAttempt).not.toBeNull();
+      expect(snapshot.generationAttempt!.verdict).toBe(GenerationVerdict.Accepted);
+      expect(snapshot.generationAttempt!.hypothesisGraphId).toBe(hypothesis.id);
+      expect(snapshot.generationAttempt!.hypothesisEvaluationId).toBe(evaluation.id);
+
+      // Other segments should still be present
+      expect(snapshot.hypothesis).not.toBeNull();
+      expect(snapshot.evaluation).not.toBeNull();
+      expect(snapshot.publicationEvidence).not.toBeNull();
     });
 
     // ── assembledAt timestamp ──
