@@ -22,6 +22,7 @@ import { HypothesisRepository } from '../../persistence/hypothesis-repo.js';
 import { HypothesisMemoryRepository } from '../../persistence/hypothesis-memory-repo.js';
 import { HypothesisGenerationRepository } from '../../persistence/hypothesis-generation-repo.js';
 import { StrategyRunRepository } from '../../persistence/strategy-run-repo.js';
+import { IndiaResearchBuilder } from '../../strategy/india-research.js';
 import { HypothesisGenerationService } from '../hypothesis-generation-service.js';
 import { HypothesisValidator } from '../hypothesis-validator.js';
 import {
@@ -863,6 +864,405 @@ describe('HypothesisGenerationService', () => {
         expect(spyEvaluator.evaluate).not.toHaveBeenCalled();
         expect(result.evaluation).toBeNull();
       }
+    });
+
+    // ═════════════════════════════════════════════════════════════════════╗
+    // India research evidence context-building tests                      ║
+    // ═════════════════════════════════════════════════════════════════════╝
+
+    // ── India research evidence included in fetch body ──
+    it('should include India research evidence in provider context when strategyRunRepo and IndiaResearchBuilder are wired with candidates', async () => {
+      const dbManager = new DatabaseManager(':memory:');
+      const hypothesisRepo = new HypothesisRepository(dbManager.db);
+      const memoryRepo = new HypothesisMemoryRepository(dbManager.db);
+      const generationRepo = new HypothesisGenerationRepository(dbManager.db);
+      const strategyRunRepo = new StrategyRunRepository(dbManager.db);
+      const indiaResearchBuilder = new IndiaResearchBuilder();
+      const validator = new HypothesisValidator({ memoryRepo, hypothesisRepo });
+
+      const now = Date.now();
+      strategyRunRepo.insertRunWithCandidates(
+        {
+          frameworkConfig: JSON.stringify({ name: 'momentum-screener' }),
+          pluginsJson: '[]',
+          pluginErrorsJson: null,
+          universeSnapshotId: null,
+          totalEvaluated: 1,
+          hasPluginErrors: false,
+          durationMs: 100,
+          createdAt: now,
+        },
+        [
+          {
+            strategyRunId: 0,
+            candidateKey: 'NSE:RELIANCE',
+            rank: 1,
+            exchange: 'NSE',
+            tradingsymbol: 'RELIANCE',
+            instrumentToken: 12345,
+            instrumentType: 'EQ',
+            lotSize: 1,
+            tickSize: 0.05,
+            expiry: null,
+            strike: null,
+            freezeQuantity: null,
+            side: 'buy',
+            lastPrice: 2500.50,
+            bid: 2500.00,
+            ask: 2500.75,
+            volume: 10_000_000,
+            scoresJson: JSON.stringify({}),
+            deterministicScore: 0.85,
+            llmScore: null,
+            llmStatus: null,
+            llmRationale: null,
+            mergedScore: 0.85,
+            mergePolicy: null,
+            proposalParamsJson: null,
+            pluginErrorsJson: null,
+            hasPluginErrors: false,
+            emitted: true,
+            proposalAttemptId: null,
+            indiaResearchEvidence: null,
+          },
+        ],
+      );
+
+      const service = new HypothesisGenerationService({
+        db: dbManager.db,
+        config: TEST_CONFIG,
+        hypothesisRepo,
+        generationRepo,
+        memoryRepo,
+        validator,
+        strategyRunRepo,
+        indiaResearchBuilder,
+      });
+
+      const graph = validGraph();
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await service.generate({
+        instruction: 'Generate a momentum hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+
+      // Verify the fetch body contains India research evidence
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const fetchBody = JSON.parse(fetchCall[1].body as string);
+
+      expect(fetchBody.context).toBeDefined();
+      expect(fetchBody.context.indiaResearchEvidence).toBeDefined();
+      expect(Array.isArray(fetchBody.context.indiaResearchEvidence)).toBe(true);
+      expect(fetchBody.context.indiaResearchEvidence.length).toBe(1);
+
+      const evidence = fetchBody.context.indiaResearchEvidence[0];
+      expect(evidence.candidateKey).toBe('NSE:RELIANCE');
+      expect(evidence.summary).toBeTruthy();
+      expect(evidence.summary).toContain('India equity');
+      expect(evidence.summary).toContain('listed on NSE');
+      expect(evidence.summary).toContain('INR 2500.50');
+      expect(evidence.tags).toBeInstanceOf(Array);
+      expect(evidence.tags).toContain('type:eq');
+      expect(evidence.tags).toContain('exch:nse');
+      expect(evidence.tags).toContain('liquidity:high');
+      expect(evidence.influenceScore).toBe(1.0);
+    });
+
+    // ── No India research evidence when builder not wired ──
+    it('should NOT include India research evidence when IndiaResearchBuilder is not wired', async () => {
+      const dbManager = new DatabaseManager(':memory:');
+      const hypothesisRepo = new HypothesisRepository(dbManager.db);
+      const memoryRepo = new HypothesisMemoryRepository(dbManager.db);
+      const generationRepo = new HypothesisGenerationRepository(dbManager.db);
+      const strategyRunRepo = new StrategyRunRepository(dbManager.db);
+      const validator = new HypothesisValidator({ memoryRepo, hypothesisRepo });
+
+      const now = Date.now();
+      strategyRunRepo.insertRunWithCandidates(
+        {
+          frameworkConfig: JSON.stringify({ name: 'momentum-screener' }),
+          pluginsJson: '[]',
+          pluginErrorsJson: null,
+          universeSnapshotId: null,
+          totalEvaluated: 1,
+          hasPluginErrors: false,
+          durationMs: 100,
+          createdAt: now,
+        },
+        [
+          {
+            strategyRunId: 0,
+            candidateKey: 'NSE:TCS',
+            rank: 1,
+            exchange: 'NSE',
+            tradingsymbol: 'TCS',
+            instrumentToken: 67890,
+            instrumentType: 'EQ',
+            lotSize: 1,
+            tickSize: 0.05,
+            expiry: null,
+            strike: null,
+            freezeQuantity: null,
+            side: 'buy',
+            lastPrice: 3500.00,
+            bid: 3499.50,
+            ask: 3500.50,
+            volume: 5_000_000,
+            scoresJson: JSON.stringify({}),
+            deterministicScore: 0.75,
+            llmScore: null,
+            llmStatus: null,
+            llmRationale: null,
+            mergedScore: 0.75,
+            mergePolicy: null,
+            proposalParamsJson: null,
+            pluginErrorsJson: null,
+            hasPluginErrors: false,
+            emitted: true,
+            proposalAttemptId: null,
+            indiaResearchEvidence: null,
+          },
+        ],
+      );
+
+      const service = new HypothesisGenerationService({
+        db: dbManager.db,
+        config: TEST_CONFIG,
+        hypothesisRepo,
+        generationRepo,
+        memoryRepo,
+        validator,
+        strategyRunRepo,
+        // No indiaResearchBuilder — should not produce India research evidence
+      });
+
+      const graph = validGraph();
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+
+      // Verify the fetch body does NOT contain India research evidence
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const fetchBody = JSON.parse(fetchCall[1].body as string);
+
+      expect(fetchBody.context).toBeDefined();
+      expect(fetchBody.context.recentCandidates).toBeDefined(); // strategy run repo is wired
+      expect(fetchBody.context.indiaResearchEvidence).toBeUndefined();
+    });
+
+    // ── No India research evidence when strategy run repo has no runs ──
+    it('should NOT include India research evidence when strategy run repo has no runs', async () => {
+      const dbManager = new DatabaseManager(':memory:');
+      const hypothesisRepo = new HypothesisRepository(dbManager.db);
+      const memoryRepo = new HypothesisMemoryRepository(dbManager.db);
+      const generationRepo = new HypothesisGenerationRepository(dbManager.db);
+      const strategyRunRepo = new StrategyRunRepository(dbManager.db);
+      const indiaResearchBuilder = new IndiaResearchBuilder();
+      const validator = new HypothesisValidator({ memoryRepo, hypothesisRepo });
+
+      const service = new HypothesisGenerationService({
+        db: dbManager.db,
+        config: TEST_CONFIG,
+        hypothesisRepo,
+        generationRepo,
+        memoryRepo,
+        validator,
+        strategyRunRepo,
+        indiaResearchBuilder,
+      });
+
+      const graph = validGraph();
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+
+      // Verify the fetch body has no context at all (no runs, no candidates)
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const fetchBody = JSON.parse(fetchCall[1].body as string);
+
+      // When there are no strategy runs, context is empty and omitted from prompt
+      expect(fetchBody.context).toBeUndefined();
+    });
+
+    // ── accepted_without_evaluation: persisted hypothesisEvaluationId is null ──
+    it('should persist null hypothesisEvaluationId for accepted_without_evaluation', async () => {
+      const graph = validGraph();
+
+      const throwingEvaluator = {
+        evaluate: vi.fn().mockRejectedValue(new Error('Simulated evaluation failure')),
+      } as any;
+
+      const ctx = createContext({ evaluator: throwingEvaluator });
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted_without_evaluation');
+      if (result.kind === 'accepted_without_evaluation') {
+        // The returned attempt should not have an evaluation id
+        expect(result.attempt.hypothesisEvaluationId).toBeNull();
+        expect(result.evaluationError).toContain('Evaluation threw');
+        expect(result.evaluationError).toContain('Simulated evaluation failure');
+
+        // The persisted attempt should also not have an evaluation id
+        const persisted = ctx.generationRepo.getByIdWithReasons(result.attempt.id);
+        expect(persisted).not.toBeNull();
+        expect(persisted!.hypothesisEvaluationId).toBeNull();
+
+        // But it should have the hypothesis linked
+        expect(persisted!.hypothesisGraphId).toBe(result.hypothesis.id);
+        expect(persisted!.canonicalHash).toBe(result.attempt.canonicalHash);
+
+        // Generation attempt verdict should be Accepted (the graph was valid,
+        // only the evaluation linkage failed)
+        expect(persisted!.verdict).toBe(GenerationVerdict.Accepted);
+      }
+    });
+
+    // ── India research evidence with multiple candidates ──
+    it('should include India research evidence for each candidate when multiple candidates exist', async () => {
+      const dbManager = new DatabaseManager(':memory:');
+      const hypothesisRepo = new HypothesisRepository(dbManager.db);
+      const memoryRepo = new HypothesisMemoryRepository(dbManager.db);
+      const generationRepo = new HypothesisGenerationRepository(dbManager.db);
+      const strategyRunRepo = new StrategyRunRepository(dbManager.db);
+      const indiaResearchBuilder = new IndiaResearchBuilder();
+      const validator = new HypothesisValidator({ memoryRepo, hypothesisRepo });
+
+      const now = Date.now();
+      strategyRunRepo.insertRunWithCandidates(
+        {
+          frameworkConfig: JSON.stringify({ name: 'diversified-screener' }),
+          pluginsJson: '[]',
+          pluginErrorsJson: null,
+          universeSnapshotId: null,
+          totalEvaluated: 2,
+          hasPluginErrors: false,
+          durationMs: 200,
+          createdAt: now,
+        },
+        [
+          {
+            strategyRunId: 0,
+            candidateKey: 'NSE:HDFC',
+            rank: 1,
+            exchange: 'NSE',
+            tradingsymbol: 'HDFC',
+            instrumentToken: 11111,
+            instrumentType: 'EQ',
+            lotSize: 1,
+            tickSize: 0.05,
+            expiry: null,
+            strike: null,
+            freezeQuantity: null,
+            side: 'buy',
+            lastPrice: 1600.00,
+            bid: 1599.50,
+            ask: 1600.50,
+            volume: 8_000_000,
+            scoresJson: JSON.stringify({}),
+            deterministicScore: 0.90,
+            llmScore: null,
+            llmStatus: null,
+            llmRationale: null,
+            mergedScore: 0.90,
+            mergePolicy: null,
+            proposalParamsJson: null,
+            pluginErrorsJson: null,
+            hasPluginErrors: false,
+            emitted: true,
+            proposalAttemptId: null,
+            indiaResearchEvidence: null,
+          },
+          {
+            strategyRunId: 0,
+            candidateKey: 'NSE:INFY',
+            rank: 2,
+            exchange: 'NSE',
+            tradingsymbol: 'INFY',
+            instrumentToken: 22222,
+            instrumentType: 'EQ',
+            lotSize: 1,
+            tickSize: 0.05,
+            expiry: null,
+            strike: null,
+            freezeQuantity: null,
+            side: 'sell',
+            lastPrice: 1450.00,
+            bid: 1449.80,
+            ask: 1450.20,
+            volume: 6_000_000,
+            scoresJson: JSON.stringify({}),
+            deterministicScore: 0.80,
+            llmScore: null,
+            llmStatus: null,
+            llmRationale: null,
+            mergedScore: 0.80,
+            mergePolicy: null,
+            proposalParamsJson: null,
+            pluginErrorsJson: null,
+            hasPluginErrors: false,
+            emitted: true,
+            proposalAttemptId: null,
+            indiaResearchEvidence: null,
+          },
+        ],
+      );
+
+      const service = new HypothesisGenerationService({
+        db: dbManager.db,
+        config: TEST_CONFIG,
+        hypothesisRepo,
+        generationRepo,
+        memoryRepo,
+        validator,
+        strategyRunRepo,
+        indiaResearchBuilder,
+      });
+
+      const graph = validGraph();
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await service.generate({
+        instruction: 'Generate a diversified hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const fetchBody = JSON.parse(fetchCall[1].body as string);
+
+      expect(fetchBody.context.indiaResearchEvidence).toBeDefined();
+      expect(fetchBody.context.indiaResearchEvidence.length).toBe(2);
+
+      // First candidate: HDFC
+      const hdfcEvidence = fetchBody.context.indiaResearchEvidence[0];
+      expect(hdfcEvidence.candidateKey).toBe('NSE:HDFC');
+      expect(hdfcEvidence.summary).toContain('INR 1600.00');
+      expect(hdfcEvidence.tags).toContain('liquidity:high');
+      expect(hdfcEvidence.tags).toContain('price:high-value');
+
+      // Second candidate: INFY
+      const infyEvidence = fetchBody.context.indiaResearchEvidence[1];
+      expect(infyEvidence.candidateKey).toBe('NSE:INFY');
+      expect(infyEvidence.summary).toContain('INR 1450.00');
+      expect(infyEvidence.influenceScore).toBe(1.0);
     });
   });
 });
