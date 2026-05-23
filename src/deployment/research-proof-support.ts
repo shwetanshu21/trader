@@ -817,3 +817,157 @@ export async function seedAcceptedGeneration(
   return { generationAttempt, hypothesis, evaluationResult, lineage };
 }
 
+// ===========================================================================
+// T04 — Real service ingress helpers
+// ===========================================================================
+
+import { HypothesisGenerationService } from '../research/hypothesis-generation-service.js';
+import type { ProposalEngineConfig } from '../types/runtime.js';
+
+/** Test provider config pointing at a mock endpoint. */
+export const PROOF_PROVIDER_CONFIG: ProposalEngineConfig = {
+  providerMode: 'custom',
+  providerUrl: 'http://proof-provider.local/hypothesis',
+  timeoutMs: 5000,
+  maxProposalsPerTick: 5,
+};
+
+/**
+ * Create a HypothesisGenerationService wired to the proof context's repos.
+ * Optionally accepts an evaluator for the accepted + evaluation path.
+ */
+export function createProofGenerationService(
+  ctx: ResearchProofContext,
+  options?: {
+    evaluator?: HypothesisResearchEvaluator;
+  },
+): HypothesisGenerationService {
+  const validator = new HypothesisValidator({
+    memoryRepo: ctx.memoryRepo,
+    hypothesisRepo: ctx.hypothesisRepo,
+  });
+
+  return new HypothesisGenerationService({
+    db: ctx.db,
+    config: PROOF_PROVIDER_CONFIG,
+    hypothesisRepo: ctx.hypothesisRepo,
+    generationRepo: ctx.generationRepo,
+    memoryRepo: ctx.memoryRepo,
+    validator,
+    evaluator: options?.evaluator,
+    strategyRunRepo: undefined,
+  });
+}
+
+/**
+ * Install a mock global fetch that returns a controlled response body.
+ * Returns a restore function to revert fetch to its original value.
+ *
+ * This is the "controlled local stub/fake transport" seam: the real
+ * HypothesisGenerationService code paths for _callProvider / _sendCustomRequest
+ * are exercised verbatim; only the actual HTTP round-trip is replaced.
+ */
+export function setMockFetchResponse(body: string, status = 200): () => void {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 200 ? 'OK' : 'Error',
+      text: async () => body,
+    } as unknown as Response;
+  };
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+/**
+ * Create a mock walk-forward evaluator that persists a run + trial into the
+ * proof DB and returns a deterministic result for the given hypothesis graph.
+ *
+ * The mock evaluator's `evaluate()` method:
+ *   1. Creates a walk-forward run and trial in the proof DB
+ *   2. Builds a structured mock result referencing those IDs
+ *   3. Returns the result (the real HypothesisResearchEvaluator processes it)
+ *
+ * This mirrors the pattern used by seedAcceptedGeneration, extracted as a
+ * reusable factory so the proof harness can wire it into the service.
+ */
+export function createMockWalkForwardEvaluator(
+  ctx: ResearchProofContext,
+): { walkForwardEvaluator: any; cleanup: () => void } {
+  // Pre-create a reusable mock — the evaluator calls evaluate() which
+  // dynamically creates run + trial for each invocation.
+  const walkForwardEvaluator = {
+    evaluate: async (_evalConfig: any) => {
+      const now = Date.now();
+      const runRow = ctx.walkForwardRepo.insertRun({
+        label: 's05-proof-mock-run',
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        marketId: 'INDIA_NSE_EQ',
+        replaySessionId: null,
+        windowCount: 2,
+        totalTrials: 1,
+        status: WalkForwardStatus.Completed,
+        createdAt: now,
+        startedAt: now,
+        completedAt: now + 500,
+      });
+
+      // We don't know the hypothesisGraphId until the evaluator calls us,
+      // but makeMockWalkForwardResult needs it. We'll use a placeholder
+      // — the evaluator result is used for winner selection, not for
+      // hypothesis-specific matching.
+      const placeholderGraphId = _evalConfig?.trialConfigs?.[0]?.params?.hypothesisId ?? 0;
+      const mergedScore = 0.82;
+
+      const trialRow = ctx.walkForwardRepo.insertTrial({
+        runId: runRow.id,
+        trialIndex: 0,
+        label: `hypothesis-${placeholderGraphId}`,
+        paramsJson: JSON.stringify({
+          hypothesisId: placeholderGraphId,
+          canonicalHash: 'proof-hash',
+          schemaVersion: '1',
+          signals: [],
+          filters: [],
+          entryRules: [],
+          exitRules: [],
+          riskRules: [],
+          maxCandidates: 5,
+        }),
+        mergedScore,
+        deterministicScore: 0.75,
+        llmScore: null,
+        llmStatus: null,
+        rank: 1,
+        createdAt: now,
+      });
+
+      const mockResult = makeMockWalkForwardResult(runRow.id, trialRow.id, placeholderGraphId, mergedScore);
+      // Patch the run id to match the actual insertion
+      mockResult.run = { ...mockResult.run, id: runRow.id };
+      mockResult.trials = mockResult.trials.map((t: any) => ({
+        ...t,
+        trialId: trialRow.id,
+        runId: runRow.id,
+      }));
+      mockResult.rankedCandidates = mockResult.rankedCandidates.map((c: any) => ({
+        ...c,
+        trialId: trialRow.id,
+      }));
+      return mockResult;
+    },
+  } as any;
+
+  return {
+    walkForwardEvaluator,
+    cleanup: () => {
+      // No special cleanup needed — the context's destroyResearchProofContext
+      // handles the temp DB deletion.
+    },
+  };
+}
+

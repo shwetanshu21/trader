@@ -3,8 +3,14 @@
 // artifact shape: verdict, assertion counts, malformed evidence, skipped
 // evidence, accepted evidence with hypothesis/evaluation linkage, and
 // audit reconstruction.
+//
+// This test verifies that the proof harness exercises the REAL
+// HypothesisGenerationService.generate() ingress (not seed helpers that
+// bypass the service). The contextProvenance.providerUrl field is checked
+// against PROOF_PROVIDER_CONFIG for each branch — if someone edits the
+// harness to skip the service, this check catches it.
 
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,7 +27,7 @@ function newestProofArtifact(label: string): string | null {
 }
 
 describe('verify-m011-s05-real-generation-proof', () => {
-  it('passes end to end and writes a passing artifact with malformed, skipped, and accepted generation evidence', () => {
+  it('passes end to end through real HypothesisGenerationService.generate() ingress', () => {
     // Execute the standalone proof harness
     execFileSync('node', [
       '--import', 'tsx',
@@ -38,10 +44,10 @@ describe('verify-m011-s05-real-generation-proof', () => {
     expect(json.failed).toBe(0);
     expect(json.totalAssertions).toBeGreaterThan(0);
 
-    // Verify all three branches were tested
-    expect(json.branchesTested).toContain('malformed/rejected (persist rejected attempt with MalformedResponse reason)');
-    expect(json.branchesTested).toContain('skipped/duplicate (persist skipped attempt with DuplicateSkipped reason)');
-    expect(json.branchesTested).toContain('accepted (validate -> evaluate -> generation-attempt linkage -> audit reconstruction)');
+    // Verify all three branches were tested through the real service
+    expect(json.branchesTested).toContain('malformed/rejected (via HypothesisGenerationService.generate() with mocked provider returning non-JSON)');
+    expect(json.branchesTested).toContain('skipped/duplicate (via HypothesisGenerationService.generate() — first accept, then duplicate-skip)');
+    expect(json.branchesTested).toContain('accepted with evaluation (via HypothesisGenerationService.generate() through real validator + evaluator)');
 
     // Verify malformed generation evidence
     expect(json.evidenceBlocks.malformedGeneration.reasonsPopulated).toBe(true);
@@ -58,6 +64,18 @@ describe('verify-m011-s05-real-generation-proof', () => {
     expect(json.evidenceBlocks.acceptedGeneration.lineageReconstructed).toBe(true);
     expect(json.evidenceBlocks.acceptedGeneration.hypothesisId).toBeGreaterThan(0);
     expect(json.evidenceBlocks.acceptedGeneration.evaluationId).toBeGreaterThan(0);
+
+    // Verify ingress was through HypothesisGenerationService.generate()
+    // contextProvenance.providerUrl assertion must pass for all three branches
+    expect(json.evidenceBlocks.malformedGeneration.ingressVerified).toBe(true);
+    expect(json.evidenceBlocks.skippedGeneration.ingressVerified).toBe(true);
+    expect(json.evidenceBlocks.acceptedGeneration.ingressVerified).toBe(true);
+
+    // Verify the realIngress summary section
+    expect(json.realIngress).toBeTruthy();
+    expect(json.realIngress.malformedIngressVerified).toBe(true);
+    expect(json.realIngress.skippedIngressVerified).toBe(true);
+    expect(json.realIngress.acceptedIngressVerified).toBe(true);
 
     // Verify assertion detail — all individual assertions should be present
     expect(json.assertions.length).toBe(json.totalAssertions);

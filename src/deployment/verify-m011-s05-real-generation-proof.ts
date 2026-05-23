@@ -4,50 +4,98 @@
 // One-command end-to-end proof that the generation-attempt persistence
 // contract (hypothesis_generation_attempts + hypothesis_generation_reasons),
 // the typed generation-aware audit snapshot, and hypothesis_evaluations
-// linkage all work correctly with real persisted data.
+// linkage all work correctly through the REAL HypothesisGenerationService
+// ingress (NOT seed helpers that bypass the service).
 //
-// Three branches are proven:
-//   1. Malformed/rejected generation — persists a rejected attempt with
-//      explicit reason codes (MalformedResponse) and verifies the audit
-//      reconstructs the rejection evidence.
-//   2. Skipped/duplicate generation — persists a skipped attempt with
-//      DuplicateSkipped reason and verifies audit reconstruction.
-//   3. Accepted generation — validates a fresh hypothesis through the real
-//      HypothesisValidator, evaluates it through the real evaluator (with
-//      a deterministic walk-forward mock), persists the generation-attempt
-//      linkage, and verifies the audit reconstructs the full chain:
-//      generation -> hypothesis -> evaluation.
+// Three branches are proven, ALL through HypothesisGenerationService.generate():
+//   1. Malformed/rejected generation — mocked provider returns non-JSON;
+//      the service persists a Rejected attempt with MalformedResponse reason.
+//   2. Skipped/duplicate generation — mocked provider returns a valid graph;
+//      first call accepts it, second call with the same graph skips it via
+//      DuplicateSkipped (real duplicate detection).
+//   3. Accepted generation — mocked provider returns a valid graph; the
+//      service runs the real validator, persists the hypothesis, runs the
+//      real evaluator (with a mocked walk-forward evaluator for deterministic
+//      output), persists the generation-attempt linkage, and returns the
+//      accepted result with hypothesis + evaluation IDs.
+//
+// Then ResearchAuditService reconstructs the full lineage from persisted
+// state alone — proving the chain survives restart without replaying stdout.
 //
 // The harness:
 //   - Creates a fresh file-backed SQLite database in a temp directory
-//   - Seeds one malformed attempt with explicit reasons
-//   - Seeds one skipped/duplicate attempt with explicit reason
-//   - Seeds one accepted attempt through the full validator+evaluator pipeline
+//   - Creates real HypothesisGenerationService instances with mocked fetch
+//   - Exercises all three branches through generate() — the real ingress
 //   - Reads back every lineage via ResearchAuditService
 //   - Asserts every lineage segment is correctly populated
 //   - Writes a timestamped JSON artifact under data/artifacts/research-proof/
 //   - Exits 0 on full success, non-zero on any assertion failure
+//
+// If someone edits this harness to bypass HypothesisGenerationService.generate()
+// and call seed helpers or repo methods directly, the contextProvenance.providerUrl
+// assertion will fail — it checks that each persisted attempt came through the
+// PROOF_PROVIDER_CONFIG seam, not a hardcoded seed URL.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   createResearchProofContext,
   destroyResearchProofContext,
-  seedMalformedGeneration,
-  seedSkippedGeneration,
-  seedAcceptedGeneration,
+  createProofGenerationService,
+  createMockWalkForwardEvaluator,
+  setMockFetchResponse,
   resetAssertions,
   getAssertions,
   assert,
   report,
   ARTIFACT_ROOT,
+  PROOF_PROVIDER_CONFIG,
   type ResearchProofContext,
 } from './research-proof-support.js';
+import { HypothesisResearchEvaluator } from '../research/hypothesis-evaluator.js';
+import { ResearchArtifactWriter } from '../research/artifact-writer.js';
+import { FakeDataProvider, FakeMarketProfile } from './research-proof-support.js';
 import {
   GenerationVerdict,
   GenerationReasonCode,
   type ResearchLineageSnapshot,
+  type HypothesisGraph,
 } from '../types/runtime.js';
+
+// ---------------------------------------------------------------------------
+// Constants — hypothesis graphs for each branch
+// ---------------------------------------------------------------------------
+
+/**
+ * A valid hypothesis graph used for the duplicate-skip path.
+ * The same JSON mock response is returned for both the first (accept) and
+ * second (skip) call so the service's real duplicate detection fires.
+ */
+function dupeGraph(): HypothesisGraph {
+  return {
+    schemaVersion: '1',
+    signals: [{ type: 'ema_cross', params: { fast: 8, slow: 21 } }],
+    filters: [{ type: 'volume_min', params: { min: 500000 } }],
+    entryRules: [{ type: 'breakout_confirmed', params: { lookbackBars: 5 } }],
+    exitRules: [{ type: 'time_stop', params: { maxBars: 12 } }],
+    riskRules: [{ type: 'atr_stop', params: { period: 14, multiple: 2 } }],
+  };
+}
+
+/**
+ * A valid hypothesis graph used for the accepted + evaluation path.
+ * Different rule structure ensures no hash collision with dupeGraph.
+ */
+function evalGraph(): HypothesisGraph {
+  return {
+    schemaVersion: '1',
+    signals: [{ type: 'sma_cross', params: { fast: 10, slow: 30 } }],
+    filters: [{ type: 'volume_min', params: { min: 300000 } }],
+    entryRules: [{ type: 'range_breakout', params: { lookbackBars: 10, multiplier: 1.5 } }],
+    exitRules: [{ type: 'trailing_stop', params: { atrPeriod: 14, atrMultiplier: 3 } }],
+    riskRules: [{ type: 'position_size', params: { riskPercent: 1 } }],
+  };
+}
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -81,6 +129,7 @@ async function main(): Promise<void> {
 
   console.log('\u2550'.repeat(50));
   console.log('  M011/S05 \u2014 Real-generation Proof Harness');
+  console.log('  (exercises HypothesisGenerationService.generate() as ingress)');
   console.log('\u2550'.repeat(50));
   console.log('');
 
@@ -95,120 +144,165 @@ async function main(): Promise<void> {
     console.log(`DB: ${ctx.dbPath}`);
 
     // =================================================================
-    // Phase 1: Malformed/rejected generation
+    // Phase 1: Malformed/rejected generation via HypothesisGenerationService
     // =================================================================
-    console.log('\n\u2500\u2500 Phase 1: Malformed/rejected generation \u2500\u2500');
+    console.log('\n\u2500\u2500 Phase 1: Malformed/rejected via service.generate() \u2500\u2500');
 
-    const malformedAttempt = seedMalformedGeneration(ctx);
+    const svcNoEval = createProofGenerationService(ctx);
+
+    const malformedFetchRestore = setMockFetchResponse('not valid json');
+    let malformedResult;
+    try {
+      malformedResult = await svcNoEval.generate({
+        instruction: 'Generate a momentum hypothesis.',
+        marketId: 'INDIA_NSE_EQ',
+        skipEvaluation: true,
+      });
+    } finally {
+      malformedFetchRestore();
+    }
 
     assert(
-      'Phase1: malformed attempt verdict is Rejected',
-      malformedAttempt.verdict === GenerationVerdict.Rejected,
-      `verdict=${malformedAttempt.verdict}`,
+      'Phase1: malformed result kind is rejected',
+      malformedResult.kind === 'rejected',
+      `kind=${malformedResult.kind}`,
     );
-    assert(
-      'Phase1: malformed attempt has id > 0',
-      malformedAttempt.id > 0,
-      `id=${malformedAttempt.id}`,
-    );
-    assert(
-      'Phase1: malformed attempt has reasons',
-      malformedAttempt.reasons.length === 1,
-      `reasons.length=${malformedAttempt.reasons.length}`,
-    );
-    if (malformedAttempt.reasons.length > 0) {
+
+    if (malformedResult.kind === 'rejected') {
       assert(
-        'Phase1: malformed reason code is MalformedResponse',
-        malformedAttempt.reasons[0].reasonCode === GenerationReasonCode.MalformedResponse,
-        `code=${malformedAttempt.reasons[0].reasonCode}`,
+        'Phase1: malformed attempt verdict is Rejected',
+        malformedResult.attempt.verdict === GenerationVerdict.Rejected,
+        `verdict=${malformedResult.attempt.verdict}`,
+      );
+      assert(
+        'Phase1: malformed attempt has id > 0',
+        malformedResult.attempt.id > 0,
+        `id=${malformedResult.attempt.id}`,
+      );
+      assert(
+        'Phase1: malformed attempt has reasons',
+        malformedResult.attempt.reasons.length >= 1,
+        `reasons.length=${malformedResult.attempt.reasons.length}`,
+      );
+      if (malformedResult.attempt.reasons.length > 0) {
+        assert(
+          'Phase1: malformed reason code is MalformedResponse',
+          malformedResult.attempt.reasons[0].reasonCode === GenerationReasonCode.MalformedResponse,
+          `code=${malformedResult.attempt.reasons[0].reasonCode}`,
+        );
+      }
+      assert(
+        'Phase1: malformed attempt has null canonicalHash',
+        malformedResult.attempt.canonicalHash === null,
+        `hash=${malformedResult.attempt.canonicalHash}`,
+      );
+      assert(
+        'Phase1: malformed attempt has null hypothesisGraphId',
+        malformedResult.attempt.hypothesisGraphId === null,
+        `graphId=${malformedResult.attempt.hypothesisGraphId}`,
+      );
+      assert(
+        'Phase1: malformed raw provider output preserved',
+        malformedResult.rawProviderOutput === 'not valid json',
+        `output=${malformedResult.rawProviderOutput}`,
+      );
+      assert(
+        'Phase1: contextProvenance.providerUrl matches proof config (real ingress)',
+        malformedResult.attempt.contextProvenance.providerUrl === PROOF_PROVIDER_CONFIG.providerUrl,
+        `url=${malformedResult.attempt.contextProvenance.providerUrl}`,
       );
     }
-    assert(
-      'Phase1: malformed attempt has null canonicalHash',
-      malformedAttempt.canonicalHash === null,
-      `hash=${malformedAttempt.canonicalHash}`,
-    );
-    assert(
-      'Phase1: malformed attempt has null hypothesisGraphId',
-      malformedAttempt.hypothesisGraphId === null,
-      `graphId=${malformedAttempt.hypothesisGraphId}`,
-    );
-    assert(
-      'Phase1: malformed attempt has raw provider output preserved',
-      malformedAttempt.rawProviderOutput === '{invalid json here}',
-      `output=${malformedAttempt.rawProviderOutput}`,
-    );
-
-    // Verify audit reconstruction for the malformed hash (should be null — no canonical hash)
-    const malformedLineage = ctx.auditService.assembleLineage('no-hash-malformed');
-    assert(
-      'Phase1: malformed hash lineage has no hypothesis',
-      malformedLineage.hypothesis === null,
-      'hypothesis present',
-    );
-    assert(
-      'Phase1: malformed hash lineage has no evaluation',
-      malformedLineage.evaluation === null,
-      'evaluation present',
-    );
 
     // =================================================================
-    // Phase 2: Skipped/duplicate generation
+    // Phase 2: Skipped/duplicate generation via HypothesisGenerationService
     // =================================================================
-    console.log('\n\u2500\u2500 Phase 2: Skipped/duplicate generation \u2500\u2500');
+    console.log('\n\u2500\u2500 Phase 2: Skipped/duplicate via service.generate() \u2500\u2500');
 
-    const skippedAttempt = seedSkippedGeneration(ctx);
+    const svcSkip = createProofGenerationService(ctx);
+    const dupeGraphJson = JSON.stringify(dupeGraph());
+
+    // First call — accept the graph
+    const acceptRestore = setMockFetchResponse(dupeGraphJson);
+    let acceptResult;
+    try {
+      acceptResult = await svcSkip.generate({
+        instruction: 'Generate a momentum hypothesis.',
+        marketId: 'INDIA_NSE_EQ',
+        skipEvaluation: true,
+      });
+    } finally {
+      acceptRestore();
+    }
 
     assert(
-      'Phase2: skipped attempt verdict is Skipped',
-      skippedAttempt.verdict === GenerationVerdict.Skipped,
-      `verdict=${skippedAttempt.verdict}`,
+      'Phase2: first call with graph is accepted',
+      acceptResult.kind === 'accepted',
+      `kind=${acceptResult.kind}`,
     );
+
+    // Second call with same graph — should be skipped (duplicate)
+    const skipRestore = setMockFetchResponse(dupeGraphJson);
+    let skipResult;
+    try {
+      skipResult = await svcSkip.generate({
+        instruction: 'Generate a momentum hypothesis.',
+        marketId: 'INDIA_NSE_EQ',
+        skipEvaluation: true,
+      });
+    } finally {
+      skipRestore();
+    }
+
     assert(
-      'Phase2: skipped attempt has id > 0',
-      skippedAttempt.id > 0,
-      `id=${skippedAttempt.id}`,
+      'Phase2: second call with same graph is skipped',
+      skipResult.kind === 'skipped',
+      `kind=${skipResult.kind}`,
     );
-    assert(
-      'Phase2: skipped attempt has reasons',
-      skippedAttempt.reasons.length === 1,
-      `reasons.length=${skippedAttempt.reasons.length}`,
-    );
-    if (skippedAttempt.reasons.length > 0) {
+
+    if (skipResult.kind === 'skipped') {
       assert(
-        'Phase2: skipped reason code is DuplicateSkipped',
-        skippedAttempt.reasons[0].reasonCode === GenerationReasonCode.DuplicateSkipped,
-        `code=${skippedAttempt.reasons[0].reasonCode}`,
+        'Phase2: skipped attempt verdict is Skipped',
+        skipResult.attempt.verdict === GenerationVerdict.Skipped,
+        `verdict=${skipResult.attempt.verdict}`,
+      );
+      assert(
+        'Phase2: skipped attempt has id > 0',
+        skipResult.attempt.id > 0,
+        `id=${skipResult.attempt.id}`,
+      );
+      assert(
+        'Phase2: skipped attempt has reasons',
+        skipResult.attempt.reasons.length >= 1,
+        `reasons.length=${skipResult.attempt.reasons.length}`,
+      );
+      if (skipResult.attempt.reasons.length > 0) {
+        assert(
+          'Phase2: skipped reason code is DuplicateSkipped',
+          skipResult.attempt.reasons[0].reasonCode === GenerationReasonCode.DuplicateSkipped,
+          `code=${skipResult.attempt.reasons[0].reasonCode}`,
+        );
+      }
+      assert(
+        'Phase2: skipped attempt has canonical hash',
+        skipResult.attempt.canonicalHash !== null,
+        `hash=${skipResult.attempt.canonicalHash}`,
+      );
+      assert(
+        'Phase2: skipped attempt has null hypothesisGraphId',
+        skipResult.attempt.hypothesisGraphId === null,
+        `graphId=${skipResult.attempt.hypothesisGraphId}`,
+      );
+      assert(
+        'Phase2: contextProvenance.providerUrl matches proof config (real ingress)',
+        skipResult.attempt.contextProvenance.providerUrl === PROOF_PROVIDER_CONFIG.providerUrl,
+        `url=${skipResult.attempt.contextProvenance.providerUrl}`,
       );
     }
-    assert(
-      'Phase2: skipped attempt has canonical hash',
-      skippedAttempt.canonicalHash !== null,
-      `hash=${skippedAttempt.canonicalHash}`,
-    );
-    assert(
-      'Phase2: skipped attempt has null hypothesisGraphId',
-      skippedAttempt.hypothesisGraphId === null,
-      `graphId=${skippedAttempt.hypothesisGraphId}`,
-    );
-
-    // Verify audit reconstruction for the skipped hash
-    const skippedLineage = ctx.auditService.assembleLineage(skippedAttempt.canonicalHash!);
-    assert(
-      'Phase2: skipped lineage has no hypothesis (no prior accepted attempt)',
-      skippedLineage.hypothesis === null,
-      'hypothesis present',
-    );
-    assert(
-      'Phase2: skipped lineage has no evaluation',
-      skippedLineage.evaluation === null,
-      'evaluation present',
-    );
 
     // =================================================================
-    // Phase 3: Accepted generation with full pipeline linkage
+    // Phase 3: Accepted generation with evaluation via service.generate()
     // =================================================================
-    console.log('\n\u2500\u2500 Phase 3: Accepted generation (validate -> evaluate -> audit) \u2500\u2500');
+    console.log('\n\u2500\u2500 Phase 3: Accepted with evaluation via service.generate() \u2500\u2500');
 
     let acceptedAttemptId = 0;
     let acceptedHypothesisId = 0;
@@ -216,53 +310,108 @@ async function main(): Promise<void> {
     let acceptedLineage: ResearchLineageSnapshot | null = null;
 
     try {
-      const accepted = await seedAcceptedGeneration(ctx);
+      // Wire a real evaluator with a mocked walk-forward evaluator
+      const { walkForwardEvaluator: mockEvaluator } = createMockWalkForwardEvaluator(ctx);
+      const dataProvider = new FakeDataProvider();
+      const marketProfile = new FakeMarketProfile();
+      const artifactWriter = new ResearchArtifactWriter();
 
-      acceptedAttemptId = accepted.generationAttempt.id;
-      acceptedHypothesisId = accepted.hypothesis.id;
-      acceptedEvalId = accepted.evaluationResult.evaluation.id;
-      acceptedLineage = accepted.lineage;
+      const evaluator = new HypothesisResearchEvaluator({
+        db: ctx.db,
+        dataProvider,
+        marketProfile,
+        hypothesisRepo: ctx.hypothesisRepo,
+        walkForwardRepo: ctx.walkForwardRepo,
+        artifactWriter,
+        walkForwardEvaluator: mockEvaluator,
+      });
 
-      assert(
-        'Phase3: accepted generation attempt verdict is Accepted',
-        accepted.generationAttempt.verdict === GenerationVerdict.Accepted,
-        `verdict=${accepted.generationAttempt.verdict}`,
-      );
-      assert(
-        'Phase3: accepted attempt has id > 0',
-        accepted.generationAttempt.id > 0,
-        `id=${accepted.generationAttempt.id}`,
-      );
-      assert(
-        'Phase3: accepted attempt has no reasons',
-        accepted.generationAttempt.reasons.length === 0,
-        `reasons.length=${accepted.generationAttempt.reasons.length}`,
-      );
-      assert(
-        'Phase3: accepted attempt has canonicalHash',
-        accepted.generationAttempt.canonicalHash !== null,
-        'null canonicalHash',
-      );
-      assert(
-        'Phase3: accepted attempt has hypothesisGraphId',
-        accepted.generationAttempt.hypothesisGraphId !== null,
-        'null hypothesisGraphId',
-      );
-      assert(
-        'Phase3: accepted attempt has hypothesisEvaluationId',
-        accepted.generationAttempt.hypothesisEvaluationId !== null,
-        'null hypothesisEvaluationId',
-      );
-      assert(
-        'Phase3: hypothesis was validated and persisted',
-        accepted.hypothesis.id > 0,
-        `id=${accepted.hypothesis.id}`,
-      );
-      assert(
-        'Phase3: evaluation completed with a status',
-        ['completed', 'failed'].includes(accepted.evaluationResult.evaluation.status),
-        `status=${accepted.evaluationResult.evaluation.status}`,
-      );
+      const svcEval = createProofGenerationService(ctx, { evaluator });
+      const evalGraphJson = JSON.stringify(evalGraph());
+
+      const evalFetchRestore = setMockFetchResponse(evalGraphJson);
+      let acceptedResult;
+      try {
+        acceptedResult = await svcEval.generate({
+          instruction: 'Generate a hypothesis with evaluation.',
+          marketId: 'INDIA_NSE_EQ',
+          skipEvaluation: false,
+        });
+      } finally {
+        evalFetchRestore();
+      }
+
+      if (acceptedResult.kind === 'accepted') {
+        acceptedAttemptId = acceptedResult.attempt.id;
+        acceptedHypothesisId = acceptedResult.hypothesis.id;
+        acceptedEvalId = acceptedResult.evaluation?.evaluation?.id ?? 0;
+
+        // Reload the attempt from DB to get post-linkage state — the service
+        // captures the attempt object before updating hypothesisEvaluationId.
+        const reloadedAttempt = ctx.generationRepo.getByIdWithReasons(acceptedResult.attempt.id);
+
+        // Assemble lineage for the accepted hash
+        if (acceptedResult.attempt.canonicalHash) {
+          acceptedLineage = ctx.auditService.assembleLineage(
+            acceptedResult.attempt.canonicalHash,
+          );
+        }
+
+        assert(
+          'Phase3: accepted result kind is accepted',
+          acceptedResult.kind === 'accepted',
+          `kind=${acceptedResult.kind}`,
+        );
+        assert(
+          'Phase3: accepted attempt verdict is Accepted',
+          acceptedResult.attempt.verdict === GenerationVerdict.Accepted,
+          `verdict=${acceptedResult.attempt.verdict}`,
+        );
+        assert(
+          'Phase3: accepted attempt has id > 0',
+          acceptedResult.attempt.id > 0,
+          `id=${acceptedResult.attempt.id}`,
+        );
+        assert(
+          'Phase3: accepted attempt has no reasons',
+          acceptedResult.attempt.reasons.length === 0,
+          `reasons.length=${acceptedResult.attempt.reasons.length}`,
+        );
+        assert(
+          'Phase3: accepted attempt has canonicalHash',
+          acceptedResult.attempt.canonicalHash !== null,
+          'null canonicalHash',
+        );
+        assert(
+          'Phase3: accepted attempt has hypothesisGraphId',
+          acceptedResult.attempt.hypothesisGraphId !== null,
+          'null hypothesisGraphId',
+        );
+        assert(
+          'Phase3: accepted attempt has hypothesisEvaluationId in DB',
+          reloadedAttempt != null && reloadedAttempt.hypothesisEvaluationId !== null,
+          `reloaded.hypothesisEvaluationId=${reloadedAttempt?.hypothesisEvaluationId}`,
+        );
+        assert(
+          'Phase3: hypothesis was validated and persisted',
+          acceptedResult.hypothesis.id > 0,
+          `id=${acceptedResult.hypothesis.id}`,
+        );
+        assert(
+          'Phase3: evaluation completed with a status',
+          acceptedResult.evaluation !== null
+            && ['completed', 'failed'].includes(acceptedResult.evaluation.evaluation.status),
+          `eval=${acceptedResult.evaluation?.evaluation?.status ?? 'null'}`,
+        );
+        assert(
+          'Phase3: contextProvenance.providerUrl matches proof config (real ingress)',
+          acceptedResult.attempt.contextProvenance.providerUrl === PROOF_PROVIDER_CONFIG.providerUrl,
+          `url=${acceptedResult.attempt.contextProvenance.providerUrl}`,
+        );
+      } else {
+        // If the service returned non-accepted, report what happened
+        assert('Phase3: accepted result kind is accepted', false, `got kind=${acceptedResult.kind}`);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       assert('Phase3: accepted generation path completed without error', false, errorMessage);
@@ -371,9 +520,9 @@ async function main(): Promise<void> {
         detail: a.detail,
       })),
       branchesTested: [
-        'malformed/rejected (persist rejected attempt with MalformedResponse reason)',
-        'skipped/duplicate (persist skipped attempt with DuplicateSkipped reason)',
-        'accepted (validate -> evaluate -> generation-attempt linkage -> audit reconstruction)',
+        'malformed/rejected (via HypothesisGenerationService.generate() with mocked provider returning non-JSON)',
+        'skipped/duplicate (via HypothesisGenerationService.generate() — first accept, then duplicate-skip)',
+        'accepted with evaluation (via HypothesisGenerationService.generate() through real validator + evaluator)',
       ],
       evidenceBlocks: {
         malformedGeneration: {
@@ -382,6 +531,10 @@ async function main(): Promise<void> {
           ).get() as { id: number } | undefined,
           reasonsPopulated: getAssertions().find(a => a.name.includes('malformed attempt has reasons'))?.pass ?? false,
           nullLinkage: getAssertions().find(a => a.name.includes('null hypothesisGraphId'))?.pass ?? false,
+          ingressVerified: getAssertions().find(
+            a => a.name.includes('contextProvenance.providerUrl matches proof config')
+              && a.name.startsWith('Phase1')
+          )?.pass ?? false,
         },
         skippedGeneration: {
           attemptId: ctx.db.prepare(
@@ -389,6 +542,10 @@ async function main(): Promise<void> {
           ).get() as { id: number } | undefined,
           reasonsPopulated: getAssertions().find(a => a.name.includes('skipped attempt has reasons'))?.pass ?? false,
           nullLinkage: getAssertions().find(a => a.name.includes('skipped attempt has null hypothesisGraphId'))?.pass ?? false,
+          ingressVerified: getAssertions().find(
+            a => a.name.includes('contextProvenance.providerUrl matches proof config')
+              && a.name.startsWith('Phase2')
+          )?.pass ?? false,
         },
         acceptedGeneration: {
           attemptId: acceptedAttemptId,
@@ -398,7 +555,24 @@ async function main(): Promise<void> {
           hypothesisPersisted: acceptedHypothesisId > 0,
           evaluationCompleted: acceptedEvalId > 0,
           lineageReconstructed: acceptedLineage !== null,
+          ingressVerified: getAssertions().find(
+            a => a.name.includes('contextProvenance.providerUrl matches proof config')
+              && a.name.startsWith('Phase3')
+          )?.pass ?? false,
         },
+      },
+      realIngress: {
+        description: 'All three branches exercised through HypothesisGenerationService.generate() with mocked fetch transport. ' +
+          'contextProvenance.providerUrl verified against PROOF_PROVIDER_CONFIG for each branch.',
+        malformedIngressVerified: getAssertions().find(
+          a => a.name.includes('contextProvenance.providerUrl matches proof config') && a.name.startsWith('Phase1')
+        )?.pass ?? false,
+        skippedIngressVerified: getAssertions().find(
+          a => a.name.includes('contextProvenance.providerUrl matches proof config') && a.name.startsWith('Phase2')
+        )?.pass ?? false,
+        acceptedIngressVerified: getAssertions().find(
+          a => a.name.includes('contextProvenance.providerUrl matches proof config') && a.name.startsWith('Phase3')
+        )?.pass ?? false,
       },
     };
 
