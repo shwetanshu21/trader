@@ -613,6 +613,41 @@ CREATE TABLE IF NOT EXISTS walk_forward_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_wf_checkpoints_run ON walk_forward_checkpoints(run_id);
 CREATE INDEX IF NOT EXISTS idx_wf_checkpoints_saved ON walk_forward_checkpoints(run_id, saved_at);
 
+-- M011/S01: Structured hypothesis graph store
+CREATE TABLE IF NOT EXISTS hypothesis_graphs (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  canonical_hash    TEXT    NOT NULL,
+  canonical_json    TEXT    NOT NULL,
+  status            TEXT    NOT NULL,
+  schema_version    TEXT    NOT NULL,
+  signals_json      TEXT    NOT NULL,
+  filters_json      TEXT    NOT NULL,
+  entry_rules_json  TEXT    NOT NULL,
+  exit_rules_json   TEXT    NOT NULL,
+  risk_rules_json   TEXT    NOT NULL,
+  metadata_json     TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hypothesis_graphs_hash ON hypothesis_graphs(canonical_hash);
+CREATE INDEX IF NOT EXISTS idx_hypothesis_graphs_status ON hypothesis_graphs(status);
+CREATE INDEX IF NOT EXISTS idx_hypothesis_graphs_created ON hypothesis_graphs(created_at);
+
+-- M011/S01: Exact-failure memory ledger for hypothesis dedupe
+CREATE TABLE IF NOT EXISTS hypothesis_memory_ledger (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  canonical_hash      TEXT    NOT NULL UNIQUE,
+  status              TEXT    NOT NULL,
+  reason_code         TEXT    NOT NULL,
+  reason_message      TEXT    NOT NULL DEFAULT '',
+  hypothesis_graph_id INTEGER REFERENCES hypothesis_graphs(id),
+  created_at          INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hypothesis_memory_status ON hypothesis_memory_ledger(status);
+CREATE INDEX IF NOT EXISTS idx_hypothesis_memory_created ON hypothesis_memory_ledger(created_at);
+
 -- M005/S03: Walk-forward winners — persisted winner-selection decisions
 CREATE TABLE IF NOT EXISTS walk_forward_winners (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -663,6 +698,63 @@ CREATE TABLE IF NOT EXISTS governance_decisions (
 CREATE INDEX IF NOT EXISTS idx_gov_decisions_identity ON governance_decisions(strategy_id, strategy_version, market_id);
 CREATE INDEX IF NOT EXISTS idx_gov_decisions_recorded ON governance_decisions(recorded_at);
 CREATE INDEX IF NOT EXISTS idx_gov_decisions_verdict ON governance_decisions(verdict);
+
+-- M011/S02: Hypothesis evaluation — bridges validated hypotheses into walk-forward replay
+CREATE TABLE IF NOT EXISTS hypothesis_evaluations (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  hypothesis_graph_id   INTEGER NOT NULL UNIQUE REFERENCES hypothesis_graphs(id),
+  walk_forward_run_id   INTEGER REFERENCES walk_forward_runs(id),
+  status                TEXT    NOT NULL,
+  winner_id             INTEGER REFERENCES walk_forward_winners(id),
+  rationale             TEXT    NOT NULL DEFAULT '',
+  outcome_detail        TEXT    NOT NULL DEFAULT '',
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hyp_evals_graph ON hypothesis_evaluations(hypothesis_graph_id);
+CREATE INDEX IF NOT EXISTS idx_hyp_evals_status ON hypothesis_evaluations(status);
+CREATE INDEX IF NOT EXISTS idx_hyp_evals_created ON hypothesis_evaluations(created_at);
+CREATE INDEX IF NOT EXISTS idx_hyp_evals_run ON hypothesis_evaluations(walk_forward_run_id);
+CREATE INDEX IF NOT EXISTS idx_hyp_evals_winner ON hypothesis_evaluations(winner_id);
+
+-- M011/S02: Research artifacts — durable file-based output from hypothesis evaluations
+CREATE TABLE IF NOT EXISTS research_artifacts (
+  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+  hypothesis_evaluation_id  INTEGER NOT NULL REFERENCES hypothesis_evaluations(id),
+  artifact_type             TEXT    NOT NULL,
+  format                    TEXT    NOT NULL,
+  file_path                 TEXT    NOT NULL,
+  label                     TEXT    NOT NULL DEFAULT '',
+  created_at                INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_res_artifacts_eval ON research_artifacts(hypothesis_evaluation_id);
+CREATE INDEX IF NOT EXISTS idx_res_artifacts_type ON research_artifacts(artifact_type);
+CREATE INDEX IF NOT EXISTS idx_res_artifacts_created ON research_artifacts(created_at);
+
+-- M011/S03: Research publications — governed publish-back handoff
+CREATE TABLE IF NOT EXISTS research_publications (
+  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+  hypothesis_evaluation_id  INTEGER NOT NULL UNIQUE REFERENCES hypothesis_evaluations(id),
+  hypothesis_graph_id       INTEGER NOT NULL REFERENCES hypothesis_graphs(id),
+  status                    TEXT    NOT NULL,
+  strategy_id               TEXT    NOT NULL,
+  strategy_version          TEXT    NOT NULL,
+  market_id                 TEXT    NOT NULL,
+  rationale                 TEXT    NOT NULL DEFAULT '',
+  evidence_json             TEXT    NOT NULL DEFAULT '{}',
+  lifecycle_state_id        INTEGER REFERENCES strategy_lifecycle_state(id),
+  governance_decision_id    INTEGER REFERENCES governance_decisions(id),
+  published_at              INTEGER,
+  created_at                INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_res_pub_eval ON research_publications(hypothesis_evaluation_id);
+CREATE INDEX IF NOT EXISTS idx_res_pub_status ON research_publications(status);
+CREATE INDEX IF NOT EXISTS idx_res_pub_published ON research_publications(published_at);
+CREATE INDEX IF NOT EXISTS idx_res_pub_lifecycle ON research_publications(lifecycle_state_id);
+CREATE INDEX IF NOT EXISTS idx_res_pub_governance ON research_publications(governance_decision_id);
 `;
 
 export class DatabaseManager {

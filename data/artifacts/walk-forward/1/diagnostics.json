@@ -3,14 +3,14 @@
   "artifactType": "winner-diagnostics",
   "runId": 1,
   "runLabel": "int-test-fo-winner",
-  "generatedAt": "2026-05-20T12:08:32.672Z",
+  "generatedAt": "2026-05-23T05:08:24.752Z",
   "selection": {
     "result": "selected",
-    "rationale": "Selected Config A (FO 3 candidates) (rank 1) via composite selection with merged score 0.6690 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=41201.03, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (FO 5 candidates) (score=0.6690, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
+    "rationale": "Selected Config A (FO 3 candidates) (rank 1) via composite selection with merged score 0.5604 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=112.48, max OOS drawdown=0.04%, avg OOS win rate=25%, OOS windows=2. Runner-ups: Config B (FO 5 candidates) (score=0.5604, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
     "comparisonsCount": 2
   },
   "aggregateMetrics": {
-    "scoreStability": 0.9999,
+    "scoreStability": 0.9013,
     "topKOverlap": 1,
     "llmConsultationRate": null,
     "llmDivergence": null
@@ -21,8 +21,8 @@
       "rank": 1,
       "label": "Config A (FO 3 candidates)",
       "paramsJson": "{\"label\":\"Config A (FO 3 candidates)\",\"params\":{\"maxCandidates\":3}}",
-      "mergedScore": 0.669,
-      "deterministicScore": 0.669,
+      "mergedScore": 0.5604,
+      "deterministicScore": 0.5604,
       "llmScore": null,
       "llmStatus": "skipped",
       "windowCount": 4
@@ -32,8 +32,8 @@
       "rank": 2,
       "label": "Config B (FO 5 candidates)",
       "paramsJson": "{\"label\":\"Config B (FO 5 candidates)\",\"params\":{\"maxCandidates\":5}}",
-      "mergedScore": 0.669,
-      "deterministicScore": 0.669,
+      "mergedScore": 0.5604,
+      "deterministicScore": 0.5604,
       "llmScore": null,
       "llmStatus": "skipped",
       "windowCount": 4
@@ -55,30 +55,30 @@
       "windowIndex": 0,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.669,
-      "winRate": 1,
-      "sharpeRatio": 60818.1818,
-      "maxDrawdown": 0
+      "totalReturn": 0.4767,
+      "winRate": 0,
+      "sharpeRatio": 211.8667,
+      "maxDrawdown": 0.0023
     },
     {
       "trialId": 1,
       "windowIndex": 1,
       "windowType": "in_sample",
       "tradeCount": 2,
-      "totalReturn": 0.669,
-      "winRate": 1,
-      "sharpeRatio": 14543.4783,
-      "maxDrawdown": 0
+      "totalReturn": 0.5147,
+      "winRate": 0,
+      "sharpeRatio": 12.7755,
+      "maxDrawdown": 0.0403
     },
     {
       "trialId": 1,
       "windowIndex": 1,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.6691,
-      "winRate": 1,
-      "sharpeRatio": 21583.871,
-      "maxDrawdown": 0
+      "totalReturn": 0.5811,
+      "winRate": 0.5,
+      "sharpeRatio": 13.0985,
+      "maxDrawdown": 0.0444
     },
     {
       "trialId": 2,
@@ -95,30 +95,30 @@
       "windowIndex": 0,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.669,
-      "winRate": 1,
-      "sharpeRatio": 60818.1818,
-      "maxDrawdown": 0
+      "totalReturn": 0.4767,
+      "winRate": 0,
+      "sharpeRatio": 211.8667,
+      "maxDrawdown": 0.0023
     },
     {
       "trialId": 2,
       "windowIndex": 1,
       "windowType": "in_sample",
       "tradeCount": 2,
-      "totalReturn": 0.669,
-      "winRate": 1,
-      "sharpeRatio": 14543.4783,
-      "maxDrawdown": 0
+      "totalReturn": 0.5147,
+      "winRate": 0,
+      "sharpeRatio": 12.7755,
+      "maxDrawdown": 0.0403
     },
     {
       "trialId": 2,
       "windowIndex": 1,
       "windowType": "out_of_sample",
       "tradeCount": 2,
-      "totalReturn": 0.6691,
-      "winRate": 1,
-      "sharpeRatio": 21583.871,
-      "maxDrawdown": 0
+      "totalReturn": 0.5811,
+      "winRate": 0.5,
+      "sharpeRatio": 13.0985,
+      "maxDrawdown": 0.0444
     }
   ],
   "evidenceFidelity": {

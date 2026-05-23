@@ -1,0 +1,19 @@
+
+> trader@0.1.0 evaluate:hypothesis
+> node --import tsx src/research/evaluate-hypothesis-main.ts --hypothesis-id 1 --db-path /home/shwetanshu/trader/.tmp-uat-s02-BuxACM/uat.db --work-dir /home/shwetanshu/trader/.tmp-uat-s02-BuxACM/work --days 14 --window 4 --step 2 --ratio 0.75 --strategy threshold --min-score 0.2 --min-windows 1 --max-candidates 3 --cadence-minutes 5
+
+─────────────────────────────────────────────────────────────
+  Hypothesis Research Evaluator (CLI)
+─────────────────────────────────────────────────────────────
+  Hypothesis ID:   1
+  Status:          failed_evaluation
+  Canonical hash:  abababababababab...
+  DB path:         /home/shwetanshu/trader/.tmp-uat-s02-BuxACM/uat.db
+  Date range:      2026-05-09 → 2026-05-23
+  Window:          4d, Step: 2d, Ratio: 0.75
+  Strategy:        threshold
+  Min score:       0.2
+  Max candidates:  3
+  Cadence:         5m
+
+  Running evaluation...

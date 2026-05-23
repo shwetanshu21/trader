@@ -3,7 +3,7 @@
   "artifactType": "winner-selection",
   "runId": 1,
   "runLabel": "int-test-fo-winner",
-  "selectionTimestamp": "2026-05-20T12:08:32.672Z",
+  "selectionTimestamp": "2026-05-23T05:08:24.752Z",
   "selectionConfig": {
     "strategy": "composite",
     "minMergedScore": 0.5,
@@ -16,25 +16,25 @@
     "trialId": 1,
     "trialLabel": "Config A (FO 3 candidates)",
     "paramsJson": "{\"label\":\"Config A (FO 3 candidates)\",\"params\":{\"maxCandidates\":3}}",
-    "mergedScore": 0.669,
-    "deterministicScore": 0.669,
+    "mergedScore": 0.5604,
+    "deterministicScore": 0.5604,
     "llmScore": null
   },
-  "rationale": "Selected Config A (FO 3 candidates) (rank 1) via composite selection with merged score 0.6690 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=41201.03, avg OOS win rate=100%, OOS windows=2. Runner-ups: Config B (FO 5 candidates) (score=0.6690, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
+  "rationale": "Selected Config A (FO 3 candidates) (rank 1) via composite selection with merged score 0.5604 across 4 windows. Out-of-sample evidence: avg OOS Sharpe=112.48, max OOS drawdown=0.04%, avg OOS win rate=25%, OOS windows=2. Runner-ups: Config B (FO 5 candidates) (score=0.5604, rank=2). Selection thresholds: minMergedScore=0.5, minWindowCount=1, minSharpeRatio=0.5, maxDrawdown=50%.",
   "comparisons": [
     {
       "trialId": 1,
       "rank": 1,
       "label": "Config A (FO 3 candidates)",
-      "mergedScore": 0.669,
+      "mergedScore": 0.5604,
       "outcome": "winner",
       "reasons": [
         "Top-ranked qualifying candidate by selection criteria"
       ],
       "evidenceScores": {
-        "avgSharpe": 41201.0264,
-        "maxDrawdown": 0,
-        "avgWinRate": 1,
+        "avgSharpe": 112.4826,
+        "maxDrawdown": 0.0444,
+        "avgWinRate": 0.25,
         "outOfSampleWindowCount": 2
       }
     },
@@ -42,13 +42,13 @@
       "trialId": 2,
       "rank": 2,
       "label": "Config B (FO 5 candidates)",
-      "mergedScore": 0.669,
+      "mergedScore": 0.5604,
       "outcome": "runner_up",
       "reasons": [],
       "evidenceScores": {
-        "avgSharpe": 41201.0264,
-        "maxDrawdown": 0,
-        "avgWinRate": 1,
+        "avgSharpe": 112.4826,
+        "maxDrawdown": 0.0444,
+        "avgWinRate": 0.25,
         "outOfSampleWindowCount": 2
       }
     }

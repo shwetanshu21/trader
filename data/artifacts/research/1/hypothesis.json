@@ -1,0 +1,53 @@
+{
+  "id": 1,
+  "canonicalHash": "b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f",
+  "canonicalJson": "{\"entryRules\":[{\"params\":{\"lookbackBars\":5},\"type\":\"breakout_confirmed\"}],\"exitRules\":[{\"params\":{\"maxBars\":12},\"type\":\"time_stop\"}],\"filters\":[{\"params\":{\"min\":500000},\"type\":\"volume_min\"}],\"riskRules\":[{\"params\":{\"multiple\":2,\"period\":14},\"type\":\"atr_stop\"}],\"schemaVersion\":\"1\",\"signals\":[{\"params\":{\"fast\":8,\"slow\":21},\"type\":\"ema_cross\"}]}",
+  "status": "validated",
+  "graph": {
+    "schemaVersion": "1",
+    "signals": [
+      {
+        "type": "ema_cross",
+        "params": {
+          "fast": 8,
+          "slow": 21
+        }
+      }
+    ],
+    "filters": [
+      {
+        "type": "volume_min",
+        "params": {
+          "min": 500000
+        }
+      }
+    ],
+    "entryRules": [
+      {
+        "type": "breakout_confirmed",
+        "params": {
+          "lookbackBars": 5
+        }
+      }
+    ],
+    "exitRules": [
+      {
+        "type": "time_stop",
+        "params": {
+          "maxBars": 12
+        }
+      }
+    ],
+    "riskRules": [
+      {
+        "type": "atr_stop",
+        "params": {
+          "period": 14,
+          "multiple": 2
+        }
+      }
+    ]
+  },
+  "createdAt": 1736025600000,
+  "updatedAt": 1736025600000
+}

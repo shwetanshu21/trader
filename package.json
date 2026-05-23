@@ -28,6 +28,8 @@
     "run:upstox": "bash scripts/walk-forward-run-upstox.sh",
     "select:winner:upstox": "bash scripts/walk-forward-select-winner-upstox.sh",
     "promote": "bash scripts/walk-forward-promote-upstox.sh",
+    "evaluate:hypothesis": "node --import tsx src/research/evaluate-hypothesis-main.ts",
+    "publish:hypothesis": "node --import tsx src/research/publish-hypothesis-main.ts",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

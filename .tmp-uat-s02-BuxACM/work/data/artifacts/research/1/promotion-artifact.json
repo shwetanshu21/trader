@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "research-promotion-artifact",
+  "hypothesisGraphId": 1,
+  "hypothesisEvaluationId": 1,
+  "generatedAt": "2026-05-23T07:59:09.105Z",
+  "evaluationStatus": "completed",
+  "rationale": "Selected hypothesis-1 (rank 1) via threshold selection with merged score 0.6943 across 12 windows. Out-of-sample evidence: avg OOS Sharpe=20.81, max OOS drawdown=0.09%, avg OOS win rate=98%, OOS windows=6. Selection thresholds: minMergedScore=0.2, minWindowCount=1.",
+  "walkForwardRun": {
+    "id": 1,
+    "label": "",
+    "status": "completed",
+    "windowCount": 6,
+    "totalTrials": 1
+  },
+  "winner": {
+    "trialId": 1,
+    "trialLabel": "hypothesis-1",
+    "aggregateMergedScore": 0.6943,
+    "aggregateDeterministicScore": 0.6943
+  },
+  "aggregateMetrics": {
+    "scoreStability": 0.552,
+    "topKOverlap": 0,
+    "llmConsultationRate": null,
+    "llmDivergence": null
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "harness": "replay-paper-stop-proof",
+  "completedAt": "2026-05-22T10:20:02.410Z",
+  "verdict": "PASS",
+  "passed": 7,
+  "failed": 0,
+  "assertions": [
+    {
+      "name": "entry created open position",
+      "pass": true,
+      "detail": "quantity=10"
+    },
+    {
+      "name": "initial stop seeded",
+      "pass": true,
+      "detail": "stop=95"
+    },
+    {
+      "name": "trailing anchor moved up",
+      "pass": true,
+      "detail": "anchor=110"
+    },
+    {
+      "name": "stop ratcheted upward",
+      "pass": true,
+      "detail": "stop=105"
+    },
+    {
+      "name": "stop exit flattened position",
+      "pass": true,
+      "detail": "quantity=0"
+    },
+    {
+      "name": "two execution attempts persisted",
+      "pass": true,
+      "detail": "count=2"
+    },
+    {
+      "name": "two paper fills persisted",
+      "pass": true,
+      "detail": "count=2"
+    }
+  ],
+  "evidence": {
+    "attempts": 2,
+    "fills": 2,
+    "openPositions": 0
+  }
+}

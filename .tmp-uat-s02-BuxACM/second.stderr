@@ -1,0 +1,7 @@
+Hypothesis evaluation failed: Error: Hypothesis graph 1 has status "failed_evaluation". Only "validated" hypotheses can be evaluated.
+    at HypothesisResearchEvaluator.evaluate (/home/shwetanshu/trader/src/research/hypothesis-evaluator.ts:142:13)
+    at main (/home/shwetanshu/trader/src/research/evaluate-hypothesis-main.ts:325:36)
+    at <anonymous> (/home/shwetanshu/trader/src/research/evaluate-hypothesis-main.ts:405:1)
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)

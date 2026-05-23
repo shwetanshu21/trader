@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "research-diagnostics",
+  "hypothesisGraphId": 1,
+  "hypothesisEvaluationId": 1,
+  "generatedAt": "2026-05-23T07:59:09.105Z",
+  "evaluationStatus": "completed",
+  "outcomeDetail": "Winner selected via walk-forward evaluation.",
+  "windowCount": 6,
+  "trialCount": 1,
+  "durationMs": 891,
+  "errorMessage": null
+}

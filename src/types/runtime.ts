@@ -426,6 +426,397 @@ export interface ProposalAttemptWithReasons extends ProposalAttemptRow {
 }
 
 // ---------------------------------------------------------------------------
+// Research hypothesis graph — DTOs for structured LLM-authored hypotheses
+// ---------------------------------------------------------------------------
+
+/** Durable lifecycle status for a structured hypothesis graph. */
+export enum HypothesisStatus {
+  /** Graph has been captured but not yet validated. */
+  Pending = 'pending',
+  /** Graph passed structural validation and is eligible for evaluation. */
+  Validated = 'validated',
+  /** Graph failed structural validation and must not be evaluated. */
+  Rejected = 'rejected',
+  /** Graph was skipped because exact prior memory already explains the outcome. */
+  Skipped = 'skipped',
+  /** Graph reached evaluation and failed there. */
+  FailedEvaluation = 'failed_evaluation',
+}
+
+/** Machine-readable reason codes for hypothesis validation and dedupe outcomes. */
+export enum HypothesisValidationReasonCode {
+  /** Graph schema version is missing or unsupported. */
+  UnsupportedSchemaVersion = 'unsupported_schema_version',
+  /** One or more required rule groups are missing. */
+  MissingRuleGroup = 'missing_rule_group',
+  /** A required rule group was present but empty. */
+  EmptyRuleGroup = 'empty_rule_group',
+  /** A rule entry is missing its string type discriminator. */
+  MissingRuleType = 'missing_rule_type',
+  /** A rule entry is missing params or provided a non-object params payload. */
+  InvalidRuleParams = 'invalid_rule_params',
+  /** The exact same failed hypothesis was already recorded in memory. */
+  ExactFailureMatch = 'exact_failure_match',
+  /** The exact same rejected hypothesis was already recorded in memory. */
+  ExactRejectedMatch = 'exact_rejected_match',
+}
+
+/** A single typed rule node inside a structured hypothesis graph. */
+export interface HypothesisRuleNode {
+  /** Machine-readable rule type (e.g. 'ema_cross', 'atr_stop'). */
+  type: string;
+  /** Extensible rule parameters carried verbatim through canonicalization. */
+  params: Record<string, unknown>;
+}
+
+/** Structured, versioned strategy hypothesis emitted by an LLM. */
+export interface HypothesisGraph {
+  /** Graph schema version for future evolution. */
+  schemaVersion: string;
+  /** Signal-generation rules. */
+  signals: HypothesisRuleNode[];
+  /** Candidate filtering rules. */
+  filters: HypothesisRuleNode[];
+  /** Entry rules. */
+  entryRules: HypothesisRuleNode[];
+  /** Exit rules. */
+  exitRules: HypothesisRuleNode[];
+  /** Risk rules. */
+  riskRules: HypothesisRuleNode[];
+  /** Optional bounded metadata for audit and future prompting. */
+  metadata?: Record<string, unknown>;
+}
+
+/** Canonical identity record derived from a hypothesis graph. */
+export interface HypothesisCanonicalRecord {
+  /** Stable SHA-256 digest of the canonical JSON form. */
+  canonicalHash: string;
+  /** Canonical JSON string with deterministically sorted object keys. */
+  canonicalJson: string;
+}
+
+/** A single validation or dedupe reason attached to a hypothesis outcome. */
+export interface HypothesisValidationReason {
+  /** Machine-readable reason code. */
+  reasonCode: HypothesisValidationReasonCode;
+  /** Human-readable explanation. */
+  reasonMessage: string;
+}
+
+/** Persisted hypothesis graph row. */
+export interface HypothesisGraphRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Deterministic identity hash for exact dedupe. */
+  canonicalHash: string;
+  /** Canonical JSON snapshot used to derive the hash. */
+  canonicalJson: string;
+  /** Current lifecycle status. */
+  status: HypothesisStatus;
+  /** Structured graph payload. */
+  graph: HypothesisGraph;
+  /** Unix timestamp (ms) when this row was created. */
+  createdAt: number;
+  /** Unix timestamp (ms) when this row was last updated. */
+  updatedAt: number;
+}
+
+/** Durable exact-memory outcome categories for hypothesis dedupe. */
+export enum HypothesisMemoryStatus {
+  /** A structurally valid hypothesis later failed during evaluation. */
+  Failed = 'failed',
+  /** A structurally invalid or policy-rejected hypothesis should be skipped exactly. */
+  Rejected = 'rejected',
+}
+
+/** A persisted exact-memory ledger row for prior failed or rejected hypotheses. */
+export interface HypothesisMemoryRecordRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Canonical hypothesis hash used for exact lookup. */
+  canonicalHash: string;
+  /** Failure category preserved for audit and downstream skip reasons. */
+  status: HypothesisMemoryStatus;
+  /** Machine-readable reason code for the stored outcome. */
+  reasonCode: HypothesisValidationReasonCode;
+  /** Human-readable explanation for why the hypothesis was recorded. */
+  reasonMessage: string;
+  /** Optional FK back to a persisted hypothesis graph row. */
+  hypothesisGraphId: number | null;
+  /** Unix timestamp (ms) when the ledger entry was first recorded. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new exact-memory ledger row. */
+export type NewHypothesisMemoryRecord = Omit<HypothesisMemoryRecordRow, 'id'>;
+
+/** Lightweight exact-memory lookup result used by the validator. */
+export interface HypothesisMemoryLookupResult {
+  /** Whether an exact prior failure or rejection was found. */
+  found: boolean;
+  /** Stored ledger row when found, else null. */
+  entry: HypothesisMemoryRecordRow | null;
+}
+
+/** Shape for inserting a new persisted hypothesis graph. */
+export type NewHypothesisGraph = Omit<HypothesisGraphRow, 'id'>;
+
+/** Structural validation verdict for a hypothesis graph. */
+export interface HypothesisValidationResult {
+  /** Final lifecycle status for the graph after validation. */
+  status: HypothesisStatus.Validated | HypothesisStatus.Rejected;
+  /** Canonical identity when derivation succeeded. */
+  canonical?: HypothesisCanonicalRecord;
+  /** Ordered validation reasons. Empty for valid graphs. */
+  reasons: HypothesisValidationReason[];
+}
+
+/** Exact-memory dedupe verdict for a hypothesis graph. */
+export interface HypothesisDedupeResult {
+  /** Whether evaluation may proceed or must be skipped. */
+  status: HypothesisStatus.Validated | HypothesisStatus.Skipped;
+  /** Canonical identity used for the lookup. */
+  canonical: HypothesisCanonicalRecord;
+  /** Ordered reasons for the verdict. Empty when evaluation may proceed. */
+  reasons: HypothesisValidationReason[];
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Hypothesis evaluation — durable evaluation state bridging validated
+// hypotheses into walk-forward replay and downstream research artifacts
+// ---------------------------------------------------------------------------
+
+/** Service-level status of a hypothesis evaluation lifecycle. */
+export enum HypothesisEvaluationStatus {
+  /** Evaluation has been created but not yet started. */
+  Pending = 'pending',
+  /** Evaluation is actively being processed (walk-forward run in progress). */
+  InProgress = 'in_progress',
+  /** Evaluation completed with a winner selected. */
+  Completed = 'completed',
+  /** Evaluation completed but no winner was found. */
+  NoWinner = 'no_winner',
+  /** Evaluation was cancelled or abandoned. */
+  Cancelled = 'cancelled',
+  /** Evaluation encountered an unrecoverable error. */
+  Failed = 'failed',
+}
+
+/**
+ * Full persisted hypothesis evaluation row.
+ *
+ * Bridges a validated hypothesis graph row into the walk-forward replay
+ * pipeline. One evaluation per hypothesis (UNIQUE on hypothesis_graph_id).
+ * Carries the linked walk-forward run reference, winner selection outcome,
+ * and human-readable rationale so downstream inspection surfaces can audit
+ * the entire research path without reconstructing it from logs.
+ */
+export interface HypothesisEvaluationRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → hypothesis_graphs(id). UNIQUE — one evaluation per hypothesis. */
+  hypothesisGraphId: number;
+  /** FK → walk_forward_runs(id). Null until a run is linked. */
+  walkForwardRunId: number | null;
+  /** Current evaluation status. */
+  status: HypothesisEvaluationStatus;
+  /** FK → walk_forward_winners(id). Null until a winner is selected or no-winner is determined. */
+  winnerId: number | null;
+  /** Human-readable rationale for the evaluation outcome. */
+  rationale: string;
+  /** Machine-readable outcome detail (e.g. the reason for no-winner). */
+  outcomeDetail: string;
+  /** Unix timestamp (ms) when the evaluation was created. */
+  createdAt: number;
+  /** Unix timestamp (ms) when the evaluation was last updated. */
+  updatedAt: number;
+}
+
+/** Shape for inserting a new hypothesis evaluation (without id). */
+export interface NewHypothesisEvaluation {
+  hypothesisGraphId: number;
+  walkForwardRunId?: number | null;
+  status: HypothesisEvaluationStatus;
+  winnerId?: number | null;
+  rationale: string;
+  outcomeDetail: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+/**
+ * Hypothesis evaluation with linked walk-forward run snapshot.
+ *
+ * Carries the evaluation row and a compact snapshot of the linked
+ * walk-forward run (label, status, window/trial counts) so downstream
+ * inspection code can display the context without a separate query.
+ */
+export interface HypothesisEvaluationWithLinked {
+  evaluation: HypothesisEvaluationRow;
+  /** Compact walk-forward run snapshot, or null when no run is linked. */
+  walkForwardRun: {
+    id: number;
+    label: string;
+    status: string;
+    windowCount: number;
+    totalTrials: number;
+  } | null;
+  /** Compact winner snapshot, or null when no winner is selected. */
+  winner: {
+    id: number;
+    result: string;
+    selectedTrialId: number | null;
+    selectionStrategy: string;
+    rationale: string;
+  } | null;
+}
+
+// ---------------------------------------------------------------------------
+// Research artifact — durable file-based output from a hypothesis evaluation
+// ---------------------------------------------------------------------------
+
+/** Type of research artifact file. */
+export enum ResearchArtifactType {
+  /** Full research report for promotion review. */
+  PromotionArtifact = 'promotion_artifact',
+  /** Executive summary for operator surfaces. */
+  Summary = 'summary',
+  /** Full evaluation report with per-window evidence. */
+  FullReport = 'full_report',
+  /** Walk-forward winner configuration export. */
+  WinnerConfig = 'winner_config',
+  /** Hypothesis graph snapshot as rendered markdown. */
+  HypothesisRendered = 'hypothesis_rendered',
+  /** Raw evaluation diagnostics. */
+  Diagnostics = 'diagnostics',
+}
+
+/** Serialization format of a research artifact. */
+export type ResearchArtifactFormat = 'markdown' | 'json' | 'yaml';
+
+/**
+ * Full persisted research artifact row.
+ *
+ * Represents a single artifact file emitted during the hypothesis research
+ * pipeline. Keyed to a hypothesis evaluation so the full artifact set can
+ * be enumerated for promotion handoff or operator inspection.
+ */
+export interface ResearchArtifactRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → hypothesis_evaluations(id). */
+  hypothesisEvaluationId: number;
+  /** Artifact type discriminator. */
+  artifactType: ResearchArtifactType;
+  /** Serialization format. */
+  format: ResearchArtifactFormat;
+  /** Relative file path from the research artifacts root. */
+  filePath: string;
+  /** Human-readable label for the artifact (e.g. 'Promotion-ready markdown report'). */
+  label: string;
+  /** Unix timestamp (ms) when the artifact was created. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new research artifact (without id). */
+export interface NewResearchArtifact {
+  hypothesisEvaluationId: number;
+  artifactType: ResearchArtifactType;
+  format: ResearchArtifactFormat;
+  filePath: string;
+  label: string;
+  createdAt?: number;
+}
+
+/**
+ * Structured result from HypothesisResearchEvaluator.evaluate().
+ *
+ * Carries the full evaluation outcome for downstream consumption
+ * and promotion handoff. Includes the persisted evaluation row,
+ * linked walk-forward run reference, winner selection details,
+ * aggregate cross-trial metrics, artifact file paths, and the
+ * final lifecycle status with human-readable rationale.
+ *
+ * Null-safe: walkForwardRun, winner, and aggregateMetrics are null
+ * when evaluation failed before the run was created or winner was
+ * selected.
+ */
+export interface HypothesisEvaluationResult {
+  /** The persisted evaluation row. */
+  evaluation: HypothesisEvaluationRow;
+  /** The persisted walk-forward run, or null when evaluation failed before run creation. */
+  walkForwardRun: {
+    id: number;
+    label: string;
+    status: string;
+    windowCount: number;
+    totalTrials: number;
+  } | null;
+  /** Selected winner details, or null for no-winner/failed evaluations. */
+  winner: {
+    trialId: number;
+    trialLabel: string;
+    paramsJson: string;
+    aggregateMergedScore: number;
+    aggregateDeterministicScore: number;
+    aggregateLlmScore: number | null;
+  } | null;
+  /** Aggregate walk-forward metrics from the evaluation run, or null when unavailable. */
+  aggregateMetrics: {
+    scoreStability: number;
+    topKOverlap: number;
+    llmConsultationRate: number | null;
+    llmDivergence: number | null;
+  } | null;
+  /** Artifact file paths emitted during evaluation (under data/artifacts/research/<hypothesis-id>/). */
+  artifactPaths: string[];
+  /** Final evaluation lifecycle status. */
+  finalStatus: HypothesisEvaluationStatus;
+  /** Human-readable evaluation rationale. */
+  rationale: string;
+}
+
+/**
+ * Configuration for a single hypothesis evaluation run.
+ *
+ * Controls the walk-forward replay range, window geometry, and
+ * winner-selection thresholds used to evaluate the hypothesis.
+ * Sensible defaults enable quick evaluation; override for
+ * fine-grained control.
+ */
+export interface HypothesisResearchConfig {
+  /** Walk-forward replay range start (epoch ms). Default: 30 days before now. */
+  rangeStart?: number;
+  /** Walk-forward replay range end (epoch ms). Default: now. */
+  rangeEnd?: number;
+  /** Rolling window size in ms. Default: 7 days (7 * 86_400_000). */
+  windowSizeMs?: number;
+  /** Step size between windows in ms. Default: 1 day (86_400_000). */
+  stepSizeMs?: number;
+  /** In-sample ratio for window partitioning. Default: 0.8. */
+  inSampleRatio?: number;
+  /** Maximum candidates per replay tick. Default: 5. */
+  maxCandidates?: number;
+  /** Tick cadence in minutes. Default: 5. */
+  cadenceMinutes?: number;
+  /** Winner-selection strategy. Default: 'threshold'. */
+  selectionStrategy?: 'top_ranked' | 'threshold' | 'composite';
+  /** Minimum merged score for threshold/composite selection. Default: 0.7. */
+  minMergedScore?: number;
+  /** Minimum number of windows with evidence. Default: 1. */
+  minWindowCount?: number;
+  /** Minimum Sharpe ratio for composite selection. Default: 0.8. */
+  minSharpeRatio?: number;
+  /** Maximum drawdown allowed (as positive %) for composite selection. */
+  maxDrawdown?: number;
+  /** Human-readable label for the evaluation run. Auto-generated when omitted. */
+  label?: string;
+  /** When true, execute replay-approved candidates through paper execution state. */
+  enablePaperExecution?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Provider proposal response types
 // ---------------------------------------------------------------------------
 
@@ -3419,4 +3810,277 @@ export interface OperatorBacktestDetail {
   diagnostics: string[];
   /** Provenance metadata for this detail payload. */
   provenance: OperatorProvenance;
+}
+
+// ---------------------------------------------------------------------------
+// Research publication — governed publish-back handoff (M011/S03)
+// ---------------------------------------------------------------------------
+
+/**
+ * Durable publication status for a research hypothesis publish-back.
+ *
+ * - `pending`: Publication has been created but not yet validated against thresholds.
+ * - `published`: Hypothesis passed governance thresholds and was published into
+ *   the main system as a recognized strategy with lifecycle state and governance decision.
+ * - `held`: Hypothesis did not meet governance thresholds — publication was declined.
+ * - `rejected`: Hypothesis evaluation is in a terminal state that precludes
+ *   publication (Failed, Cancelled, NoWinner).
+ */
+export enum ResearchPublicationStatus {
+  Pending = 'pending',
+  Published = 'published',
+  Held = 'held',
+  Rejected = 'rejected',
+}
+
+/**
+ * Verdict for a publish-back governance evaluation.
+ *
+ * - `publish`: The hypothesis evaluation meets all governance thresholds.
+ * - `hold`: One or more thresholds are not met; publication is declined.
+ */
+export enum ResearchPublishBackVerdict {
+  Publish = 'publish',
+  Hold = 'hold',
+}
+
+/**
+ * Evidence snapshot persisted with a research publication decision.
+ *
+ * Captures the threshold configuration used, actual scores, artifact
+ * completeness markers, and the rationale for the decision so downstream
+ * inspection surfaces can audit without re-evaluating.
+ */
+export interface ResearchPublicationEvidenceSnapshot {
+  /** Minimum merged score threshold required for publication. */
+  minMergedScore: number;
+  /** Actual merged score of the selected walk-forward winner. */
+  actualMergedScore: number | null;
+  /** Whether a promotion artifact was found for the evaluation. */
+  hasPromotionArtifact: boolean;
+  /** Whether any research artifacts exist for the evaluation. */
+  hasArtifacts: boolean;
+  /** Total artifact count for the evaluation. */
+  artifactCount: number;
+  /** Whether the evaluation rationale is non-empty. */
+  hasRationale: boolean;
+  /** Whether the evaluation has a selected walk-forward winner. */
+  hasWinner: boolean;
+  /** If held, reasons for the hold verdict. */
+  holdReasons: string[];
+}
+
+/**
+ * Full persisted research publication row.
+ *
+ * One row per hypothesis evaluation (UNIQUE on hypothesis_evaluation_id).
+ * Carries the publication status, derived strategy identity for the main
+ * system, governance linkage, and evidence snapshot. Created atomically
+ * with lifecycle state and governance decision rows.
+ */
+export interface ResearchPublicationRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** FK → hypothesis_evaluations(id). UNIQUE — idempotency key. */
+  hypothesisEvaluationId: number;
+  /** FK → hypothesis_graphs(id). */
+  hypothesisGraphId: number;
+  /** Current publication status. */
+  status: ResearchPublicationStatus;
+  /** Derived strategy identity (e.g. 'research-hypothesis-<id>'). */
+  strategyId: string;
+  /** Strategy version (e.g. '1.0.0'). */
+  strategyVersion: string;
+  /** Market profile ID (e.g. 'INDIA_NSE_EQ'). */
+  marketId: string;
+  /** Human-readable rationale for the publication outcome. */
+  rationale: string;
+  /** Evidence snapshot JSON — threshold config, scores, artifact metadata. */
+  evidenceJson: string;
+  /** FK → strategy_lifecycle_state(id). Set when lifecycle entry is created. */
+  lifecycleStateId: number | null;
+  /** FK → governance_decisions(id). Set when governance decision is created. */
+  governanceDecisionId: number | null;
+  /** Unix timestamp (ms) when publication was finalized, or null. */
+  publishedAt: number | null;
+  /** Unix timestamp (ms) when this row was created. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new research publication (without id). */
+export type NewResearchPublication = Omit<ResearchPublicationRow, 'id'>;
+
+/**
+ * Configuration for the publish-back governance check.
+ *
+ * Thresholds control whether a hypothesis evaluation is eligible for
+ * publication. Sensible defaults enable quick publish-back; override
+ * for fine-grained control.
+ */
+export interface ResearchPublishBackConfig {
+  /**
+   * Minimum merged score (0–1) required for publication.
+   * Default: 0.7.
+   */
+  minMergedScore?: number;
+  /**
+   * Whether a promotion artifact (type: 'promotion_artifact') is required.
+   * Default: true.
+   */
+  requirePromotionArtifact?: boolean;
+  /**
+   * Whether a diagnostics artifact (type: 'diagnostics') is required.
+   * Default: false.
+   */
+  requireDiagnosticsArtifact?: boolean;
+  /**
+   * Whether a hypothesis rendered artifact is required.
+   * Default: false.
+   */
+  requireHypothesisArtifact?: boolean;
+  /**
+   * Human-readable label for the publication run.
+   * Auto-generated when omitted.
+   */
+  label?: string;
+  /**
+   * When true, validates without persisting any records.
+   * Returns the result with verdict and reasons but no side effects.
+   * Default: false.
+   */
+  dryRun?: boolean;
+}
+
+/** Default publish-back configuration. */
+export const DEFAULT_PUBLISH_BACK_CONFIG: ResearchPublishBackConfig = {
+  minMergedScore: 0.7,
+  requirePromotionArtifact: true,
+  requireDiagnosticsArtifact: false,
+  requireHypothesisArtifact: false,
+  dryRun: false,
+};
+
+/**
+ * Structured result from ResearchPublishBackService.publish().
+ *
+ * Carries the publication receipt, linked lifecycle state, governance
+ * decision, and evidence snapshot for downstream CLI inspection and
+ * operator surfaces.
+ */
+export interface ResearchPublishBackResult {
+  /** The publication verdict. */
+  verdict: ResearchPublishBackVerdict;
+  /** The persisted publication row, or null when the publish was a dry-run. */
+  publication: ResearchPublicationRow | null;
+  /** The evaluation that was the source of this publication. */
+  evaluation: {
+    id: number;
+    status: string;
+    hypothesisGraphId: number;
+    rationale: string;
+  };
+  /** The linked walk-forward winner, or null when no winner exists. */
+  winner: {
+    mergedScore: number | null;
+    deterministicScore: number | null;
+  } | null;
+  /** Linked lifecycle state ID, or null when not published. */
+  lifecycleStateId: number | null;
+  /** Linked governance decision ID, or null when not published. */
+  governanceDecisionId: number | null;
+  /** Human-readable rationale for the publication outcome. */
+  rationale: string;
+  /** Whether this result was a dry-run (no records persisted). */
+  isDryRun: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Research lineage audit — reusable proof assembly snapshot for S04
+// ---------------------------------------------------------------------------
+
+/**
+ * Duplicate-skip evidence block within a research lineage snapshot.
+ *
+ * Present when an exact prior failure or rejection was found in the
+ * hypothesis memory ledger. Carries the stored reason code and
+ * human-readable message so proof code can explain why evaluation
+ * was skipped without reprocessing the hash.
+ */
+export interface ResearchLineageDuplicateEvidence {
+  /** The memory ledger row. */
+  entry: HypothesisMemoryRecordRow;
+  /** Whether a later hypothesis graph row exists despite the memory entry. */
+  hasLaterHypothesis: boolean;
+}
+
+/**
+ * Evaluation-with-run snapshot block within a research lineage snapshot.
+ *
+ * Carries the evaluation row and compact walk-forward run / winner
+ * snapshots so proof code can display evaluation context without a
+ * separate query. Null-safe: walkForwardRun and winner are null when
+ * no run or winner is linked.
+ */
+export interface ResearchLineageEvaluationSnapshot {
+  evaluation: HypothesisEvaluationRow;
+  /** Compact walk-forward run snapshot, or null. */
+  walkForwardRun: {
+    id: number;
+    label: string;
+    status: string;
+    windowCount: number;
+    totalTrials: number;
+  } | null;
+  /** Compact winner snapshot, or null. */
+  winner: {
+    id: number;
+    result: string;
+    selectedTrialId: number | null;
+    selectionStrategy: string;
+    rationale: string;
+  } | null;
+}
+
+/**
+ * Publication evidence block within a research lineage snapshot.
+ *
+ * Carries the publication row and linked lifecycle state / governance
+ * decision IDs so proof code can verify the complete publish-back chain
+ * without separate queries.
+ */
+export interface ResearchLineagePublicationEvidence {
+  publication: ResearchPublicationRow;
+  /** Lifecycle state row, or null. */
+  lifecycleState: StrategyLifecycleStateRow | null;
+  /** Recent governance decisions (newest first, max 20). */
+  governanceDecisions: GovernanceDecisionRow[];
+}
+
+/**
+ * Reusable research-lineage snapshot — the single typed truth source
+ * for proof code and operator inspection surfaces.
+ *
+ * Null-safe: every lineage segment is independently loaded and may be
+ * null or empty. Proof code reads one typed shape instead of
+ * duplicating SQL across the duplicate-skip branch and the
+ * publish-success branch.
+ *
+ * All rationale/reason strings and artifact ordering are asserted from
+ * persisted state — the snapshot does not infer or derive them.
+ */
+export interface ResearchLineageSnapshot {
+  /** The canonical hypothesis hash this lineage was assembled for. */
+  canonicalHash: string;
+  /** Duplicate-skip evidence from the memory ledger, or null. */
+  duplicateEvidence: ResearchLineageDuplicateEvidence | null;
+  /** The persisted hypothesis graph row, or null. */
+  hypothesis: HypothesisGraphRow | null;
+  /** Evaluation with linked run/winner snapshots, or null. */
+  evaluation: ResearchLineageEvaluationSnapshot | null;
+  /** Enumerated research artifacts (oldest first), or null when no evaluation exists. */
+  artifacts: ResearchArtifactRow[] | null;
+  /** Publication evidence, or null when no publication exists. */
+  publicationEvidence: ResearchLineagePublicationEvidence | null;
+  /** Unix timestamp (ms) when this snapshot was assembled. */
+  assembledAt: number;
 }

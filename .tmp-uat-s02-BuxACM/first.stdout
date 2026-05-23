@@ -1,0 +1,72 @@
+
+> trader@0.1.0 evaluate:hypothesis
+> node --import tsx src/research/evaluate-hypothesis-main.ts --hypothesis-id 1 --db-path /home/shwetanshu/trader/.tmp-uat-s02-BuxACM/uat.db --work-dir /home/shwetanshu/trader/.tmp-uat-s02-BuxACM/work --days 14 --window 4 --step 2 --ratio 0.75 --strategy threshold --min-score 0.2 --min-windows 1 --max-candidates 3 --cadence-minutes 5
+
+─────────────────────────────────────────────────────────────
+  Hypothesis Research Evaluator (CLI)
+─────────────────────────────────────────────────────────────
+  Hypothesis ID:   1
+  Status:          validated
+  Canonical hash:  abababababababab...
+  DB path:         /home/shwetanshu/trader/.tmp-uat-s02-BuxACM/uat.db
+  Date range:      2026-05-09 → 2026-05-23
+  Window:          4d, Step: 2d, Ratio: 0.75
+  Strategy:        threshold
+  Min score:       0.2
+  Max candidates:  3
+  Cadence:         5m
+
+  Running evaluation...
+[walk-forward] run 1 starting trial 1/1: hypothesis-1
+[walk-forward] run 1 trial 1 window 1/6 in-sample replay wf1-t01-in-W01-2026-05-09-hypothesis-1
+[walk-forward] run 1 trial 1 window 1/6 out-of-sample replay wf1-t01-out-W01-2026-05-09-hypothesis-1
+[walk-forward] run 1 trial 1 window 2/6 in-sample replay wf1-t01-in-W02-2026-05-11-hypothesis-1
+[walk-forward] run 1 trial 1 window 2/6 out-of-sample replay wf1-t01-out-W02-2026-05-11-hypothesis-1
+[walk-forward] run 1 trial 1 window 3/6 in-sample replay wf1-t01-in-W03-2026-05-13-hypothesis-1
+[walk-forward] run 1 trial 1 window 3/6 out-of-sample replay wf1-t01-out-W03-2026-05-13-hypothesis-1
+[walk-forward] run 1 trial 1 window 4/6 in-sample replay wf1-t01-in-W04-2026-05-15-hypothesis-1
+[walk-forward] run 1 trial 1 window 4/6 out-of-sample replay wf1-t01-out-W04-2026-05-15-hypothesis-1
+[walk-forward] run 1 trial 1 window 5/6 in-sample replay wf1-t01-in-W05-2026-05-17-hypothesis-1
+[walk-forward] run 1 trial 1 window 5/6 out-of-sample replay wf1-t01-out-W05-2026-05-17-hypothesis-1
+[walk-forward] run 1 trial 1 window 6/6 in-sample replay wf1-t01-in-W06-2026-05-19-hypothesis-1
+[walk-forward] run 1 trial 1 window 6/6 out-of-sample replay wf1-t01-out-W06-2026-05-19-hypothesis-1
+[walk-forward] run 1 checkpoint 1 saved after trial 1/1
+
+─────────────────────────────────────────────────────────────
+  Evaluation Complete
+─────────────────────────────────────────────────────────────
+  Evaluation ID:   1
+  Final Status:    completed
+  Duration:        10605ms
+
+  Walk-Forward Run:
+    Run ID:        1
+    Label:         
+    Status:        completed
+    Windows:       6
+    Trials:        1
+
+  Winner:
+    Trial ID:      1
+    Label:         hypothesis-1
+    Merged Score:  0.6943
+    Det Score:     0.6943
+
+  Aggregate Metrics:
+    Score Stability:  0.5520
+    Top-K Overlap:    0.0000
+
+  Rationale:
+    Selected hypothesis-1 (rank 1) via threshold selection with merged score 0.6943 across 12 windows. Out-of-sample evidence: avg OOS Sharpe=20.81, max OOS drawdown=0.09%, avg OOS win rate=98%, OOS windows=6. Selection thresholds: minMergedScore=0.2, minWindowCount=1.
+
+  Artifact Paths:
+    data/artifacts/research/1/promotion-artifact.json (909 bytes)
+    data/artifacts/research/1/diagnostics.json (354 bytes)
+    data/artifacts/research/1/hypothesis.json (1330 bytes)
+
+  DB Artifact Rows: 3
+    [promotion_artifact] promotion-artifact.json — Promotion-ready research artifact
+    [diagnostics] diagnostics.json — Evaluation diagnostics
+    [hypothesis_rendered] hypothesis.json — Hypothesis graph snapshot
+
+  Done.
