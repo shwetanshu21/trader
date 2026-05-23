@@ -693,6 +693,25 @@ CREATE TABLE IF NOT EXISTS hypothesis_generation_reasons (
 
 CREATE INDEX IF NOT EXISTS idx_gen_reasons_attempt ON hypothesis_generation_reasons(generation_attempt_id);
 
+-- M012/S01: Overnight research runs — durable run-state for non-trading-window orchestration
+CREATE TABLE IF NOT EXISTS overnight_runs (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  label                 TEXT    NOT NULL,
+  status                TEXT    NOT NULL,
+  market_phase          TEXT,
+  current_phase         TEXT,
+  checkpoint_pointer    TEXT,
+  workspace_path        TEXT    NOT NULL DEFAULT '',
+  refusal_reason        TEXT,
+  last_error            TEXT,
+  created_at            INTEGER NOT NULL,
+  started_at            INTEGER,
+  completed_at          INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_overnight_runs_status ON overnight_runs(status);
+CREATE INDEX IF NOT EXISTS idx_overnight_runs_created ON overnight_runs(created_at);
+
 -- M005/S03: Walk-forward winners — persisted winner-selection decisions
 CREATE TABLE IF NOT EXISTS walk_forward_winners (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,
