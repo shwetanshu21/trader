@@ -19,6 +19,8 @@
     "proof:research:s04": "node --import tsx src/deployment/verify-m011-s04-research-proof.ts",
     "proof:research:s05": "node --import tsx src/deployment/verify-m011-s05-real-generation-proof.ts",
     "proof:paper:s06:sh": "bash scripts/verify-m009-s06-paper-proof.sh",
+    "overnight:cli": "node --import tsx src/research/overnight-research-main.ts",
+    "proof:overnight:s01": "node --import tsx src/deployment/verify-m012-s01-overnight-proof.ts",
     "start:upstox:notifier": "tsx src/upstox/notifier-main.ts",
     "start:upstox:mcp-local": "tsx src/upstox/mcp-local-main.ts",
     "start:upstox:stack": "bash scripts/start-upstox-stack.sh",
