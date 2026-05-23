@@ -5,10 +5,6 @@
 // 2. Persists run-level state (status, phase, checkpoint, error) in the
 //    overnight_runs table via OvernightRunRepo.
 // 3. Exposes checkpoint/audit metadata for resume by a future agent.
-//
-// This path is intentionally separate from src/runtime/scheduler.ts and
-// the current runtime boot sequence. It operates entirely on the research
-// workspace and the overnight_runs DB table without touching live runtime state.
 
 import { MarketClock } from '../runtime/market-clock.js';
 import { MarketPhase } from '../types/runtime.js';
@@ -18,29 +14,18 @@ import {
   type OvernightRunRow,
   type NewOvernightRun,
   type OvernightCheckpointMetadata,
+  type OvernightPhase,
+  type OvernightPublicationSnapshot,
 } from './overnight-run-repo.js';
 
-// ---------------------------------------------------------------------------
-// Result shape
-// ---------------------------------------------------------------------------
-
-/** Outcome of a tryStart attempt. */
 export interface TryStartResult {
-  /** The persisted run row (accepted or refused). */
   run: OvernightRunRow;
-  /** True when the run was accepted and marked running. */
   accepted: boolean;
-  /** Human-readable reason when accepted is false. */
   refusalReason: string | null;
-  /** The market phase at decision time. */
   marketPhase: MarketPhase;
-  /** Human-readable market phase name. */
   marketPhaseName: string;
+  resumed: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// Orchestrator
-// ---------------------------------------------------------------------------
 
 export class OvernightOrchestrator {
   private readonly _repo: OvernightRunRepo;
@@ -51,86 +36,97 @@ export class OvernightOrchestrator {
     this._clock = clock;
   }
 
-  // -----------------------------------------------------------------------
-  // Public API
-  // -----------------------------------------------------------------------
-
-  /**
-   * Attempt to start a new overnight research run.
-   *
-   * Market-window gate behaviour:
-   * - When the market is closed (weekend, holiday, after-hours), creates a
-   *   pending run, immediately marks it running, and returns accepted=true.
-   * - When the market is open (pre, regular, or post), creates a refused run
-   *   with the refusal reason and returns accepted=false.
-   *
-   * @param label - Human-readable label for the run.
-   * @param workspacePath - Path to the research workspace for this run.
-   * @param now - Optional timestamp override (used by tests).
-   * @returns TryStartResult with the persisted run row and gate outcome.
-   */
   tryStart(label: string, workspacePath: string, now?: Date, researchDbPath?: string): TryStartResult {
-    const nowDate = now ?? new Date();
+    return this.tryStartOrResume({ label, workspacePath, now, researchDbPath });
+  }
+
+  tryStartOrResume(options: {
+    label: string;
+    workspacePath: string;
+    now?: Date;
+    researchDbPath?: string;
+    resumeRunId?: number;
+  }): TryStartResult {
+    const nowDate = options.now ?? new Date();
     const marketPhase = this._clock.getPhase(nowDate);
     const marketPhaseName = this._summarizePhase(marketPhase);
     const createdAt = nowDate.getTime();
 
-    if (this._clock.isClosed(nowDate)) {
-      // Market is closed — accept and start the run
-      const newRun: NewOvernightRun = {
-        label,
-        status: OvernightRunStatus.Running,
+    if (!this._clock.isClosed(nowDate)) {
+      const refusalReason = `Market is open (phase: ${marketPhaseName}). Overnight research runs are only accepted during closed market windows.`;
+      const refusedRun: NewOvernightRun = {
+        label: options.label,
+        status: OvernightRunStatus.Refused,
         marketPhase: marketPhase,
-        currentPhase: 'generate',
-        workspacePath,
-        researchDbPath: researchDbPath ?? '',
+        workspacePath: options.workspacePath,
+        researchDbPath: options.researchDbPath ?? '',
+        refusalReason,
         createdAt,
-        startedAt: createdAt,
       };
-
-      const run = this._repo.insertRun(newRun);
-
+      const run = this._repo.insertRun(refusedRun);
       return {
         run,
+        accepted: false,
+        refusalReason,
+        marketPhase,
+        marketPhaseName,
+        resumed: false,
+      };
+    }
+
+    const resumable = options.resumeRunId != null
+      ? this._repo.getRun(options.resumeRunId)
+      : this._repo.getLatestRunnableRun();
+
+    if (
+      resumable
+      && resumable.status !== OvernightRunStatus.Completed
+      && resumable.status !== OvernightRunStatus.Refused
+      && (options.researchDbPath == null || resumable.researchDbPath === options.researchDbPath)
+      && resumable.workspacePath === options.workspacePath
+    ) {
+      const resumed = this.recordResumeAttempt(
+        resumable.id,
+        'rerun detected; continuing from persisted overnight run state',
+        createdAt,
+      );
+      const reopened = this._repo.updateRun(resumable.id, {
+        status: OvernightRunStatus.Running,
+        researchDbPath: options.researchDbPath ?? resumable.researchDbPath,
+        lastError: null,
+      }) ?? resumable;
+      return {
+        run: reopened,
         accepted: true,
         refusalReason: null,
         marketPhase,
         marketPhaseName,
+        resumed: resumed != null,
       };
     }
 
-    // Market is open — refuse
-    const refusalReason = `Market is open (phase: ${marketPhaseName}). Overnight research runs are only accepted during closed market windows.`;
-
-    const refusedRun: NewOvernightRun = {
-      label,
-      status: OvernightRunStatus.Refused,
+    const newRun: NewOvernightRun = {
+      label: options.label,
+      status: OvernightRunStatus.Running,
       marketPhase: marketPhase,
-      workspacePath,
-      researchDbPath: researchDbPath ?? '',
-      refusalReason,
+      currentPhase: 'generate',
+      workspacePath: options.workspacePath,
+      researchDbPath: options.researchDbPath ?? '',
       createdAt,
+      startedAt: createdAt,
     };
 
-    const run = this._repo.insertRun(refusedRun);
-
+    const run = this._repo.insertRun(newRun);
     return {
       run,
-      accepted: false,
-      refusalReason,
+      accepted: true,
+      refusalReason: null,
       marketPhase,
       marketPhaseName,
+      resumed: false,
     };
   }
 
-  /**
-   * Save a checkpoint for an active run.
-   *
-   * Serialises the checkpoint metadata to JSON and stores it in the
-   * checkpoint_pointer column. Does not change the run status.
-   *
-   * @returns The updated run row, or null if the run does not exist.
-   */
   saveCheckpoint(runId: number, metadata: OvernightCheckpointMetadata): OvernightRunRow | null {
     const pointerJson = JSON.stringify(metadata);
     return this._repo.updateRun(runId, {
@@ -138,65 +134,148 @@ export class OvernightOrchestrator {
     });
   }
 
-  /**
-   * Update the current phase of an active run.
-   *
-   * @returns The updated run row, or null if the run does not exist.
-   */
-  markPhase(runId: number, phase: string): OvernightRunRow | null {
-    return this._repo.updateRun(runId, {
-      currentPhase: phase,
+  markPhase(runId: number, phase: string, detail?: string): OvernightRunRow | null {
+    const now = Date.now();
+    return this._appendMetadata(runId, (metadata) => {
+      metadata.phaseTransitions.push({
+        phase,
+        status: 'started',
+        recordedAt: now,
+        detail,
+      });
+      metadata.failureContext = null;
+      return {
+        currentPhase: phase,
+        status: OvernightRunStatus.Running,
+        metadataJson: this._repo.serializeMetadata(metadata),
+        completedAt: null,
+        lastError: null,
+      };
     });
   }
 
-  /**
-   * Mark a run as completed.
-   *
-   * @returns The updated run row, or null if the run does not exist.
-   */
+  markPhaseCompleted(runId: number, phase: OvernightPhase, detail?: string): OvernightRunRow | null {
+    const now = Date.now();
+    return this._appendMetadata(runId, (metadata) => {
+      metadata.phaseTransitions.push({
+        phase,
+        status: 'completed',
+        recordedAt: now,
+        detail,
+      });
+      metadata.lastSuccessfulPhase = phase;
+      metadata.failureContext = null;
+      return {
+        metadataJson: this._repo.serializeMetadata(metadata),
+      };
+    });
+  }
+
+  recordResumeAttempt(runId: number, reason: string, recordedAt: number = Date.now()): OvernightRunRow | null {
+    const run = this._repo.getRun(runId);
+    if (!run) return null;
+    const checkpoint = this.readCheckpoint(run);
+    return this._appendMetadata(runId, (metadata) => {
+      metadata.resumeAttempts.push({
+        resumedAt: recordedAt,
+        fromPhase: run.currentPhase,
+        checkpointPhase: checkpoint?.phase ?? null,
+        reason,
+      });
+      return {
+        metadataJson: this._repo.serializeMetadata(metadata),
+      };
+    });
+  }
+
+  recordPublication(runId: number, publication: OvernightPublicationSnapshot): OvernightRunRow | null {
+    return this._appendMetadata(runId, (metadata) => {
+      metadata.publication = publication;
+      return {
+        metadataJson: this._repo.serializeMetadata(metadata),
+      };
+    });
+  }
+
   markCompleted(runId: number): OvernightRunRow | null {
     const now = Date.now();
     return this._repo.updateRun(runId, {
       status: OvernightRunStatus.Completed,
+      currentPhase: 'completed',
       completedAt: now,
+      lastError: null,
     });
   }
 
-  /**
-   * Mark a run as failed with an error message.
-   *
-   * @returns The updated run row, or null if the run does not exist.
-   */
   markFailed(runId: number, error: string): OvernightRunRow | null {
     const now = Date.now();
-    return this._repo.updateRun(runId, {
-      status: OvernightRunStatus.Failed,
-      lastError: error,
-      completedAt: now,
+    const run = this._repo.getRun(runId);
+    const failedPhase = run?.currentPhase ?? this.readCheckpoint(run)?.phase ?? null;
+    return this._appendMetadata(runId, (metadata) => {
+      if (failedPhase) {
+        metadata.phaseTransitions.push({
+          phase: failedPhase,
+          status: 'failed',
+          recordedAt: now,
+          detail: error,
+        });
+      }
+      metadata.failureContext = {
+        phase: failedPhase,
+        message: error,
+        recordedAt: now,
+      };
+      return {
+        status: OvernightRunStatus.Failed,
+        lastError: error,
+        completedAt: now,
+        metadataJson: this._repo.serializeMetadata(metadata),
+      };
     });
   }
 
-  /**
-   * Get a run by id.
-   */
   getRun(runId: number): OvernightRunRow | null {
     return this._repo.getRun(runId);
   }
 
-  /**
-   * Get the latest run across all runs.
-   */
   getLatestRun(): OvernightRunRow | null {
     return this._repo.getLatestRun();
   }
 
-  // -----------------------------------------------------------------------
-  // Private helpers
-  // -----------------------------------------------------------------------
+  readCheckpoint(run: Pick<OvernightRunRow, 'checkpointPointer'> | null | undefined): OvernightCheckpointMetadata | null {
+    if (!run?.checkpointPointer) return null;
+    try {
+      return JSON.parse(run.checkpointPointer) as OvernightCheckpointMetadata;
+    } catch {
+      return null;
+    }
+  }
 
-  /**
-   * Build a human-readable market phase string for error messages and audit trails.
-   */
+  getNextPhase(run: OvernightRunRow): OvernightPhase {
+    const metadata = this._repo.readMetadata(run);
+    if (metadata.lastSuccessfulPhase === 'publish') return 'completed';
+    if (metadata.lastSuccessfulPhase === 'evaluate') return 'publish';
+    if (metadata.lastSuccessfulPhase === 'generate') return 'evaluate';
+
+    const checkpoint = this.readCheckpoint(run);
+    if (checkpoint?.phase === 'evaluate' && checkpoint.completedItems >= checkpoint.totalItems) return 'publish';
+    if (checkpoint?.phase === 'generate' && checkpoint.completedItems >= checkpoint.totalItems) return 'evaluate';
+    if (run.currentPhase === 'publish') return 'publish';
+    if (run.currentPhase === 'evaluate') return 'evaluate';
+    return 'generate';
+  }
+
+  private _appendMetadata(
+    runId: number,
+    mutate: (metadata: ReturnType<OvernightRunRepo['readMetadata']>) => Partial<Pick<OvernightRunRow, 'status' | 'currentPhase' | 'checkpointPointer' | 'researchDbPath' | 'lastError' | 'metadataJson' | 'startedAt' | 'completedAt'>>,
+  ): OvernightRunRow | null {
+    const run = this._repo.getRun(runId);
+    if (!run) return null;
+    const metadata = this._repo.readMetadata(run);
+    const updates = mutate(metadata);
+    return this._repo.updateRun(runId, updates);
+  }
+
   private _summarizePhase(phase: MarketPhase): string {
     switch (phase) {
       case MarketPhase.PreMarket:

@@ -12,53 +12,71 @@
 
 import type Database from 'better-sqlite3';
 
-// ---------------------------------------------------------------------------
-// Enums
-// ---------------------------------------------------------------------------
-
 /** Lifecycle status of an overnight research run. */
 export enum OvernightRunStatus {
-  /** Run record created but not yet started. */
   Pending = 'pending',
-  /** Run is actively executing research phases. */
   Running = 'running',
-  /** All phases completed successfully. */
   Completed = 'completed',
-  /** Run encountered an error and stopped. */
   Failed = 'failed',
-  /** Run was refused by the market-window gate (market is open). */
   Refused = 'refused',
 }
 
-// ---------------------------------------------------------------------------
-// Row shapes
-// ---------------------------------------------------------------------------
+export type OvernightPhase = 'generate' | 'evaluate' | 'publish' | 'completed';
+
+export interface OvernightResumeEvent {
+  resumedAt: number;
+  fromPhase: string | null;
+  checkpointPhase: string | null;
+  reason: string;
+}
+
+export interface OvernightPhaseTransition {
+  phase: string;
+  status: 'started' | 'completed' | 'failed' | 'skipped';
+  recordedAt: number;
+  detail?: string;
+}
+
+export interface OvernightPublicationSnapshot {
+  verdict: 'publish' | 'hold';
+  publicationId: number | null;
+  lifecycleStateId: number | null;
+  governanceDecisionId: number | null;
+  rationale: string;
+  recordedAt: number;
+}
+
+export interface OvernightRunMetadata {
+  schemaVersion: number;
+  resumeAttempts: OvernightResumeEvent[];
+  phaseTransitions: OvernightPhaseTransition[];
+  lastSuccessfulPhase: string | null;
+  publication: OvernightPublicationSnapshot | null;
+  failureContext: {
+    phase: string | null;
+    message: string;
+    recordedAt: number;
+  } | null;
+}
 
 /** Full persisted overnight run row with auto-generated id. */
 export interface OvernightRunRow {
   id: number;
   label: string;
   status: OvernightRunStatus;
-  /** The MarketPhase snapshot at decision time (e.g. 'regular', 'closed'). */
   marketPhase: string | null;
-  /** Current orchestrator phase for resume (e.g. 'generate', 'evaluate', 'publish'). */
   currentPhase: string | null;
-  /** JSON pointer to checkpoint metadata (trial progress, last processed id, etc.). */
   checkpointPointer: string | null;
-  /** Absolute or relative path to the research workspace for this run. */
   workspacePath: string;
-  /** Explicit path to the isolated research DB for this run (empty when not set). */
   researchDbPath: string;
-  /** Human-readable reason when status is 'refused'. */
   refusalReason: string | null;
-  /** Error message when status is 'failed'. */
   lastError: string | null;
+  metadataJson: string | null;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
 }
 
-/** Input shape for creating a new overnight run row (id is auto-generated). */
 export interface NewOvernightRun {
   label: string;
   status: OvernightRunStatus;
@@ -69,28 +87,19 @@ export interface NewOvernightRun {
   researchDbPath?: string;
   refusalReason?: string | null;
   lastError?: string | null;
+  metadataJson?: string | null;
   createdAt: number;
   startedAt?: number | null;
   completedAt?: number | null;
 }
 
-/** Typed checkpoint metadata payload stored in checkpointPointer JSON. */
 export interface OvernightCheckpointMetadata {
-  /** Current orchestrator phase at checkpoint time. */
   phase: string;
-  /** How many items/units have been processed. */
   completedItems: number;
-  /** How many items/units total. */
   totalItems: number;
-  /** Identifier of the last processed item (for resume). */
   lastProcessedId?: string;
-  /** Arbitrary metadata for domain-specific checkpoint state. */
   metadata?: Record<string, unknown>;
 }
-
-// ---------------------------------------------------------------------------
-// DB row shapes (snake_case → camelCase mapping)
-// ---------------------------------------------------------------------------
 
 interface OvernightRunDbRow {
   id: number;
@@ -103,14 +112,11 @@ interface OvernightRunDbRow {
   research_db_path: string;
   refusal_reason: string | null;
   last_error: string | null;
+  metadata_json: string | null;
   created_at: number;
   started_at: number | null;
   completed_at: number | null;
 }
-
-// ---------------------------------------------------------------------------
-// OvernightRunRepo
-// ---------------------------------------------------------------------------
 
 export class OvernightRunRepo {
   private readonly _db: Database.Database;
@@ -119,20 +125,13 @@ export class OvernightRunRepo {
     this._db = db;
   }
 
-  // -----------------------------------------------------------------------
-  // CRUD
-  // -----------------------------------------------------------------------
-
-  /**
-   * Insert a new overnight run. Returns the full row with auto-generated id.
-   */
   insertRun(run: NewOvernightRun): OvernightRunRow {
     const result = this._db.prepare(`
       INSERT INTO overnight_runs
         (label, status, market_phase, current_phase, checkpoint_pointer,
-         workspace_path, research_db_path, refusal_reason, last_error,
+         workspace_path, research_db_path, refusal_reason, last_error, metadata_json,
          created_at, started_at, completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       run.label,
       run.status,
@@ -143,6 +142,7 @@ export class OvernightRunRepo {
       run.researchDbPath ?? '',
       run.refusalReason ?? null,
       run.lastError ?? null,
+      run.metadataJson ?? this.serializeMetadata(createEmptyOvernightRunMetadata()),
       run.createdAt,
       run.startedAt ?? null,
       run.completedAt ?? null,
@@ -152,22 +152,15 @@ export class OvernightRunRepo {
     return this._getRun(id)!;
   }
 
-  /**
-   * Get an overnight run by id. Returns null when it does not exist.
-   */
   getRun(id: number): OvernightRunRow | null {
     return this._getRun(id);
   }
 
-  /**
-   * Get the most recent run, ordered by created_at descending.
-   * Returns null when no runs exist.
-   */
   getLatestRun(): OvernightRunRow | null {
     const row = this._db.prepare(`
       SELECT id, label, status, market_phase, current_phase,
              checkpoint_pointer, workspace_path, research_db_path,
-             refusal_reason, last_error,
+             refusal_reason, last_error, metadata_json,
              created_at, started_at, completed_at
       FROM overnight_runs
       ORDER BY created_at DESC, id DESC
@@ -177,14 +170,26 @@ export class OvernightRunRepo {
     return row ? this._mapRow(row) : null;
   }
 
-  /**
-   * List all overnight runs, newest first.
-   */
+  getLatestRunnableRun(): OvernightRunRow | null {
+    const row = this._db.prepare(`
+      SELECT id, label, status, market_phase, current_phase,
+             checkpoint_pointer, workspace_path, research_db_path,
+             refusal_reason, last_error, metadata_json,
+             created_at, started_at, completed_at
+      FROM overnight_runs
+      WHERE status IN (?, ?)
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `).get(OvernightRunStatus.Running, OvernightRunStatus.Failed) as OvernightRunDbRow | undefined;
+
+    return row ? this._mapRow(row) : null;
+  }
+
   listRuns(limit: number = 20): OvernightRunRow[] {
     const rows = this._db.prepare(`
       SELECT id, label, status, market_phase, current_phase,
              checkpoint_pointer, workspace_path, research_db_path,
-             refusal_reason, last_error,
+             refusal_reason, last_error, metadata_json,
              created_at, started_at, completed_at
       FROM overnight_runs
       ORDER BY created_at DESC, id DESC
@@ -194,12 +199,9 @@ export class OvernightRunRepo {
     return rows.map(this._mapRow);
   }
 
-  /**
-   * Update a run's status and optional fields.
-   */
   updateRun(
     id: number,
-    updates: Partial<Pick<OvernightRunRow, 'status' | 'currentPhase' | 'checkpointPointer' | 'researchDbPath' | 'lastError' | 'startedAt' | 'completedAt'>>,
+    updates: Partial<Pick<OvernightRunRow, 'status' | 'currentPhase' | 'checkpointPointer' | 'researchDbPath' | 'lastError' | 'metadataJson' | 'startedAt' | 'completedAt'>>,
   ): OvernightRunRow | null {
     const existing = this.getRun(id);
     if (!existing) return null;
@@ -211,6 +213,7 @@ export class OvernightRunRepo {
           checkpoint_pointer = ?,
           research_db_path = ?,
           last_error = ?,
+          metadata_json = ?,
           started_at = ?,
           completed_at = ?
       WHERE id = ?
@@ -220,6 +223,7 @@ export class OvernightRunRepo {
       updates.checkpointPointer !== undefined ? updates.checkpointPointer : existing.checkpointPointer,
       updates.researchDbPath !== undefined ? updates.researchDbPath : existing.researchDbPath,
       updates.lastError !== undefined ? updates.lastError : existing.lastError,
+      updates.metadataJson !== undefined ? updates.metadataJson : existing.metadataJson,
       updates.startedAt !== undefined ? updates.startedAt : existing.startedAt,
       updates.completedAt !== undefined ? updates.completedAt : existing.completedAt,
       id,
@@ -228,17 +232,11 @@ export class OvernightRunRepo {
     return this.getRun(id);
   }
 
-  /**
-   * Count total overnight runs.
-   */
   countRuns(): number {
     const row = this._db.prepare('SELECT COUNT(*) AS cnt FROM overnight_runs').get() as { cnt: number };
     return row.cnt;
   }
 
-  /**
-   * Count runs by status.
-   */
   countByStatus(status: OvernightRunStatus): number {
     const row = this._db.prepare(
       'SELECT COUNT(*) AS cnt FROM overnight_runs WHERE status = ?',
@@ -246,15 +244,19 @@ export class OvernightRunRepo {
     return row.cnt;
   }
 
-  // -----------------------------------------------------------------------
-  // Private helpers
-  // -----------------------------------------------------------------------
+  readMetadata(run: Pick<OvernightRunRow, 'metadataJson'>): OvernightRunMetadata {
+    return parseOvernightRunMetadata(run.metadataJson);
+  }
+
+  serializeMetadata(metadata: OvernightRunMetadata): string {
+    return JSON.stringify(metadata);
+  }
 
   private _getRun(id: number): OvernightRunRow | null {
     const row = this._db.prepare(`
       SELECT id, label, status, market_phase, current_phase,
              checkpoint_pointer, workspace_path, research_db_path,
-             refusal_reason, last_error,
+             refusal_reason, last_error, metadata_json,
              created_at, started_at, completed_at
       FROM overnight_runs
       WHERE id = ?
@@ -275,9 +277,38 @@ export class OvernightRunRepo {
       researchDbPath: row.research_db_path,
       refusalReason: row.refusal_reason,
       lastError: row.last_error,
+      metadataJson: row.metadata_json,
       createdAt: row.created_at,
       startedAt: row.started_at,
       completedAt: row.completed_at,
     };
+  }
+}
+
+export function createEmptyOvernightRunMetadata(): OvernightRunMetadata {
+  return {
+    schemaVersion: 1,
+    resumeAttempts: [],
+    phaseTransitions: [],
+    lastSuccessfulPhase: null,
+    publication: null,
+    failureContext: null,
+  };
+}
+
+export function parseOvernightRunMetadata(raw: string | null | undefined): OvernightRunMetadata {
+  if (!raw) return createEmptyOvernightRunMetadata();
+  try {
+    const parsed = JSON.parse(raw) as Partial<OvernightRunMetadata>;
+    return {
+      schemaVersion: 1,
+      resumeAttempts: Array.isArray(parsed.resumeAttempts) ? parsed.resumeAttempts : [],
+      phaseTransitions: Array.isArray(parsed.phaseTransitions) ? parsed.phaseTransitions : [],
+      lastSuccessfulPhase: typeof parsed.lastSuccessfulPhase === 'string' ? parsed.lastSuccessfulPhase : null,
+      publication: parsed.publication ?? null,
+      failureContext: parsed.failureContext ?? null,
+    };
+  } catch {
+    return createEmptyOvernightRunMetadata();
   }
 }
