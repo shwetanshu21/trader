@@ -1,0 +1,190 @@
+{
+  "harness": "M011/S04 Research Proof Harness",
+  "completedAt": "2026-05-23T08:39:33.901Z",
+  "verdict": "PASS",
+  "totalAssertions": 31,
+  "passed": 31,
+  "failed": 0,
+  "assertions": [
+    {
+      "name": "Phase1: validator returns skipped for duplicate hash",
+      "pass": true,
+      "detail": "kind=skipped"
+    },
+    {
+      "name": "Phase1: skipped status is Skipped",
+      "pass": true,
+      "detail": "status=skipped"
+    },
+    {
+      "name": "Phase1: skip reasons contain exact prior match",
+      "pass": true,
+      "detail": "reasons=[{\"reasonCode\":\"exact_failure_match\",\"reasonMessage\":\"Exact prior failed match: S04 proof: prior hypothesis with same canonical form failed during evaluation.\"}]"
+    },
+    {
+      "name": "Phase1: skip reason message references prior failure",
+      "pass": true,
+      "detail": "message=Exact prior failed match: S04 proof: prior hypothesis with same canonical form failed during evaluation."
+    },
+    {
+      "name": "Phase1: canonical hash is preserved",
+      "pass": true,
+      "detail": "got=b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f, expected=b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f"
+    },
+    {
+      "name": "Phase1: no hypothesis row persisted for skipped duplicate",
+      "pass": true,
+      "detail": "found hypothesis id=undefined"
+    },
+    {
+      "name": "Phase2: publish-back verdict is publish",
+      "pass": true,
+      "detail": "verdict=publish"
+    },
+    {
+      "name": "Phase3: success hash has no duplicate evidence",
+      "pass": true,
+      "detail": "got evidence: null"
+    },
+    {
+      "name": "Phase3: hypothesis row is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase3: hypothesis has valid id",
+      "pass": true,
+      "detail": "id=1"
+    },
+    {
+      "name": "Phase3: hypothesis status is failed_evaluation (post-evaluation lifecycle)",
+      "pass": true,
+      "detail": "status=failed_evaluation"
+    },
+    {
+      "name": "Phase3: evaluation snapshot is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase3: evaluation has status Completed",
+      "pass": true,
+      "detail": "status=completed"
+    },
+    {
+      "name": "Phase3: evaluation has walk-forward run linkage",
+      "pass": true,
+      "detail": "null walkForwardRun"
+    },
+    {
+      "name": "Phase3: evaluation has winner linkage",
+      "pass": true,
+      "detail": "null winner"
+    },
+    {
+      "name": "Phase3: evaluation winner has selectedTrialId",
+      "pass": true,
+      "detail": "selectedTrialId=1"
+    },
+    {
+      "name": "Phase3: artifacts array is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase3: at least one artifact exists",
+      "pass": true,
+      "detail": "count=3"
+    },
+    {
+      "name": "Phase3: promotion artifact is present among artifacts",
+      "pass": true,
+      "detail": "types=[\"promotion_artifact\",\"diagnostics\",\"hypothesis_rendered\"]"
+    },
+    {
+      "name": "Phase3: publication evidence is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase3: publication status is Published",
+      "pass": true,
+      "detail": "status=published"
+    },
+    {
+      "name": "Phase3: publication has strategy identity",
+      "pass": true,
+      "detail": "strategyId=research-hypothesis-1"
+    },
+    {
+      "name": "Phase3: lifecycle state is linked",
+      "pass": true,
+      "detail": "null lifecycleState"
+    },
+    {
+      "name": "Phase3: lifecycle state has phase",
+      "pass": true,
+      "detail": "phase=backtest"
+    },
+    {
+      "name": "Phase3: governance decisions array is non-empty",
+      "pass": true,
+      "detail": "count=1"
+    },
+    {
+      "name": "Phase3: governance decision has verdict",
+      "pass": true,
+      "detail": "verdict=promote"
+    },
+    {
+      "name": "Phase3: assembledAt is a valid timestamp",
+      "pass": true,
+      "detail": "assembledAt=1779525573897"
+    },
+    {
+      "name": "Phase3: duplicate-skip lineage has duplicateEvidence",
+      "pass": true,
+      "detail": "null duplicateEvidence"
+    },
+    {
+      "name": "Phase3: duplicate-skip duplicateEvidence hasLaterHypothesis is false",
+      "pass": true,
+      "detail": "hasLaterHypothesis=false"
+    },
+    {
+      "name": "Phase3: duplicate-skip lineage has no hypothesis row",
+      "pass": true,
+      "detail": "hypothesis=null"
+    },
+    {
+      "name": "Phase3: duplicate-skip lineage has no evaluation",
+      "pass": true,
+      "detail": "evaluation present"
+    }
+  ],
+  "branchesTested": [
+    "duplicate-skip (exact-failure ledger -> validator -> skipped)",
+    "publish-success (validate -> evaluate -> publish -> audit lineage)"
+  ],
+  "evidenceBlocks": {
+    "duplicateSkip": {
+      "hashSeeded": true,
+      "validatorReturnedSkipped": true,
+      "noHypothesisPersisted": true
+    },
+    "publishSuccess": {
+      "publishVerdict": "publish",
+      "publicationId": 1,
+      "lifecycleStateId": 1,
+      "governanceDecisionId": 1,
+      "lineageCoverage": {
+        "hypothesisPresent": true,
+        "evaluationPresent": true,
+        "artifactsPresent": true,
+        "publicationPresent": true,
+        "lifecyclePresent": true,
+        "governancePresent": true
+      }
+    }
+  }
+}

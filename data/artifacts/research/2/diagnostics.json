@@ -3,11 +3,11 @@
   "artifactType": "research-diagnostics",
   "hypothesisGraphId": 2,
   "hypothesisEvaluationId": 2,
-  "generatedAt": "2026-05-23T07:48:30.613Z",
+  "generatedAt": "2026-05-23T09:14:28.192Z",
   "evaluationStatus": "completed",
   "outcomeDetail": "Winner selected via walk-forward evaluation.",
   "windowCount": 2,
   "trialCount": 1,
-  "durationMs": 43496910613,
+  "durationMs": 43502068192,
   "errorMessage": null
 }

@@ -3,7 +3,7 @@
   "artifactType": "research-promotion-artifact",
   "hypothesisGraphId": 2,
   "hypothesisEvaluationId": 2,
-  "generatedAt": "2026-05-23T07:48:30.613Z",
+  "generatedAt": "2026-05-23T09:14:28.192Z",
   "evaluationStatus": "completed",
   "rationale": "Selected hypothesis-1 (rank 1) via threshold selection with merged score 0.9100 across 2 windows. Out-of-sample evidence: avg OOS Sharpe=1.50, max OOS drawdown=8.00%, avg OOS win rate=60%, OOS windows=1. Selection thresholds: minMergedScore=0.7, minWindowCount=1.",
   "walkForwardRun": {

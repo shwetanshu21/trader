@@ -1,7 +1,7 @@
 {
   "id": 1,
-  "canonicalHash": "b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f",
-  "canonicalJson": "{\"entryRules\":[{\"params\":{\"lookbackBars\":5},\"type\":\"breakout_confirmed\"}],\"exitRules\":[{\"params\":{\"maxBars\":12},\"type\":\"time_stop\"}],\"filters\":[{\"params\":{\"min\":500000},\"type\":\"volume_min\"}],\"riskRules\":[{\"params\":{\"multiple\":2,\"period\":14},\"type\":\"atr_stop\"}],\"schemaVersion\":\"1\",\"signals\":[{\"params\":{\"fast\":8,\"slow\":21},\"type\":\"ema_cross\"}]}",
+  "canonicalHash": "9aa3c08ae778bf07b0ffaaf4f150d895da6328b3ca5db241daf1f8cc0539a1e8",
+  "canonicalJson": "{\"entryRules\":[{\"params\":{\"lookbackBars\":5},\"type\":\"breakout_confirmed\"}],\"exitRules\":[{\"params\":{\"maxBars\":12},\"type\":\"time_stop\"}],\"filters\":[{\"params\":{\"min\":500000},\"type\":\"volume_min\"}],\"riskRules\":[{\"params\":{\"multiple\":2,\"period\":14},\"type\":\"atr_stop\"}],\"schemaVersion\":\"1\",\"signals\":[{\"params\":{\"fast\":12,\"slow\":26},\"type\":\"ema_cross\"}]}",
   "status": "validated",
   "graph": {
     "schemaVersion": "1",
@@ -9,8 +9,8 @@
       {
         "type": "ema_cross",
         "params": {
-          "fast": 8,
-          "slow": 21
+          "fast": 12,
+          "slow": 26
         }
       }
     ],
@@ -48,6 +48,6 @@
       }
     ]
   },
-  "createdAt": 1736025600000,
-  "updatedAt": 1736025600000
+  "createdAt": 1779527678400,
+  "updatedAt": 1779527678400
 }

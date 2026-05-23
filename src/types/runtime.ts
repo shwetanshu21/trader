@@ -582,6 +582,98 @@ export interface HypothesisDedupeResult {
 }
 
 // ---------------------------------------------------------------------------
+// Hypothesis generation attempt — durable evidence for LLM provider outputs
+// ---------------------------------------------------------------------------
+
+/** Verdict for a hypothesis generation attempt. */
+export enum GenerationVerdict {
+  /** Provider returned a valid hypothesis graph that passed structural validation. */
+  Accepted = 'accepted',
+  /** Provider returned malformed or non-graph output that cannot be persisted as a hypothesis. */
+  Rejected = 'rejected',
+  /** Generation was skipped (exact duplicate of a prior attempt). */
+  Skipped = 'skipped',
+}
+
+/** Machine-readable reason codes for generation-attempt outcomes. */
+export enum GenerationReasonCode {
+  /** Provider returned non-JSON or unparseable output. */
+  MalformedResponse = 'malformed_response',
+  /** Provider returned valid JSON that is not a valid hypothesis graph shape. */
+  NonGraphResponse = 'non_graph_response',
+  /** Provider returned an empty response body or null. */
+  EmptyResponse = 'empty_response',
+  /** The exact same hypothesis was already generated and accepted in a prior attempt. */
+  DuplicateSkipped = 'duplicate_skipped',
+  /** Provider returned an HTTP or protocol-level error. */
+  ProviderError = 'provider_error',
+  /** Provider timed out before returning a response. */
+  ProviderTimeout = 'provider_timeout',
+  /** Generation was disallowed by policy (e.g. market closed, rate-limited). */
+  ProviderDisallowed = 'provider_disallowed',
+}
+
+/** A single reason attached to a generation attempt outcome. */
+export interface GenerationReason {
+  /** Machine-readable reason code. */
+  reasonCode: GenerationReasonCode;
+  /** Human-readable explanation. */
+  reasonMessage: string;
+}
+
+/** Context provenance for a hypothesis generation attempt. */
+export interface GenerationContextProvenance {
+  /** Provider base URL at generation time. */
+  providerUrl: string;
+  /** Provider model identifier, or null when unknown. */
+  providerModel: string | null;
+  /** Prompt version tag, or null when not versioned. */
+  promptVersion: string | null;
+  /** Unix timestamp (ms) when the generation was triggered. */
+  triggeredAt: number;
+  /** Market profile ID (e.g. 'INDIA_NSE_EQ'). */
+  marketId: string;
+  /** Strategy identity, or null when not yet associated. */
+  strategyId: string | null;
+}
+
+/**
+ * Full persisted hypothesis generation attempt row.
+ *
+ * Captures every LLM provider invocation result — accepted, rejected (malformed/
+ * non-graph), or skipped (duplicate). `raw_provider_output` preserves the
+ * verbatim provider response for forensic reconstruction. Downstream linkage
+ * fields (`canonicalHash`, `hypothesisGraphId`, `hypothesisEvaluationId`) are
+ * populated only for accepted attempts; rejected/skipped rows carry null.
+ */
+export interface HypothesisGenerationAttemptRow {
+  /** Auto-increment row ID. */
+  id: number;
+  /** Final verdict for this generation attempt. */
+  verdict: GenerationVerdict;
+  /** Context provenance at generation time. */
+  contextProvenance: GenerationContextProvenance;
+  /** Verbatim raw provider output (JSON string or null when output was absent). */
+  rawProviderOutput: string | null;
+  /** Canonical hash of the accepted hypothesis — null for rejected/skipped. */
+  canonicalHash: string | null;
+  /** FK → hypothesis_graphs(id) — null for rejected/skipped. */
+  hypothesisGraphId: number | null;
+  /** FK → hypothesis_evaluations(id) — null until evaluation is linked. */
+  hypothesisEvaluationId: number | null;
+  /** Unix timestamp (ms) when this row was created. */
+  createdAt: number;
+}
+
+/** Shape for inserting a new hypothesis generation attempt (without id). */
+export type NewHypothesisGenerationAttempt = Omit<HypothesisGenerationAttemptRow, 'id'>;
+
+/** A generation attempt with its ordered reason rows loaded. */
+export interface HypothesisGenerationAttemptWithReasons extends HypothesisGenerationAttemptRow {
+  /** Ordered reasons for the verdict (empty for accepted). */
+  reasons: GenerationReason[];
+}
+
 // ---------------------------------------------------------------------------
 // Hypothesis evaluation — durable evaluation state bridging validated
 // hypotheses into walk-forward replay and downstream research artifacts

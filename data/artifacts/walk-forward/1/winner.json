@@ -3,7 +3,7 @@
   "artifactType": "winner-selection",
   "runId": 1,
   "runLabel": "int-test-fo-winner",
-  "selectionTimestamp": "2026-05-23T05:08:24.752Z",
+  "selectionTimestamp": "2026-05-23T09:14:12.914Z",
   "selectionConfig": {
     "strategy": "composite",
     "minMergedScore": 0.5,

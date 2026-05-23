@@ -1,0 +1,63 @@
+{
+  "harness": "M011/S04 Research Proof Harness",
+  "completedAt": "2026-05-23T08:34:52.022Z",
+  "verdict": "FAIL",
+  "totalAssertions": 7,
+  "passed": 6,
+  "failed": 1,
+  "assertions": [
+    {
+      "name": "Phase1: validator returns skipped for duplicate hash",
+      "pass": true,
+      "detail": "kind=skipped"
+    },
+    {
+      "name": "Phase1: skipped status is Skipped",
+      "pass": true,
+      "detail": "status=skipped"
+    },
+    {
+      "name": "Phase1: skip reasons contain exact prior match",
+      "pass": true,
+      "detail": "reasons=[{\"reasonCode\":\"exact_failure_match\",\"reasonMessage\":\"Exact prior failed match: S04 proof: prior hypothesis with same canonical form failed during evaluation.\"}]"
+    },
+    {
+      "name": "Phase1: skip reason message references prior failure",
+      "pass": true,
+      "detail": "message=Exact prior failed match: S04 proof: prior hypothesis with same canonical form failed during evaluation."
+    },
+    {
+      "name": "Phase1: canonical hash is preserved",
+      "pass": true,
+      "detail": "got=b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f, expected=b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f"
+    },
+    {
+      "name": "Phase1: no hypothesis row persisted for skipped duplicate",
+      "pass": true,
+      "detail": "found hypothesis id=undefined"
+    },
+    {
+      "name": "Phase2: success path completed without error",
+      "pass": false,
+      "detail": "Hypothesis validation failed: {\"kind\":\"skipped\",\"status\":\"skipped\",\"canonical\":{\"canonicalHash\":\"b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f\",\"canonicalJson\":\"{\\\"entryRules\\\":[{\\\"params\\\":{\\\"lookbackBars\\\":5},\\\"type\\\":\\\"breakout_confirmed\\\"}],\\\"exitRules\\\":[{\\\"params\\\":{\\\"maxBars\\\":12},\\\"type\\\":\\\"time_stop\\\"}],\\\"filters\\\":[{\\\"params\\\":{\\\"min\\\":500000},\\\"type\\\":\\\"volume_min\\\"}],\\\"riskRules\\\":[{\\\"params\\\":{\\\"multiple\\\":2,\\\"period\\\":14},\\\"type\\\":\\\"atr_stop\\\"}],\\\"schemaVersion\\\":\\\"1\\\",\\\"signals\\\":[{\\\"params\\\":{\\\"fast\\\":8,\\\"slow\\\":21},\\\"type\\\":\\\"ema_cross\\\"}]}\"},\"reasons\":[{\"reasonCode\":\"exact_failure_match\",\"reasonMessage\":\"Exact prior failed match: S04 proof: prior hypothesis with same canonical form failed during evaluation.\"}]}"
+    }
+  ],
+  "branchesTested": [
+    "duplicate-skip (exact-failure ledger -> validator -> skipped)",
+    "publish-success (validate -> evaluate -> publish -> audit lineage)"
+  ],
+  "evidenceBlocks": {
+    "duplicateSkip": {
+      "hashSeeded": true,
+      "validatorReturnedSkipped": true,
+      "noHypothesisPersisted": true
+    },
+    "publishSuccess": {
+      "publishVerdict": "unknown",
+      "publicationId": null,
+      "lifecycleStateId": null,
+      "governanceDecisionId": null,
+      "lineageCoverage": null
+    }
+  }
+}

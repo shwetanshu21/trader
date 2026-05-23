@@ -648,6 +648,45 @@ CREATE TABLE IF NOT EXISTS hypothesis_memory_ledger (
 CREATE INDEX IF NOT EXISTS idx_hypothesis_memory_status ON hypothesis_memory_ledger(status);
 CREATE INDEX IF NOT EXISTS idx_hypothesis_memory_created ON hypothesis_memory_ledger(created_at);
 
+-- M011/S05: Hypothesis generation attempts — durable evidence for LLM provider outputs
+CREATE TABLE IF NOT EXISTS hypothesis_generation_attempts (
+  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+  verdict                   TEXT    NOT NULL,
+
+  -- Context provenance
+  provider_url              TEXT    NOT NULL,
+  provider_model            TEXT,
+  prompt_version            TEXT,
+  triggered_at              INTEGER NOT NULL,
+  market_id                 TEXT    NOT NULL,
+  strategy_id               TEXT,
+
+  -- Raw provider output (JSON string or null when absent)
+  raw_provider_output       TEXT,
+
+  -- Downstream linkage (null for rejected/skipped)
+  canonical_hash            TEXT,
+  hypothesis_graph_id       INTEGER REFERENCES hypothesis_graphs(id),
+  hypothesis_evaluation_id  INTEGER REFERENCES hypothesis_evaluations(id),
+
+  created_at                INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gen_attempts_verdict ON hypothesis_generation_attempts(verdict);
+CREATE INDEX IF NOT EXISTS idx_gen_attempts_created ON hypothesis_generation_attempts(created_at);
+CREATE INDEX IF NOT EXISTS idx_gen_attempts_hash ON hypothesis_generation_attempts(canonical_hash);
+CREATE INDEX IF NOT EXISTS idx_gen_attempts_graph ON hypothesis_generation_attempts(hypothesis_graph_id);
+CREATE INDEX IF NOT EXISTS idx_gen_attempts_eval ON hypothesis_generation_attempts(hypothesis_evaluation_id);
+
+CREATE TABLE IF NOT EXISTS hypothesis_generation_reasons (
+  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+  generation_attempt_id     INTEGER NOT NULL REFERENCES hypothesis_generation_attempts(id),
+  reason_code               TEXT    NOT NULL,
+  reason_message            TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_gen_reasons_attempt ON hypothesis_generation_reasons(generation_attempt_id);
+
 -- M005/S03: Walk-forward winners — persisted winner-selection decisions
 CREATE TABLE IF NOT EXISTS walk_forward_winners (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,
