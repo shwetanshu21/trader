@@ -20,6 +20,7 @@ import {
   type HypothesisEvaluationResult,
   type HypothesisResearchConfig,
 } from '../types/runtime.js';
+import { resolveBudgetPolicy, type OvernightBudgetPolicy } from './hypothesis-generation-budget.js';
 import { HypothesisRepository } from '../persistence/hypothesis-repo.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import {
@@ -126,7 +127,36 @@ export class HypothesisResearchEvaluator {
   async evaluate(
     hypothesisGraphId: number,
     config?: HypothesisResearchConfig,
+    budgetPolicy?: OvernightBudgetPolicy,
+    budgetState?: { completedEvaluations: number },
   ): Promise<HypothesisEvaluationResult> {
+    const resolvedBudget = resolveBudgetPolicy(budgetPolicy);
+    const completedEvaluations = budgetState?.completedEvaluations ?? 0;
+    if (completedEvaluations >= resolvedBudget.maxAcceptedCandidates) {
+      const now = Date.now();
+      const evaluation = this._hypothesisRepo.insertEvaluation({
+        hypothesisGraphId,
+        status: HypothesisEvaluationStatus.Cancelled,
+        rationale: `Evaluation pruned before replay start: candidate budget exhausted (${completedEvaluations}/${resolvedBudget.maxAcceptedCandidates}).`,
+        outcomeDetail: 'pre_evaluation_budget_exhausted',
+        createdAt: now,
+      });
+      this._hypothesisRepo.updateStatus(
+        hypothesisGraphId,
+        HypothesisStatus.FailedEvaluation,
+        now,
+      );
+      return {
+        evaluation,
+        walkForwardRun: null,
+        winner: null,
+        aggregateMetrics: null,
+        artifactPaths: [],
+        finalStatus: HypothesisEvaluationStatus.Cancelled,
+        rationale: evaluation.rationale,
+      };
+    }
+
     const now = Date.now();
 
     // ── Step 1: Validate hypothesis state ────────────────────────────────

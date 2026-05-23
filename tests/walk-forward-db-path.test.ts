@@ -4,6 +4,7 @@ import {
   injectDefaultDbPathArg,
   resolveDefaultWalkForwardDbPath,
   resolveWalkForwardDbPath,
+  resolveResearchDbPath,
 } from '../src/replay/walk-forward-db-path.js';
 
 describe('walk-forward DB path resolution', () => {
@@ -52,5 +53,26 @@ describe('walk-forward DB path resolution', () => {
     });
 
     expect(argv).toEqual(['--db-path', './data/already.db', '--days', '30']);
+  });
+});
+
+describe('resolveResearchDbPath', () => {
+  it('returns the explicit path when provided', () => {
+    expect(resolveResearchDbPath('./data/research.db')).toBe('./data/research.db');
+    expect(resolveResearchDbPath('  ./data/research.db  ')).toBe('./data/research.db');
+  });
+
+  it('returns null when no explicit path is supplied', () => {
+    expect(resolveResearchDbPath(undefined)).toBeNull();
+    expect(resolveResearchDbPath('')).toBeNull();
+    expect(resolveResearchDbPath('   ')).toBeNull();
+  });
+
+  it('never falls back to environment variables', () => {
+    // Even with env vars set, resolveResearchDbPath must return null
+    // when no explicit path is given.
+    expect(
+      resolveResearchDbPath(undefined),
+    ).toBeNull();
   });
 });

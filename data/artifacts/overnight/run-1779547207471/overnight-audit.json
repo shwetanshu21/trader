@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "overnight-audit",
+  "generatedAt": "2026-05-23T14:40:07.513Z",
+  "run": {
+    "id": 1,
+    "label": "overnight-research-1779547207471",
+    "status": "refused",
+    "marketPhase": "post_market",
+    "currentPhase": null,
+    "checkpointPointer": null,
+    "workspacePath": "data/artifacts/overnight/run-1779547207471",
+    "refusalReason": "Market is open (phase: post_market). Overnight research runs are only accepted during closed market windows.",
+    "lastError": null,
+    "createdAt": 1736157600000,
+    "startedAt": null,
+    "completedAt": null
+  },
+  "finalCheckpoint": null,
+  "marketPhase": "post_market",
+  "accepted": false,
+  "refusalReason": "Market is open (phase: post_market). Overnight research runs are only accepted during closed market windows.",
+  "dbPath": ":memory:",
+  "workspacePath": "data/artifacts/overnight/run-1779547207471",
+  "simulation": {
+    "generateCheckpoints": 3,
+    "evaluateCheckpoints": 5,
+    "durationMs": 42
+  }
+}

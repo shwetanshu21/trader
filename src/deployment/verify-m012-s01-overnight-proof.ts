@@ -406,6 +406,7 @@ async function main(): Promise<void> {
       accepted: true,
       refusalReason: null,
       dbPath: ctx.dbPath,
+      researchDbPath: null,
       workspacePath: ctx.workspacePath,
       simulation: {
         generateCheckpoints: 3,

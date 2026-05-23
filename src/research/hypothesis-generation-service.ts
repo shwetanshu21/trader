@@ -37,6 +37,13 @@ import {
   type HypothesisGenerationAttemptRow,
   type ProposalEngineConfig,
 } from '../types/runtime.js';
+import {
+  applyGenerationOutcomeToBudget,
+  decideGenerationBudget,
+  initialBudgetState,
+  type OvernightBudgetPolicy,
+  type OvernightBudgetState,
+} from './hypothesis-generation-budget.js';
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -71,6 +78,7 @@ export class HypothesisGenerationService {
   private readonly _evaluator?: HypothesisResearchEvaluator;
   private readonly _strategyRunRepo?: StrategyRunRepository;
   private readonly _indiaResearchBuilder?: IndiaResearchBuilder;
+  private _budgetState: OvernightBudgetState;
 
   constructor(deps: {
     db: Database.Database;
@@ -95,6 +103,7 @@ export class HypothesisGenerationService {
     this._evaluator = deps.evaluator;
     this._strategyRunRepo = deps.strategyRunRepo;
     this._indiaResearchBuilder = deps.indiaResearchBuilder;
+    this._budgetState = initialBudgetState();
   }
 
   // -----------------------------------------------------------------------
@@ -134,6 +143,51 @@ export class HypothesisGenerationService {
    * @returns A typed HypothesisGenerationResult for all provider branches.
    */
   async generate(config: HypothesisGenerationConfig): Promise<HypothesisGenerationResult> {
+    return this.generateWithBudget(config);
+  }
+
+  async generateWithBudget(
+    config: HypothesisGenerationConfig,
+    budgetPolicy?: OvernightBudgetPolicy,
+  ): Promise<HypothesisGenerationResult> {
+    const gate = decideGenerationBudget(budgetPolicy, this._budgetState);
+    if (gate.kind === 'skipped') {
+      const now = Date.now();
+      const attempt = this._persistAttempt({
+        verdict: GenerationVerdict.Skipped,
+        contextProvenance: this._buildContextProvenance(config, now),
+        rawProviderOutput: null,
+        rawOutputContentHash: null,
+        rawOutputPreview: null,
+        canonicalHash: null,
+        hypothesisGraphId: null,
+        hypothesisEvaluationId: null,
+        createdAt: now,
+      }, [gate.reason]);
+
+      return {
+        kind: 'skipped',
+        attempt,
+        rawProviderOutput: '',
+        reason: gate.reason,
+      };
+    }
+
+    this._budgetState = gate.state;
+    const result = await this._generateInternal(config);
+    this._budgetState = applyGenerationOutcomeToBudget(this._budgetState, result.attempt);
+    return result;
+  }
+
+  getBudgetState(): OvernightBudgetState {
+    return { ...this._budgetState };
+  }
+
+  resetBudgetState(): void {
+    this._budgetState = initialBudgetState();
+  }
+
+  private async _generateInternal(config: HypothesisGenerationConfig): Promise<HypothesisGenerationResult> {
     const now = Date.now();
 
     // ── 1. Build context provenance ─────────────────────────────────────

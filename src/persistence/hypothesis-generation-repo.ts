@@ -123,6 +123,14 @@ export class HypothesisGenerationRepository {
     return rows.map(mapAttemptRow);
   }
 
+  /** Retrieve recent generation attempts with reasons loaded, newest first. */
+  getRecentWithReasons(limit = 50): HypothesisGenerationAttemptWithReasons[] {
+    return this.getRecent(limit).map(row => ({
+      ...row,
+      reasons: this.getReasons(row.id),
+    }));
+  }
+
   /** Retrieve recent generation attempts by verdict, newest first. */
   getByVerdict(
     verdict: GenerationVerdict,

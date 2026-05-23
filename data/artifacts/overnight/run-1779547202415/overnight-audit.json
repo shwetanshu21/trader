@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "overnight-audit",
+  "generatedAt": "2026-05-23T14:40:02.465Z",
+  "run": {
+    "id": 1,
+    "label": "overnight-research-1779547202415",
+    "status": "completed",
+    "marketPhase": "closed",
+    "currentPhase": "completed",
+    "checkpointPointer": "{\"phase\":\"evaluate\",\"completedItems\":3,\"totalItems\":3,\"lastProcessedId\":\"eval-trial-3\",\"metadata\":{\"trialIndex\":3,\"simulated\":true,\"meanScore\":0.9}}",
+    "workspacePath": "data/artifacts/overnight/run-1779547202415",
+    "refusalReason": null,
+    "lastError": null,
+    "createdAt": 1736161200000,
+    "startedAt": 1736161200000,
+    "completedAt": 1779547202464
+  },
+  "finalCheckpoint": {
+    "phase": "evaluate",
+    "completedItems": 3,
+    "totalItems": 3,
+    "lastProcessedId": "eval-trial-3",
+    "metadata": {
+      "trialIndex": 3,
+      "simulated": true,
+      "meanScore": 0.9
+    }
+  },
+  "marketPhase": "closed",
+  "accepted": true,
+  "refusalReason": null,
+  "dbPath": ":memory:",
+  "workspacePath": "data/artifacts/overnight/run-1779547202415",
+  "simulation": {
+    "generateCheckpoints": 2,
+    "evaluateCheckpoints": 3,
+    "durationMs": 50
+  }
+}

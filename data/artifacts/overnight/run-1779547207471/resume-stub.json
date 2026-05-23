@@ -1,0 +1,10 @@
+{
+  "lastPhase": "refused",
+  "refusalReason": "Market is open (phase: post_market). Overnight research runs are only accepted during closed market windows.",
+  "checkpointProgress": null,
+  "workspacePath": "data/artifacts/overnight/run-1779547207471",
+  "dbPath": ":memory:",
+  "runId": 1,
+  "runLabel": "overnight-research-1779547207471",
+  "runStatus": "refused"
+}

@@ -343,6 +343,38 @@ describe('M012/S02 Overnight Isolation Proof', () => {
     expect(runtimeHypothesisRepo.count()).toBe(0);
   });
 
+  it('evaluation can be pruned before replay start when the overnight candidate budget is exhausted', async () => {
+    const researchHypothesisRepo = new HypothesisRepository(researchMgr.db);
+    const researchWfRepo = new WalkForwardRepository(researchMgr.db);
+
+    const hypothesisId = seedHypothesis(researchHypothesisRepo);
+    const mockEvaluateFn = vi.fn();
+
+    const evaluator = new HypothesisResearchEvaluator({
+      db: researchMgr.db,
+      dataProvider: new FakeDataProvider(),
+      marketProfile: new FakeMarketProfile(),
+      hypothesisRepo: researchHypothesisRepo,
+      walkForwardRepo: researchWfRepo,
+      walkForwardEvaluator: { evaluate: mockEvaluateFn } as any,
+    });
+
+    const result = await evaluator.evaluate(
+      hypothesisId,
+      { rangeStart: NOW - 7 * 86_400_000, rangeEnd: NOW },
+      { maxAcceptedCandidates: 1 },
+      { completedEvaluations: 1 },
+    );
+
+    expect(result.finalStatus).toBe(HypothesisEvaluationStatus.Cancelled);
+    expect(result.rationale).toContain('candidate budget exhausted');
+    expect(mockEvaluateFn).not.toHaveBeenCalled();
+
+    const persisted = researchHypothesisRepo.getEvaluationByHypothesisId(hypothesisId);
+    expect(persisted?.status).toBe(HypothesisEvaluationStatus.Cancelled);
+    expect(persisted?.outcomeDetail).toBe('pre_evaluation_budget_exhausted');
+  });
+
   // -----------------------------------------------------------------------
   // Test 3: Research DB path is persisted in audit metadata
   // -----------------------------------------------------------------------

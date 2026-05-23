@@ -35,6 +35,7 @@ import {
   type TryStartResult,
 } from './overnight-orchestrator.js';
 import { loadProjectEnvFile } from '../replay/walk-forward-db-path.js';
+import { resolveBudgetPolicy } from './hypothesis-generation-budget.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,6 +56,8 @@ export interface OvernightCliOptions {
   simulatePhases: boolean;
   simulateGenCount: number;
   simulateEvalCount: number;
+  maxAcceptedCandidates: number | null;
+  maxLlmCalls: number | null;
   dryRun: boolean;
   holdOpenMs: number;
 }
@@ -70,6 +73,8 @@ export function parseArgs(argv: string[]): OvernightCliOptions {
     simulatePhases: true,
     simulateGenCount: 3,
     simulateEvalCount: 5,
+    maxAcceptedCandidates: null,
+    maxLlmCalls: null,
     dryRun: false,
     holdOpenMs: 0,
   };
@@ -118,6 +123,20 @@ export function parseArgs(argv: string[]): OvernightCliOptions {
         options.simulateEvalCount = Number(value);
         if (!Number.isFinite(options.simulateEvalCount) || options.simulateEvalCount < 0) {
           throw new Error('--simulate-eval-count must be a non-negative integer.');
+        }
+        i++;
+        break;
+      case '--max-accepted-candidates':
+        options.maxAcceptedCandidates = Number(value);
+        if (!Number.isFinite(options.maxAcceptedCandidates) || options.maxAcceptedCandidates < 0) {
+          throw new Error('--max-accepted-candidates must be a non-negative integer.');
+        }
+        i++;
+        break;
+      case '--max-llm-calls':
+        options.maxLlmCalls = Number(value);
+        if (!Number.isFinite(options.maxLlmCalls) || options.maxLlmCalls < 0) {
+          throw new Error('--max-llm-calls must be a non-negative integer.');
         }
         i++;
         break;
@@ -244,6 +263,16 @@ export interface OvernightAuditArtifact {
     evaluateCheckpoints: number;
     durationMs: number;
   };
+  budget?: {
+    maxAcceptedCandidates: number | null;
+    maxLlmCalls: number | null;
+    acceptedCandidates: number;
+    llmCalls: number;
+    exhausted: boolean;
+    skippedGenerationCount: number;
+    prunedEvaluationCount: number;
+    skipReasonCodes: string[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +307,8 @@ async function main(): Promise<void> {
       simulatePhases: options.simulatePhases,
       simulateGenCount: options.simulateGenCount,
       simulateEvalCount: options.simulateEvalCount,
+      maxAcceptedCandidates: options.maxAcceptedCandidates,
+      maxLlmCalls: options.maxLlmCalls,
       timestamp: new Date().toISOString(),
     }, null, 2));
     process.exit(0);
@@ -291,6 +322,10 @@ async function main(): Promise<void> {
   const repo = new OvernightRunRepo(dbManager.db);
   const clock = new MarketClock(INDIA_NSE_EQ_MARKET);
   const orchestrator = new OvernightOrchestrator(repo, clock);
+  const resolvedBudget = resolveBudgetPolicy({
+    maxAcceptedCandidates: options.maxAcceptedCandidates ?? undefined,
+    maxLlmCalls: options.maxLlmCalls ?? undefined,
+  });
 
   try {
     // ── Attempt to start the run ──
@@ -305,15 +340,42 @@ async function main(): Promise<void> {
     let genCheckpoint: OvernightCheckpointMetadata | null = null;
     let evalCheckpoint: OvernightCheckpointMetadata | null = null;
     let completedRun: OvernightRunRow | null = null;
+    const simulatedSkippedGenerationReasons: string[] = [];
+    let simulatedPrunedEvaluationCount = 0;
 
     if (result.accepted && options.simulatePhases) {
+      const acceptedCandidates = Math.min(options.simulateGenCount, resolvedBudget.maxAcceptedCandidates);
+      const skippedCount = Math.max(0, options.simulateGenCount - acceptedCandidates);
+      const evaluatedCount = Math.min(options.simulateEvalCount, acceptedCandidates);
+      simulatedPrunedEvaluationCount = Math.max(0, acceptedCandidates - evaluatedCount);
+
       // Phase 1: Generate
       orchestrator.markPhase(result.run.id, 'generate');
-      genCheckpoint = simulateGeneratePhase(orchestrator, result.run.id, options.simulateGenCount);
+      genCheckpoint = simulateGeneratePhase(orchestrator, result.run.id, acceptedCandidates);
+      for (let i = 0; i < skippedCount; i++) {
+        simulatedSkippedGenerationReasons.push('provider_disallowed');
+      }
 
       // Phase 2: Evaluate
       orchestrator.markPhase(result.run.id, 'evaluate');
-      evalCheckpoint = simulateEvaluatePhase(orchestrator, result.run.id, options.simulateEvalCount);
+      evalCheckpoint = simulateEvaluatePhase(orchestrator, result.run.id, evaluatedCount);
+
+      const budgetCheckpoint: OvernightCheckpointMetadata = {
+        phase: 'evaluate',
+        completedItems: evaluatedCount,
+        totalItems: acceptedCandidates,
+        metadata: {
+          budget: {
+            acceptedCandidates,
+            skippedGenerationCount: skippedCount,
+            prunedEvaluationCount: simulatedPrunedEvaluationCount,
+            maxAcceptedCandidates: Number.isFinite(resolvedBudget.maxAcceptedCandidates) ? resolvedBudget.maxAcceptedCandidates : null,
+            maxLlmCalls: Number.isFinite(resolvedBudget.maxLlmCalls) ? resolvedBudget.maxLlmCalls : null,
+            skipReasonCodes: simulatedSkippedGenerationReasons,
+          },
+        },
+      };
+      orchestrator.saveCheckpoint(result.run.id, budgetCheckpoint);
 
       // Phase 3: Complete
       orchestrator.markPhase(result.run.id, 'completed');
@@ -344,6 +406,19 @@ async function main(): Promise<void> {
         generateCheckpoints: options.simulateGenCount,
         evaluateCheckpoints: options.simulateEvalCount,
         durationMs,
+      },
+      budget: {
+        maxAcceptedCandidates: Number.isFinite(resolvedBudget.maxAcceptedCandidates) ? resolvedBudget.maxAcceptedCandidates : null,
+        maxLlmCalls: Number.isFinite(resolvedBudget.maxLlmCalls) ? resolvedBudget.maxLlmCalls : null,
+        acceptedCandidates: finalCheckpoint?.metadata?.budget && typeof finalCheckpoint.metadata.budget === 'object' && finalCheckpoint.metadata.budget !== null && 'acceptedCandidates' in finalCheckpoint.metadata.budget
+          ? Number((finalCheckpoint.metadata.budget as Record<string, unknown>).acceptedCandidates ?? 0)
+          : Math.min(options.simulateGenCount, Number.isFinite(resolvedBudget.maxAcceptedCandidates) ? resolvedBudget.maxAcceptedCandidates : options.simulateGenCount),
+        llmCalls: Math.min(options.simulateGenCount, Number.isFinite(resolvedBudget.maxLlmCalls) ? resolvedBudget.maxLlmCalls : options.simulateGenCount),
+        exhausted: options.simulateGenCount > (Number.isFinite(resolvedBudget.maxAcceptedCandidates) ? resolvedBudget.maxAcceptedCandidates : options.simulateGenCount)
+          || options.simulateGenCount >= (Number.isFinite(resolvedBudget.maxLlmCalls) ? resolvedBudget.maxLlmCalls : Number.POSITIVE_INFINITY),
+        skippedGenerationCount: Math.max(0, options.simulateGenCount - Math.min(options.simulateGenCount, Number.isFinite(resolvedBudget.maxAcceptedCandidates) ? resolvedBudget.maxAcceptedCandidates : options.simulateGenCount)),
+        prunedEvaluationCount: simulatedPrunedEvaluationCount,
+        skipReasonCodes: simulatedSkippedGenerationReasons,
       },
     };
 

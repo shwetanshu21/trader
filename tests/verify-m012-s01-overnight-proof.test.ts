@@ -335,6 +335,7 @@ describe('M012/S01 Overnight Proof — Workspace audit artifacts', () => {
       accepted: true,
       refusalReason: null,
       dbPath: ':memory:',
+      researchDbPath: null,
       workspacePath: fx.workspacePath,
       simulation: { generateCheckpoints: 3, evaluateCheckpoints: 5, durationMs: 0 },
     };

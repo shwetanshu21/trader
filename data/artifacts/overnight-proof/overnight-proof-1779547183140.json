@@ -1,0 +1,231 @@
+{
+  "harness": "M012/S01 Overnight Research Proof Harness",
+  "completedAt": "2026-05-23T14:39:43.139Z",
+  "verdict": "PASS",
+  "totalAssertions": 43,
+  "passed": 43,
+  "failed": 0,
+  "assertions": [
+    {
+      "name": "Phase1: gate returns accepted=false during regular hours",
+      "pass": true,
+      "detail": "accepted=false"
+    },
+    {
+      "name": "Phase1: refusal reason is present and mentions \"Market is open\"",
+      "pass": true,
+      "detail": "reason=Market is open (phase: regular). Overnight research runs are only accepted during closed market windows."
+    },
+    {
+      "name": "Phase1: run status is Refused",
+      "pass": true,
+      "detail": "status=refused"
+    },
+    {
+      "name": "Phase1: market phase is Regular",
+      "pass": true,
+      "detail": "phase=regular"
+    },
+    {
+      "name": "Phase1: persisted run refusal reason matches",
+      "pass": true,
+      "detail": "run.refusal=Market is open (phase: regular). Overnight research runs are only accepted during closed market windows., result.refusal=Market is open (phase: regular). Overnight research runs are only accepted during closed market windows."
+    },
+    {
+      "name": "Phase1: no workspace artifacts written for refused run",
+      "pass": true,
+      "detail": "files=[]"
+    },
+    {
+      "name": "Phase2: gate returns accepted=true during closed window",
+      "pass": true,
+      "detail": "accepted=true"
+    },
+    {
+      "name": "Phase2: refusal reason is null",
+      "pass": true,
+      "detail": "reason=null"
+    },
+    {
+      "name": "Phase2: run status is Running",
+      "pass": true,
+      "detail": "status=running"
+    },
+    {
+      "name": "Phase2: market phase is Closed",
+      "pass": true,
+      "detail": "phase=closed"
+    },
+    {
+      "name": "Phase2: initial phase is generate",
+      "pass": true,
+      "detail": "phase=generate"
+    },
+    {
+      "name": "Phase2: startedAt is set",
+      "pass": true,
+      "detail": "startedAt=1736161200000"
+    },
+    {
+      "name": "Phase2: checkpoint pointer is null initially",
+      "pass": true,
+      "detail": "cp=null"
+    },
+    {
+      "name": "Phase2: after generation, phase is generate",
+      "pass": true,
+      "detail": "phase=generate"
+    },
+    {
+      "name": "Phase2: generation checkpoint shows 3/3 completed",
+      "pass": true,
+      "detail": "cp={\"phase\":\"generate\",\"completedItems\":3,\"totalItems\":3,\"lastProcessedId\":\"gen-hyp-3\",\"metadata\":{\"hypothesisIndex\":3,\"simulated\":true}}"
+    },
+    {
+      "name": "Phase2: generation checkpoint has lastProcessedId",
+      "pass": true,
+      "detail": "lastId=gen-hyp-3"
+    },
+    {
+      "name": "Phase2: after evaluation, phase is evaluate",
+      "pass": true,
+      "detail": "phase=evaluate"
+    },
+    {
+      "name": "Phase2: evaluation checkpoint shows 5/5 completed",
+      "pass": true,
+      "detail": "cp={\"phase\":\"evaluate\",\"completedItems\":5,\"totalItems\":5,\"lastProcessedId\":\"eval-trial-5\",\"metadata\":{\"trialIndex\":5,\"simulated\":true}}"
+    },
+    {
+      "name": "Phase2: evaluation checkpoint has lastProcessedId",
+      "pass": true,
+      "detail": "lastId=eval-trial-5"
+    },
+    {
+      "name": "Phase2: after completion, status is Completed",
+      "pass": true,
+      "detail": "status=completed"
+    },
+    {
+      "name": "Phase2: completedAt is set",
+      "pass": true,
+      "detail": "completedAt=1779547183138"
+    },
+    {
+      "name": "Phase2: phase is completed",
+      "pass": true,
+      "detail": "phase=completed"
+    },
+    {
+      "name": "Phase2: getLatestRun returns the completed run",
+      "pass": true,
+      "detail": "latest=2, expected=2"
+    },
+    {
+      "name": "Phase2: getRun returns the same run by id",
+      "pass": true,
+      "detail": "fetched=2"
+    },
+    {
+      "name": "Phase2: total runs count is 2",
+      "pass": true,
+      "detail": "count=2"
+    },
+    {
+      "name": "Phase2: refused count is 1",
+      "pass": true,
+      "detail": "count=1"
+    },
+    {
+      "name": "Phase2: completed count is 1",
+      "pass": true,
+      "detail": "count=1"
+    },
+    {
+      "name": "Phase2: listRuns returns 2 runs",
+      "pass": true,
+      "detail": "length=2"
+    },
+    {
+      "name": "Phase2: most recent run is the completed one",
+      "pass": true,
+      "detail": "first=2"
+    },
+    {
+      "name": "Phase3: audit artifact file exists",
+      "pass": true,
+      "detail": "/tmp/overnight-proof-5VZtts/workspace/overnight-audit.json"
+    },
+    {
+      "name": "Phase3: audit artifact schema version is 1",
+      "pass": true,
+      "detail": "version=1"
+    },
+    {
+      "name": "Phase3: audit artifact type is overnight-audit",
+      "pass": true,
+      "detail": "type=overnight-audit"
+    },
+    {
+      "name": "Phase3: audit artifact has run id",
+      "pass": true,
+      "detail": "runId=2"
+    },
+    {
+      "name": "Phase3: audit artifact run status is Completed",
+      "pass": true,
+      "detail": "status=completed"
+    },
+    {
+      "name": "Phase3: audit artifact final checkpoint evaluate phase",
+      "pass": true,
+      "detail": "phase=evaluate"
+    },
+    {
+      "name": "Phase3: audit artifact final checkpoint 5/5",
+      "pass": true,
+      "detail": "cp=5/5"
+    },
+    {
+      "name": "Phase3: audit artifact has workspace path",
+      "pass": true,
+      "detail": "path=/tmp/overnight-proof-5VZtts/workspace"
+    },
+    {
+      "name": "Phase3: resume stub file exists",
+      "pass": true,
+      "detail": "/tmp/overnight-proof-5VZtts/workspace/resume-stub.json"
+    },
+    {
+      "name": "Phase3: resume stub has lastPhase = completed",
+      "pass": true,
+      "detail": "lastPhase=completed"
+    },
+    {
+      "name": "Phase3: resume stub has checkpointProgress",
+      "pass": true,
+      "detail": "progress=5/5 in phase evaluate"
+    },
+    {
+      "name": "Phase3: resume stub has workspace path",
+      "pass": true,
+      "detail": "path=/tmp/overnight-proof-5VZtts/workspace"
+    },
+    {
+      "name": "Phase4: getRun returns null for non-existent run",
+      "pass": true,
+      "detail": "result=null"
+    },
+    {
+      "name": "Phase4: getLatestRun still works with runs present",
+      "pass": true,
+      "detail": "latest={\"id\":2,\"label\":\"overnight-demo\",\"status\":\"completed\",\"marketPhase\":\"closed\",\"currentPhase\":\"completed\",\"checkpointPointer\":\"{\\\"phase\\\":\\\"evaluate\\\",\\\"completedItems\\\":5,\\\"totalItems\\\":5,\\\"lastProcessedId\\\":\\\"eval-trial-5\\\",\\\"metadata\\\":{\\\"trialIndex\\\":5,\\\"simulated\\\":true}}\",\"workspacePath\":\"/tmp/overnight-proof-5VZtts/workspace\",\"refusalReason\":null,\"lastError\":null,\"createdAt\":1736161200000,\"startedAt\":1736161200000,\"completedAt\":1779547183138}"
+    }
+  ],
+  "branchesTested": [
+    "market-hours-refusal (gate returns accepted=false with refusal reason)",
+    "closed-window-start (gate returns accepted=true, simulates phases, emits checkpoints)",
+    "workspace-artifacts (audit artifact and resume stub written to workspace)",
+    "edge-cases (non-existent run query, run listing)"
+  ]
+}

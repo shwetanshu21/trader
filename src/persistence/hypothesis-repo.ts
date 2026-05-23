@@ -15,7 +15,9 @@ import {
   type ResearchArtifactType,
   type ResearchPublicationRow,
   type NewResearchPublication,
+  type HypothesisGenerationAttemptWithReasons,
 } from '../types/runtime.js';
+import { HypothesisGenerationRepository } from './hypothesis-generation-repo.js';
 
 // ---------------------------------------------------------------------------
 // HypothesisRepository — typed CRUD over structured hypothesis graphs,
@@ -24,9 +26,11 @@ import {
 
 export class HypothesisRepository {
   private readonly _db: Database.Database;
+  private readonly _generationRepo: HypothesisGenerationRepository;
 
   constructor(db: Database.Database) {
     this._db = db;
+    this._generationRepo = new HypothesisGenerationRepository(db);
   }
 
   /** Insert a structured hypothesis graph row. */
@@ -537,6 +541,23 @@ export class HypothesisRepository {
       'SELECT COUNT(*) AS cnt FROM research_publications',
     ).get() as { cnt: number };
     return row.cnt;
+  }
+
+  /**
+   * Find generation attempts whose linked evaluation currently has the given status.
+   * Used by overnight budget/audit flows to explain which accepted hypotheses
+   * did not advance into completed replay evaluation.
+   */
+  findGenerationAttemptsByEvaluationStatus(
+    status: HypothesisEvaluationStatus,
+    limit = 100,
+  ): HypothesisGenerationAttemptWithReasons[] {
+    const attempts = this._generationRepo.getRecentWithReasons(limit);
+    return attempts.filter(attempt => {
+      if (attempt.hypothesisEvaluationId == null) return false;
+      const evaluation = this.getEvaluationById(attempt.hypothesisEvaluationId);
+      return evaluation?.status === status;
+    });
   }
 }
 

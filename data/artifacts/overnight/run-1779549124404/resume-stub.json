@@ -1,0 +1,11 @@
+{
+  "lastPhase": "completed",
+  "refusalReason": null,
+  "checkpointProgress": "5/5 in phase evaluate",
+  "workspacePath": "data/artifacts/overnight/run-1779549124404",
+  "dbPath": ":memory:",
+  "researchDbPath": null,
+  "runId": 1,
+  "runLabel": "overnight-research-1779549124404",
+  "runStatus": "completed"
+}
