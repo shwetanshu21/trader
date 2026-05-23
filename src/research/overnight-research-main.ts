@@ -9,6 +9,7 @@ import {
   type OvernightRunRow,
   type OvernightCheckpointMetadata,
   type OvernightPhase,
+  parseOvernightRunMetadata,
 } from './overnight-run-repo.js';
 import {
   OvernightOrchestrator,
@@ -16,8 +17,12 @@ import {
 import { loadProjectEnvFile } from '../replay/walk-forward-db-path.js';
 import { resolveBudgetPolicy } from './hypothesis-generation-budget.js';
 import { HypothesisRepository } from '../persistence/hypothesis-repo.js';
+import { HypothesisMemoryRepository } from '../persistence/hypothesis-memory-repo.js';
+import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-repo.js';
+import { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
 import { ResearchPublishBackService } from './publish-back-service.js';
-import { HypothesisEvaluationStatus } from '../types/runtime.js';
+import { ResearchAuditService } from './research-audit-service.js';
+import { HypothesisEvaluationStatus, type ResearchLineageSnapshot } from '../types/runtime.js';
 
 const RESEARCH_ARTIFACTS_ROOT = path.join('data', 'artifacts', 'overnight');
 
@@ -137,15 +142,30 @@ function simulateEvaluatePhase(
   return checkpoint;
 }
 
-function findLatestCompletedEvaluationId(dbm: DatabaseManager): number | null {
+function findCompletedEvaluationIds(dbm: DatabaseManager): number[] {
   const repo = new HypothesisRepository(dbm.db);
-  const evaluations = repo.listEvaluations(50);
-  for (const evaluation of evaluations) {
-    if (evaluation.status === HypothesisEvaluationStatus.Completed) {
-      return evaluation.id;
-    }
-  }
-  return null;
+  return repo
+    .listEvaluations(200)
+    .filter(evaluation => evaluation.status === HypothesisEvaluationStatus.Completed)
+    .map(evaluation => evaluation.id);
+}
+
+function findLatestCompletedEvaluationId(dbm: DatabaseManager): number | null {
+  const completed = findCompletedEvaluationIds(dbm);
+  return completed.length > 0 ? completed[0] : null;
+}
+
+function findEvaluatedHypothesisIds(dbm: DatabaseManager): number[] {
+  const repo = new HypothesisRepository(dbm.db);
+  return repo
+    .listEvaluations(200)
+    .filter(evaluation => evaluation.status === HypothesisEvaluationStatus.Completed)
+    .map(evaluation => evaluation.hypothesisGraphId);
+}
+
+function findGeneratedHypothesisIds(dbm: DatabaseManager): number[] {
+  const repo = new HypothesisRepository(dbm.db);
+  return repo.getRecentHypotheses(200).map(hypothesis => hypothesis.id);
 }
 
 function simulatePublishPhase(dbm: DatabaseManager) {
@@ -158,10 +178,13 @@ function simulatePublishPhase(dbm: DatabaseManager) {
       governanceDecisionId: null,
       rationale: 'No completed hypothesis evaluation found in the research DB for publish-back.',
       evaluationId: null,
+      hypothesisId: null,
+      publicationStatus: null,
     };
   }
 
-  const service = new ResearchPublishBackService({ db: dbm.db });
+  const hypothesisRepo = new HypothesisRepository(dbm.db);
+  const service = new ResearchPublishBackService({ db: dbm.db, hypothesisRepo });
   const result = service.publish(evaluationId, { dryRun: false });
   return {
     verdict: result.verdict,
@@ -170,6 +193,8 @@ function simulatePublishPhase(dbm: DatabaseManager) {
     governanceDecisionId: result.governanceDecisionId,
     rationale: result.rationale,
     evaluationId,
+    hypothesisId: result.evaluation.hypothesisGraphId,
+    publicationStatus: result.publication?.status ?? null,
   };
 }
 
@@ -194,6 +219,23 @@ export interface OvernightAuditArtifact {
   nextPhaseAtStart: OvernightPhase | null;
   nextPhaseAfterExecution: OvernightPhase | null;
   stopAfterPhase: PhaseStop;
+  generatedHypothesisIds: number[];
+  evaluatedHypothesisIds: number[];
+  evaluationIds: number[];
+  publication: {
+    verdict: 'publish' | 'hold' | null;
+    publicationId: number | null;
+    lifecycleStateId: number | null;
+    governanceDecisionId: number | null;
+    rationale: string | null;
+    publishedEvaluationId: number | null;
+    publishedHypothesisId: number | null;
+    status: string | null;
+  };
+  lineage: ResearchLineageSnapshot | null;
+  resumeHistory: ReturnType<typeof parseOvernightRunMetadata>['resumeAttempts'];
+  phaseTransitions: ReturnType<typeof parseOvernightRunMetadata>['phaseTransitions'];
+  failureContext: ReturnType<typeof parseOvernightRunMetadata>['failureContext'];
   budget?: {
     maxAcceptedCandidates: number | null;
     maxLlmCalls: number | null;
@@ -345,6 +387,34 @@ async function main(): Promise<void> {
     const finalRun = orchestrator.getRun(run.id) ?? run;
     const finalCheckpoint = orchestrator.readCheckpoint(finalRun);
     const nextPhaseAfterExecution = result.accepted ? orchestrator.getNextPhase(finalRun) : null;
+    const metadata = parseOvernightRunMetadata(finalRun.metadataJson);
+    const generatedHypothesisIds = findGeneratedHypothesisIds(dbManager);
+    const evaluatedHypothesisIds = findEvaluatedHypothesisIds(dbManager);
+    const evaluationIds = findCompletedEvaluationIds(dbManager);
+
+    let lineage: ResearchLineageSnapshot | null = null;
+    let publishedEvaluationId: number | null = null;
+    let publishedHypothesisId: number | null = null;
+    let publicationStatus: string | null = null;
+    if (metadata.publication?.publicationId != null) {
+      const publicationRepo = new HypothesisRepository(dbManager.db);
+      const publication = publicationRepo.getPublicationById(metadata.publication.publicationId);
+      if (publication) {
+        publicationStatus = publication.status;
+        publishedEvaluationId = publication.hypothesisEvaluationId;
+        publishedHypothesisId = publication.hypothesisGraphId;
+        const hypothesis = publicationRepo.getHypothesisById(publication.hypothesisGraphId);
+        if (hypothesis) {
+          const auditService = new ResearchAuditService({
+            hypothesisRepo: publicationRepo,
+            memoryRepo: new HypothesisMemoryRepository(dbManager.db),
+            lifecycleRepo: new StrategyLifecycleRepository(dbManager.db),
+            generationRepo: new HypothesisGenerationRepository(dbManager.db),
+          });
+          lineage = auditService.assembleLineage(hypothesis.canonicalHash);
+        }
+      }
+    }
 
     const auditArtifact: OvernightAuditArtifact = {
       schemaVersion: 1,
@@ -362,6 +432,23 @@ async function main(): Promise<void> {
       nextPhaseAtStart,
       nextPhaseAfterExecution,
       stopAfterPhase: options.stopAfterPhase,
+      generatedHypothesisIds,
+      evaluatedHypothesisIds,
+      evaluationIds,
+      publication: {
+        verdict: metadata.publication?.verdict ?? null,
+        publicationId: metadata.publication?.publicationId ?? null,
+        lifecycleStateId: metadata.publication?.lifecycleStateId ?? null,
+        governanceDecisionId: metadata.publication?.governanceDecisionId ?? null,
+        rationale: metadata.publication?.rationale ?? null,
+        publishedEvaluationId,
+        publishedHypothesisId,
+        status: publicationStatus,
+      },
+      lineage,
+      resumeHistory: metadata.resumeAttempts,
+      phaseTransitions: metadata.phaseTransitions,
+      failureContext: metadata.failureContext,
       simulation: {
         generateCheckpoints: options.simulateGenCount,
         evaluateCheckpoints: options.simulateEvalCount,

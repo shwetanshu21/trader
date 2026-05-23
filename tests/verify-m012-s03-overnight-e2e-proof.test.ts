@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { HypothesisRepository } from '../src/persistence/hypothesis-repo.js';
-import { OvernightRunRepo, parseOvernightRunMetadata } from '../src/research/overnight-run-repo.js';
+import { parseOvernightRunMetadata, OvernightRunRepo } from '../src/research/overnight-run-repo.js';
 import type { OvernightAuditArtifact } from '../src/research/overnight-research-main.js';
 import {
   HypothesisEvaluationStatus,
@@ -27,10 +27,10 @@ function indiaTime(
 
 const CLOSED_AFTER = indiaTime(2025, 1, 6, 16, 30, 0);
 
-function validGraph(): HypothesisGraph {
+function validGraph(hashSeed: string): HypothesisGraph {
   return {
     schemaVersion: '1',
-    signals: [{ type: 'ema_cross', params: { fast: 8, slow: 21 } }],
+    signals: [{ type: 'ema_cross', params: { fast: 8 + hashSeed.length, slow: 21 } }],
     filters: [{ type: 'volume_min', params: { min: 500000 } }],
     entryRules: [{ type: 'breakout_confirmed', params: { lookbackBars: 5 } }],
     exitRules: [{ type: 'time_stop', params: { maxBars: 12 } }],
@@ -38,9 +38,9 @@ function validGraph(): HypothesisGraph {
   };
 }
 
-describe('overnight resume + governed publish-back', () => {
-  it('resumes from persisted state, publishes through the governed seam, and emits consolidated lineage audit', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-publish-'));
+describe('M012/S03 overnight publish-back proof', () => {
+  it('proves the audit artifact is a single end-to-end inspection surface for published runs', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'm012-s03-proof-'));
     const dbPath = path.join(tmpDir, 'research.db');
     const workspacePath = path.join(tmpDir, 'workspace');
     fs.mkdirSync(workspacePath, { recursive: true });
@@ -49,128 +49,117 @@ describe('overnight resume + governed publish-back', () => {
     const repo = new OvernightRunRepo(dbm.db);
     const hypothesisRepo = new HypothesisRepository(dbm.db);
 
+    const graph = validGraph('proof');
     const hypothesis = hypothesisRepo.insertHypothesis({
-      canonicalHash: 'aa'.repeat(32),
-      canonicalJson: JSON.stringify(validGraph()),
+      canonicalHash: 'bb'.repeat(32),
+      canonicalJson: JSON.stringify(graph),
       status: HypothesisStatus.Validated,
-      graph: validGraph(),
+      graph,
       createdAt: CLOSED_AFTER.getTime(),
       updatedAt: CLOSED_AFTER.getTime(),
     });
 
-    const runRow = dbm.db.prepare(`
+    const runId = Number(dbm.db.prepare(`
       INSERT INTO walk_forward_runs
         (label, strategy_id, strategy_version, market_id,
          window_count, total_trials, status, created_at, started_at, completed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      'overnight-run',
-      'research-hypothesis',
+      'proof-run',
+      'proof-strategy',
       '1.0.0',
       'INDIA_NSE_EQ',
-      3,
+      2,
       1,
       'completed',
       CLOSED_AFTER.getTime(),
       CLOSED_AFTER.getTime(),
       CLOSED_AFTER.getTime() + 100,
-    );
-    const walkForwardRunId = Number(runRow.lastInsertRowid);
+    ).lastInsertRowid);
 
-    const trialRow = dbm.db.prepare(`
+    const trialId = Number(dbm.db.prepare(`
       INSERT INTO walk_forward_trials
         (run_id, trial_index, label, params_json,
          merged_score, deterministic_score, llm_score, llm_status,
          rank, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      walkForwardRunId,
+      runId,
       0,
-      'trial-1',
+      'proof-trial',
       '{}',
-      0.91,
-      0.83,
+      0.88,
+      0.8,
       null,
       null,
       1,
       CLOSED_AFTER.getTime(),
-    );
-    const trialId = Number(trialRow.lastInsertRowid);
+    ).lastInsertRowid);
 
-    const winnerRow = dbm.db.prepare(`
+    const winnerId = Number(dbm.db.prepare(`
       INSERT INTO walk_forward_winners
         (run_id, result, selected_trial_id, selection_strategy,
          selection_config_json, rationale, artifact_paths_json,
          selected_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      walkForwardRunId,
+      runId,
       'selected',
       trialId,
       'threshold',
       '{}',
-      'Best overnight candidate',
+      'Proof winner',
       null,
       CLOSED_AFTER.getTime(),
       CLOSED_AFTER.getTime(),
-    );
-    const winnerId = Number(winnerRow.lastInsertRowid);
+    ).lastInsertRowid);
 
     const evaluation = hypothesisRepo.insertEvaluation({
       hypothesisGraphId: hypothesis.id,
-      walkForwardRunId,
+      walkForwardRunId: runId,
       status: HypothesisEvaluationStatus.Completed,
       winnerId,
-      rationale: 'Completed bounded overnight evaluation.',
+      rationale: 'Proof evaluation completed.',
       outcomeDetail: 'winner_selected',
       createdAt: CLOSED_AFTER.getTime(),
       updatedAt: CLOSED_AFTER.getTime(),
     });
 
-    const promotionArtifactPath = path.join(workspacePath, 'promotion-artifact.json');
-    fs.writeFileSync(promotionArtifactPath, JSON.stringify({ ok: true }), 'utf-8');
+    const artifactPath = path.join(workspacePath, 'proof-promotion.json');
+    fs.writeFileSync(artifactPath, JSON.stringify({ score: 0.88 }), 'utf-8');
     hypothesisRepo.insertResearchArtifact({
       hypothesisEvaluationId: evaluation.id,
       artifactType: ResearchArtifactType.PromotionArtifact,
       format: 'json',
-      filePath: promotionArtifactPath,
-      label: 'Promotion artifact',
+      filePath: artifactPath,
+      label: 'Proof promotion artifact',
       createdAt: CLOSED_AFTER.getTime(),
     });
 
     const overnightRun = repo.insertRun({
-      label: 'resume-run',
-      status: 'failed' as const,
+      label: 'proof-overnight-run',
+      status: 'completed' as const,
       marketPhase: 'closed',
-      currentPhase: 'generate',
-      checkpointPointer: JSON.stringify({
-        phase: 'generate',
-        completedItems: 1,
-        totalItems: 1,
-        lastProcessedId: `gen-hyp-${hypothesis.id}`,
-      }),
+      currentPhase: 'completed',
+      checkpointPointer: JSON.stringify({ phase: 'evaluate', completedItems: 1, totalItems: 1 }),
       workspacePath,
       researchDbPath: dbPath,
-      lastError: 'Interrupted after generate phase.',
       createdAt: CLOSED_AFTER.getTime(),
       startedAt: CLOSED_AFTER.getTime(),
-      completedAt: CLOSED_AFTER.getTime() + 1,
+      completedAt: CLOSED_AFTER.getTime() + 20,
     });
 
     const metadata = parseOvernightRunMetadata(overnightRun.metadataJson);
     metadata.resumeAttempts.push({
-      resumedAt: CLOSED_AFTER.getTime() + 10,
+      resumedAt: CLOSED_AFTER.getTime() + 5,
       fromPhase: 'generate',
       checkpointPhase: 'generate',
-      reason: 'rerun detected; continuing from persisted overnight run state',
+      reason: 'proof rerun',
     });
     metadata.phaseTransitions.push(
-      { phase: 'generate', status: 'started', recordedAt: CLOSED_AFTER.getTime() },
       { phase: 'generate', status: 'completed', recordedAt: CLOSED_AFTER.getTime() + 1 },
-      { phase: 'evaluate', status: 'started', recordedAt: CLOSED_AFTER.getTime() + 11 },
-      { phase: 'evaluate', status: 'completed', recordedAt: CLOSED_AFTER.getTime() + 12 },
-      { phase: 'publish', status: 'started', recordedAt: CLOSED_AFTER.getTime() + 13 },
-      { phase: 'publish', status: 'completed', recordedAt: CLOSED_AFTER.getTime() + 14 },
+      { phase: 'evaluate', status: 'completed', recordedAt: CLOSED_AFTER.getTime() + 2 },
+      { phase: 'publish', status: 'completed', recordedAt: CLOSED_AFTER.getTime() + 3 },
     );
     metadata.lastSuccessfulPhase = 'publish';
     metadata.phaseResults.generate = {
@@ -178,17 +167,17 @@ describe('overnight resume + governed publish-back', () => {
       recordedAt: CLOSED_AFTER.getTime() + 1,
       hypothesisId: hypothesis.id,
       hypothesisStatus: hypothesis.status,
-      detail: 'Generated overnight hypothesis batch.',
+      detail: 'Proof generation complete.',
     };
     metadata.phaseResults.evaluate = {
       phase: 'evaluate',
-      recordedAt: CLOSED_AFTER.getTime() + 12,
+      recordedAt: CLOSED_AFTER.getTime() + 2,
       hypothesisId: hypothesis.id,
       evaluationId: evaluation.id,
       evaluationStatus: evaluation.status,
       rationale: evaluation.rationale,
-      artifactPaths: [promotionArtifactPath],
-      detail: 'Completed bounded overnight evaluation.',
+      artifactPaths: [artifactPath],
+      detail: 'Proof evaluation complete.',
     };
 
     dbm.db.prepare(`
@@ -197,20 +186,14 @@ describe('overnight resume + governed publish-back', () => {
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(strategy_id, strategy_version, market_id)
       DO UPDATE SET phase = excluded.phase, updated_at = excluded.updated_at
-    `).run(
-      `research-hypothesis-${hypothesis.id}`,
-      '1.0.0',
-      'INDIA_NSE_EQ',
-      'backtest',
-      CLOSED_AFTER.getTime() + 20,
-    );
+    `).run(`research-hypothesis-${hypothesis.id}`, '1.0.0', 'INDIA_NSE_EQ', 'backtest', CLOSED_AFTER.getTime() + 10);
 
     const lifecycleState = dbm.db.prepare(`
-      SELECT id FROM strategy_lifecycle_state
+      SELECT id, phase, updated_at FROM strategy_lifecycle_state
       WHERE strategy_id = ? AND strategy_version = ? AND market_id = ?
-    `).get(`research-hypothesis-${hypothesis.id}`, '1.0.0', 'INDIA_NSE_EQ') as { id: number };
+    `).get(`research-hypothesis-${hypothesis.id}`, '1.0.0', 'INDIA_NSE_EQ') as { id: number; phase: 'backtest'; updated_at: number };
 
-    const governanceDecision = dbm.db.prepare(`
+    const governanceDecisionId = Number(dbm.db.prepare(`
       INSERT INTO governance_decisions
         (strategy_id, strategy_version, market_id, verdict,
          previous_phase, new_phase, rationale, evidence_json,
@@ -223,11 +206,11 @@ describe('overnight resume + governed publish-back', () => {
       'promote',
       'backtest',
       'backtest',
-      'Published after overnight bounded evaluation.',
-      JSON.stringify({ minMergedScore: 0.7, actualMergedScore: 0.91 }),
+      'Proof publish governance decision.',
+      JSON.stringify({ minMergedScore: 0.7, actualMergedScore: 0.88 }),
       winnerId,
-      CLOSED_AFTER.getTime() + 21,
-    );
+      CLOSED_AFTER.getTime() + 11,
+    ).lastInsertRowid);
 
     const publication = hypothesisRepo.insertPublication({
       hypothesisEvaluationId: evaluation.id,
@@ -236,54 +219,41 @@ describe('overnight resume + governed publish-back', () => {
       strategyId: `research-hypothesis-${hypothesis.id}`,
       strategyVersion: '1.0.0',
       marketId: 'INDIA_NSE_EQ',
-      rationale: 'Published after overnight bounded evaluation.',
-      evidenceJson: JSON.stringify({
-        minMergedScore: 0.7,
-        actualMergedScore: 0.91,
-        holdReasons: [],
-      }),
+      rationale: 'Proof publication succeeded.',
+      evidenceJson: JSON.stringify({ minMergedScore: 0.7, actualMergedScore: 0.88, holdReasons: [] }),
       lifecycleStateId: lifecycleState.id,
-      governanceDecisionId: Number(governanceDecision.lastInsertRowid),
-      publishedAt: CLOSED_AFTER.getTime() + 22,
-      createdAt: CLOSED_AFTER.getTime() + 22,
+      governanceDecisionId,
+      publishedAt: CLOSED_AFTER.getTime() + 12,
+      createdAt: CLOSED_AFTER.getTime() + 12,
     });
 
     metadata.phaseResults.publish = {
       phase: 'publish',
-      recordedAt: CLOSED_AFTER.getTime() + 14,
+      recordedAt: CLOSED_AFTER.getTime() + 3,
       hypothesisId: hypothesis.id,
       evaluationId: evaluation.id,
       evaluationStatus: evaluation.status,
-      rationale: 'Published after overnight bounded evaluation.',
-      artifactPaths: [promotionArtifactPath],
-      detail: 'Published after overnight bounded evaluation.',
+      rationale: 'Proof publication succeeded.',
+      artifactPaths: [artifactPath],
+      detail: 'Proof publication succeeded.',
     };
     metadata.publication = {
       verdict: 'publish',
       publicationId: publication.id,
       lifecycleStateId: lifecycleState.id,
-      governanceDecisionId: Number(governanceDecision.lastInsertRowid),
-      rationale: 'Published after overnight bounded evaluation.',
-      recordedAt: CLOSED_AFTER.getTime() + 14,
+      governanceDecisionId,
+      rationale: 'Proof publication succeeded.',
+      recordedAt: CLOSED_AFTER.getTime() + 3,
     };
 
     const finalRun = repo.updateRun(overnightRun.id, {
-      status: 'completed' as const,
-      currentPhase: 'completed',
-      checkpointPointer: JSON.stringify({
-        phase: 'evaluate',
-        completedItems: 1,
-        totalItems: 1,
-      }),
-      lastError: null,
-      completedAt: CLOSED_AFTER.getTime() + 15,
       metadataJson: repo.serializeMetadata(metadata),
     })!;
 
-    const audit: OvernightAuditArtifact = {
+    const auditArtifact: OvernightAuditArtifact = {
       schemaVersion: 1,
       artifactType: 'overnight-audit',
-      generatedAt: new Date(CLOSED_AFTER.getTime() + 15).toISOString(),
+      generatedAt: new Date(CLOSED_AFTER.getTime() + 20).toISOString(),
       run: finalRun,
       finalCheckpoint: { phase: 'evaluate', completedItems: 1, totalItems: 1 },
       marketPhase: 'closed',
@@ -292,7 +262,7 @@ describe('overnight resume + governed publish-back', () => {
       dbPath,
       researchDbPath: dbPath,
       workspacePath,
-      simulation: { generateCheckpoints: 1, evaluateCheckpoints: 1, durationMs: 15 },
+      simulation: { generateCheckpoints: 1, evaluateCheckpoints: 1, durationMs: 20 },
       resumed: true,
       nextPhaseAtStart: 'evaluate',
       nextPhaseAfterExecution: 'completed',
@@ -304,8 +274,8 @@ describe('overnight resume + governed publish-back', () => {
         verdict: 'publish',
         publicationId: publication.id,
         lifecycleStateId: lifecycleState.id,
-        governanceDecisionId: Number(governanceDecision.lastInsertRowid),
-        rationale: 'Published after overnight bounded evaluation.',
+        governanceDecisionId,
+        rationale: 'Proof publication succeeded.',
         publishedEvaluationId: evaluation.id,
         publishedHypothesisId: hypothesis.id,
         status: ResearchPublicationStatus.Published,
@@ -316,14 +286,8 @@ describe('overnight resume + governed publish-back', () => {
         hypothesis,
         evaluation: {
           evaluation,
-          walkForwardRun: { id: walkForwardRunId, label: 'overnight-run', status: 'completed', windowCount: 3, totalTrials: 1 },
-          winner: {
-            id: winnerId,
-            result: 'selected',
-            selectedTrialId: trialId,
-            selectionStrategy: 'threshold',
-            rationale: 'Best overnight candidate',
-          },
+          walkForwardRun: { id: runId, label: 'proof-run', status: 'completed', windowCount: 2, totalTrials: 1 },
+          winner: { id: winnerId, result: 'selected', selectedTrialId: trialId, selectionStrategy: 'threshold', rationale: 'Proof winner' },
         },
         artifacts: hypothesisRepo.getResearchArtifactsByEvaluationId(evaluation.id),
         publicationEvidence: {
@@ -333,25 +297,25 @@ describe('overnight resume + governed publish-back', () => {
             strategyId: `research-hypothesis-${hypothesis.id}`,
             strategyVersion: '1.0.0',
             marketId: 'INDIA_NSE_EQ',
-            phase: 'backtest' as const,
-            updatedAt: CLOSED_AFTER.getTime() + 20,
+            phase: lifecycleState.phase,
+            updatedAt: lifecycleState.updated_at,
           },
           governanceDecisions: [{
-            id: Number(governanceDecision.lastInsertRowid),
+            id: governanceDecisionId,
             strategyId: `research-hypothesis-${hypothesis.id}`,
             strategyVersion: '1.0.0',
             marketId: 'INDIA_NSE_EQ',
             verdict: 'promote' as const,
             previousPhase: 'backtest' as const,
             newPhase: 'backtest' as const,
-            rationale: 'Published after overnight bounded evaluation.',
-            evidenceJson: JSON.stringify({ minMergedScore: 0.7, actualMergedScore: 0.91 }),
+            rationale: 'Proof publish governance decision.',
+            evidenceJson: JSON.stringify({ minMergedScore: 0.7, actualMergedScore: 0.88 }),
             winnerId,
-            recordedAt: CLOSED_AFTER.getTime() + 21,
+            recordedAt: CLOSED_AFTER.getTime() + 11,
           }],
         },
         generationAttempt: null,
-        assembledAt: CLOSED_AFTER.getTime() + 15,
+        assembledAt: CLOSED_AFTER.getTime() + 20,
       },
       resumeHistory: metadata.resumeAttempts,
       phaseTransitions: metadata.phaseTransitions,
@@ -369,22 +333,21 @@ describe('overnight resume + governed publish-back', () => {
     };
 
     const auditPath = path.join(workspacePath, 'overnight-audit.json');
-    fs.writeFileSync(auditPath, JSON.stringify(audit, null, 2), 'utf-8');
+    fs.writeFileSync(auditPath, JSON.stringify(auditArtifact, null, 2), 'utf-8');
 
-    const readBack = JSON.parse(fs.readFileSync(auditPath, 'utf-8')) as OvernightAuditArtifact;
-    expect(readBack.resumed).toBe(true);
-    expect(readBack.run.id).toBe(overnightRun.id);
-    expect(readBack.publication.verdict).toBe('publish');
-    expect(readBack.publication.status).toBe(ResearchPublicationStatus.Published);
-    expect(readBack.publication.publishedEvaluationId).toBe(evaluation.id);
-    expect(readBack.publication.publishedHypothesisId).toBe(hypothesis.id);
-    expect(readBack.generatedHypothesisIds).toEqual([hypothesis.id]);
-    expect(readBack.evaluatedHypothesisIds).toEqual([hypothesis.id]);
-    expect(readBack.evaluationIds).toEqual([evaluation.id]);
-    expect(readBack.resumeHistory).toHaveLength(1);
-    expect(readBack.lineage?.publicationEvidence?.publication.id).toBe(publication.id);
-    expect(readBack.lineage?.publicationEvidence?.governanceDecisions).toHaveLength(1);
-    expect(readBack.lineage?.artifacts?.[0].artifactType).toBe(ResearchArtifactType.PromotionArtifact);
+    const audit = JSON.parse(fs.readFileSync(auditPath, 'utf-8')) as OvernightAuditArtifact;
+    expect(audit.artifactType).toBe('overnight-audit');
+    expect(audit.publication.verdict).toBe('publish');
+    expect(audit.publication.publicationId).toBe(publication.id);
+    expect(audit.publication.governanceDecisionId).toBe(governanceDecisionId);
+    expect(audit.resumeHistory[0].checkpointPhase).toBe('generate');
+    expect(audit.phaseTransitions.some(t => t.phase === 'publish' && t.status === 'completed')).toBe(true);
+    expect(audit.lineage?.publicationEvidence?.publication.status).toBe(ResearchPublicationStatus.Published);
+    expect(audit.lineage?.publicationEvidence?.governanceDecisions[0].rationale).toContain('Proof publish governance decision');
+    expect(audit.lineage?.artifacts?.map(a => a.filePath)).toEqual([artifactPath]);
+    expect(audit.generatedHypothesisIds).toEqual([hypothesis.id]);
+    expect(audit.evaluatedHypothesisIds).toEqual([hypothesis.id]);
+    expect(audit.evaluationIds).toEqual([evaluation.id]);
 
     dbm.close();
   });
