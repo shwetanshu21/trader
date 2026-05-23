@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "research-promotion-artifact",
+  "hypothesisGraphId": 99,
+  "hypothesisEvaluationId": 101,
+  "generatedAt": "2026-05-23T14:19:11.949Z",
+  "evaluationStatus": "completed",
+  "rationale": "Permission test artifact",
+  "walkForwardRun": {
+    "id": 1,
+    "label": "test-run",
+    "status": "completed",
+    "windowCount": 3,
+    "totalTrials": 9
+  },
+  "winner": {
+    "trialId": 5,
+    "trialLabel": "best-trial",
+    "aggregateMergedScore": 0.8,
+    "aggregateDeterministicScore": 0.7
+  },
+  "aggregateMetrics": {
+    "scoreStability": 0.9,
+    "topKOverlap": 0.85,
+    "llmConsultationRate": null,
+    "llmDivergence": null
+  }
+}

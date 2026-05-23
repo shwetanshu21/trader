@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "research-promotion-artifact",
+  "hypothesisGraphId": 42,
+  "hypothesisEvaluationId": 99,
+  "generatedAt": "2026-05-23T14:19:11.944Z",
+  "evaluationStatus": "completed",
+  "rationale": "Test artifact",
+  "walkForwardRun": null,
+  "winner": null,
+  "aggregateMetrics": null
+}

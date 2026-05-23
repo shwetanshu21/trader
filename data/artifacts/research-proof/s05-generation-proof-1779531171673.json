@@ -1,0 +1,244 @@
+{
+  "harness": "M011/S05 Real-generation Proof Harness",
+  "completedAt": "2026-05-23T10:12:51.672Z",
+  "verdict": "PASS",
+  "totalAssertions": 39,
+  "passed": 39,
+  "failed": 0,
+  "assertions": [
+    {
+      "name": "Phase1: malformed result kind is rejected",
+      "pass": true,
+      "detail": "kind=rejected"
+    },
+    {
+      "name": "Phase1: malformed attempt verdict is Rejected",
+      "pass": true,
+      "detail": "verdict=rejected"
+    },
+    {
+      "name": "Phase1: malformed attempt has id > 0",
+      "pass": true,
+      "detail": "id=1"
+    },
+    {
+      "name": "Phase1: malformed attempt has reasons",
+      "pass": true,
+      "detail": "reasons.length=1"
+    },
+    {
+      "name": "Phase1: malformed reason code is MalformedResponse",
+      "pass": true,
+      "detail": "code=malformed_response"
+    },
+    {
+      "name": "Phase1: malformed attempt has null canonicalHash",
+      "pass": true,
+      "detail": "hash=null"
+    },
+    {
+      "name": "Phase1: malformed attempt has null hypothesisGraphId",
+      "pass": true,
+      "detail": "graphId=null"
+    },
+    {
+      "name": "Phase1: malformed raw provider output preserved",
+      "pass": true,
+      "detail": "output=not valid json"
+    },
+    {
+      "name": "Phase1: contextProvenance.providerUrl matches proof config (real ingress)",
+      "pass": true,
+      "detail": "url=http://proof-provider.local/hypothesis"
+    },
+    {
+      "name": "Phase2: first call with graph is accepted",
+      "pass": true,
+      "detail": "kind=accepted"
+    },
+    {
+      "name": "Phase2: second call with same graph is skipped",
+      "pass": true,
+      "detail": "kind=skipped"
+    },
+    {
+      "name": "Phase2: skipped attempt verdict is Skipped",
+      "pass": true,
+      "detail": "verdict=skipped"
+    },
+    {
+      "name": "Phase2: skipped attempt has id > 0",
+      "pass": true,
+      "detail": "id=3"
+    },
+    {
+      "name": "Phase2: skipped attempt has reasons",
+      "pass": true,
+      "detail": "reasons.length=1"
+    },
+    {
+      "name": "Phase2: skipped reason code is DuplicateSkipped",
+      "pass": true,
+      "detail": "code=duplicate_skipped"
+    },
+    {
+      "name": "Phase2: skipped attempt has canonical hash",
+      "pass": true,
+      "detail": "hash=b85e3582e8d0c23a49b293ede2913fdcd5fbd3571c10191fc83b9794f137719f"
+    },
+    {
+      "name": "Phase2: skipped attempt has null hypothesisGraphId",
+      "pass": true,
+      "detail": "graphId=null"
+    },
+    {
+      "name": "Phase2: contextProvenance.providerUrl matches proof config (real ingress)",
+      "pass": true,
+      "detail": "url=http://proof-provider.local/hypothesis"
+    },
+    {
+      "name": "Phase3: accepted result kind is accepted",
+      "pass": true,
+      "detail": "kind=accepted"
+    },
+    {
+      "name": "Phase3: accepted attempt verdict is Accepted",
+      "pass": true,
+      "detail": "verdict=accepted"
+    },
+    {
+      "name": "Phase3: accepted attempt has id > 0",
+      "pass": true,
+      "detail": "id=4"
+    },
+    {
+      "name": "Phase3: accepted attempt has no reasons",
+      "pass": true,
+      "detail": "reasons.length=0"
+    },
+    {
+      "name": "Phase3: accepted attempt has canonicalHash",
+      "pass": true,
+      "detail": "null canonicalHash"
+    },
+    {
+      "name": "Phase3: accepted attempt has hypothesisGraphId",
+      "pass": true,
+      "detail": "null hypothesisGraphId"
+    },
+    {
+      "name": "Phase3: accepted attempt has hypothesisEvaluationId in DB",
+      "pass": true,
+      "detail": "reloaded.hypothesisEvaluationId=1"
+    },
+    {
+      "name": "Phase3: hypothesis was validated and persisted",
+      "pass": true,
+      "detail": "id=2"
+    },
+    {
+      "name": "Phase3: evaluation completed with a status",
+      "pass": true,
+      "detail": "eval=completed"
+    },
+    {
+      "name": "Phase3: contextProvenance.providerUrl matches proof config (real ingress)",
+      "pass": true,
+      "detail": "url=http://proof-provider.local/hypothesis"
+    },
+    {
+      "name": "Phase4: lineage has generationAttempt",
+      "pass": true,
+      "detail": "null generationAttempt"
+    },
+    {
+      "name": "Phase4: generationAttempt.id matches",
+      "pass": true,
+      "detail": "got=4, expected=4"
+    },
+    {
+      "name": "Phase4: generationAttempt.verdict is Accepted",
+      "pass": true,
+      "detail": "verdict=accepted"
+    },
+    {
+      "name": "Phase4: hypothesis row is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase4: hypothesis id matches",
+      "pass": true,
+      "detail": "got=2, expected=2"
+    },
+    {
+      "name": "Phase4: hypothesis has status",
+      "pass": true,
+      "detail": "status=failed_evaluation"
+    },
+    {
+      "name": "Phase4: evaluation snapshot is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase4: evaluation id matches",
+      "pass": true,
+      "detail": "got=1, expected=1"
+    },
+    {
+      "name": "Phase4: at least one artifact exists",
+      "pass": true,
+      "detail": "count=3"
+    },
+    {
+      "name": "Phase4: assembledAt is valid",
+      "pass": true,
+      "detail": "assembledAt=1779531171671"
+    },
+    {
+      "name": "Phase4: duplicateEvidence is null (first occurrence)",
+      "pass": true,
+      "detail": "got=null"
+    }
+  ],
+  "branchesTested": [
+    "malformed/rejected (via HypothesisGenerationService.generate() with mocked provider returning non-JSON)",
+    "skipped/duplicate (via HypothesisGenerationService.generate() — first accept, then duplicate-skip)",
+    "accepted with evaluation (via HypothesisGenerationService.generate() through real validator + evaluator)"
+  ],
+  "evidenceBlocks": {
+    "malformedGeneration": {
+      "attemptId": {
+        "id": 1
+      },
+      "reasonsPopulated": true,
+      "nullLinkage": true,
+      "ingressVerified": true
+    },
+    "skippedGeneration": {
+      "attemptId": {
+        "id": 3
+      },
+      "reasonsPopulated": true,
+      "nullLinkage": true,
+      "ingressVerified": true
+    },
+    "acceptedGeneration": {
+      "attemptId": 4,
+      "hypothesisId": 2,
+      "evaluationId": 1,
+      "attemptLinked": true,
+      "hypothesisPersisted": true,
+      "evaluationCompleted": true,
+      "lineageReconstructed": true,
+      "ingressVerified": true
+    }
+  },
+  "realIngress": {
+    "description": "All three branches exercised through HypothesisGenerationService.generate() with mocked fetch transport. contextProvenance.providerUrl verified against PROOF_PROVIDER_CONFIG for each branch.",
+    "malformedIngressVerified": true,
+    "skippedIngressVerified": true,
+    "acceptedIngressVerified": true
+  }
+}
