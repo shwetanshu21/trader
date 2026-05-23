@@ -1,16 +1,16 @@
 {
   "id": 1,
-  "canonicalHash": "9aa3c08ae778bf07b0ffaaf4f150d895da6328b3ca5db241daf1f8cc0539a1e8",
-  "canonicalJson": "{\"entryRules\":[{\"params\":{\"lookbackBars\":5},\"type\":\"breakout_confirmed\"}],\"exitRules\":[{\"params\":{\"maxBars\":12},\"type\":\"time_stop\"}],\"filters\":[{\"params\":{\"min\":500000},\"type\":\"volume_min\"}],\"riskRules\":[{\"params\":{\"multiple\":2,\"period\":14},\"type\":\"atr_stop\"}],\"schemaVersion\":\"1\",\"signals\":[{\"params\":{\"fast\":12,\"slow\":26},\"type\":\"ema_cross\"}]}",
+  "canonicalHash": "a9b0e4c268b200895e6f42d0c4915f5a20bc981cf4749310fad6324725345ce7",
+  "canonicalJson": "{\"entryRules\":[{\"params\":{\"lookbackBars\":10,\"multiplier\":1.5},\"type\":\"range_breakout\"}],\"exitRules\":[{\"params\":{\"atrMultiplier\":3,\"atrPeriod\":14},\"type\":\"trailing_stop\"}],\"filters\":[{\"params\":{\"min\":300000},\"type\":\"volume_min\"}],\"riskRules\":[{\"params\":{\"riskPercent\":1},\"type\":\"position_size\"}],\"schemaVersion\":\"1\",\"signals\":[{\"params\":{\"fast\":10,\"slow\":30},\"type\":\"sma_cross\"}]}",
   "status": "validated",
   "graph": {
     "schemaVersion": "1",
     "signals": [
       {
-        "type": "ema_cross",
+        "type": "sma_cross",
         "params": {
-          "fast": 12,
-          "slow": 26
+          "fast": 10,
+          "slow": 30
         }
       }
     ],
@@ -18,36 +18,37 @@
       {
         "type": "volume_min",
         "params": {
-          "min": 500000
+          "min": 300000
         }
       }
     ],
     "entryRules": [
       {
-        "type": "breakout_confirmed",
+        "type": "range_breakout",
         "params": {
-          "lookbackBars": 5
+          "lookbackBars": 10,
+          "multiplier": 1.5
         }
       }
     ],
     "exitRules": [
       {
-        "type": "time_stop",
+        "type": "trailing_stop",
         "params": {
-          "maxBars": 12
+          "atrPeriod": 14,
+          "atrMultiplier": 3
         }
       }
     ],
     "riskRules": [
       {
-        "type": "atr_stop",
+        "type": "position_size",
         "params": {
-          "period": 14,
-          "multiple": 2
+          "riskPercent": 1
         }
       }
     ]
   },
-  "createdAt": 1779527678400,
-  "updatedAt": 1779527678400
+  "createdAt": 1779528552205,
+  "updatedAt": 1779528552205
 }

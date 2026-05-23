@@ -25,12 +25,19 @@ import { ResearchPublishBackService } from '../research/publish-back-service.js'
 import { ResearchAuditService } from '../research/research-audit-service.js';
 import { ResearchArtifactWriter } from '../research/artifact-writer.js';
 import { ReplayFidelity, type ReplayTick } from '../replay/types.js';
+import { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
 import {
   HypothesisStatus,
   HypothesisEvaluationStatus,
   HypothesisMemoryStatus,
   HypothesisValidationReasonCode,
   ResearchArtifactType,
+  GenerationVerdict,
+  GenerationReasonCode,
+  type GenerationReason,
+  type GenerationContextProvenance,
+  type HypothesisGenerationAttemptWithReasons,
+  type NewHypothesisGenerationAttempt,
   type HypothesisGraph,
   type HypothesisGraphRow,
   type HypothesisEvaluationResult,
@@ -295,6 +302,7 @@ export interface ResearchProofContext {
   db: Database.Database;
   hypothesisRepo: HypothesisRepository;
   memoryRepo: HypothesisMemoryRepository;
+  generationRepo: HypothesisGenerationRepository;
   lifecycleRepo: StrategyLifecycleRepository;
   walkForwardRepo: WalkForwardRepository;
   validator: HypothesisValidator;
@@ -313,12 +321,13 @@ export function createResearchProofContext(): ResearchProofContext {
 
   const hypothesisRepo = new HypothesisRepository(db);
   const memoryRepo = new HypothesisMemoryRepository(db);
+  const generationRepo = new HypothesisGenerationRepository(db);
   const lifecycleRepo = new StrategyLifecycleRepository(db);
   const walkForwardRepo = new WalkForwardRepository(db);
 
   const validator = new HypothesisValidator({ memoryRepo, hypothesisRepo });
   const publishBackService = new ResearchPublishBackService({ db, hypothesisRepo, lifecycleRepo });
-  const auditService = new ResearchAuditService({ hypothesisRepo, memoryRepo, lifecycleRepo });
+  const auditService = new ResearchAuditService({ hypothesisRepo, memoryRepo, lifecycleRepo, generationRepo });
 
   return {
     tmpDir,
@@ -327,6 +336,7 @@ export function createResearchProofContext(): ResearchProofContext {
     db,
     hypothesisRepo,
     memoryRepo,
+    generationRepo,
     lifecycleRepo,
     walkForwardRepo,
     validator,
@@ -569,3 +579,241 @@ export function report(): { passed: number; failed: number } {
   console.log(`\n\u2500\u2500 Results: ${passed} passed, ${failed} failed \u2500\u2500`);
   return { passed, failed };
 }
+
+// ===========================================================================
+// S05 — Generation proof helpers
+// ===========================================================================
+
+/**
+ * Seed a malformed/rejected generation attempt with explicit reasons.
+ * Uses the real HypothesisGenerationRepository to insert the row + reasons
+ * in a single transaction.
+ *
+ * @returns The persisted generation attempt with reasons loaded.
+ */
+export function seedMalformedGeneration(
+  ctx: ResearchProofContext,
+): HypothesisGenerationAttemptWithReasons {
+  const genRepo = new HypothesisGenerationRepository(ctx.db);
+
+  const attempt: NewHypothesisGenerationAttempt = {
+    verdict: GenerationVerdict.Rejected,
+    contextProvenance: {
+      providerUrl: 'https://api.provider.test/v1',
+      providerModel: 'gpt-4-test',
+      promptVersion: '1.0.0',
+      triggeredAt: Date.now(),
+      marketId: 'INDIA_NSE_EQ',
+      strategyId: 'research-hypothesis-generator',
+    },
+    rawProviderOutput: '{invalid json here}',
+    canonicalHash: null,
+    hypothesisGraphId: null,
+    hypothesisEvaluationId: null,
+    createdAt: Date.now(),
+  };
+
+  const reasons: GenerationReason[] = [
+    {
+      reasonCode: GenerationReasonCode.MalformedResponse,
+      reasonMessage: 'Provider returned output that is not valid JSON.',
+    },
+  ];
+
+  return genRepo.insertAttemptWithReasons(attempt, reasons);
+}
+
+/**
+ * Seed a skipped (duplicate-skip) generation attempt with explicit reason.
+ *
+ * @returns The persisted generation attempt with reasons loaded.
+ */
+export function seedSkippedGeneration(
+  ctx: ResearchProofContext,
+): HypothesisGenerationAttemptWithReasons {
+  const genRepo = new HypothesisGenerationRepository(ctx.db);
+  const canonicalHash = 'a1b2c3d4e5f6_skipped';
+
+  const attempt: NewHypothesisGenerationAttempt = {
+    verdict: GenerationVerdict.Skipped,
+    contextProvenance: {
+      providerUrl: 'https://api.provider.test/v1',
+      providerModel: 'gpt-4-test',
+      promptVersion: '1.0.0',
+      triggeredAt: Date.now(),
+      marketId: 'INDIA_NSE_EQ',
+      strategyId: 'research-hypothesis-generator',
+    },
+    rawProviderOutput: '{"schemaVersion":"1","signals":[{"type":"ema_cross","params":{"fast":8,"slow":21}}],"filters":[],"entryRules":[],"exitRules":[],"riskRules":[]}',
+    canonicalHash,
+    hypothesisGraphId: null,
+    hypothesisEvaluationId: null,
+    createdAt: Date.now(),
+  };
+
+  const reasons: GenerationReason[] = [
+    {
+      reasonCode: GenerationReasonCode.DuplicateSkipped,
+      reasonMessage: `Exact duplicate of prior accepted hypothesis (generation attempt id=0).`,
+    },
+  ];
+
+  return genRepo.insertAttemptWithReasons(attempt, reasons);
+}
+
+/**
+ * Seed an accepted generation attempt that flows through the full pipeline:
+ * validated hypothesis -> walk-forward -> evaluation -> generation-attempt linkage.
+ *
+ * This simulates what the real HypothesisGenerationService does when the
+ * provider returns a valid graph: canonicalize, validate, persist, then
+ * optionally evaluate. The walk-forward evaluator is mocked (same pattern
+ * as S04's runSuccessPath) so no real market data is needed.
+ *
+ * @returns The generation attempt, hypothesis row, evaluation result, and lineage.
+ */
+export async function seedAcceptedGeneration(
+  ctx: ResearchProofContext,
+): Promise<{
+  generationAttempt: HypothesisGenerationAttemptWithReasons;
+  hypothesis: HypothesisGraphRow;
+  evaluationResult: HypothesisEvaluationResult;
+  lineage: ResearchLineageSnapshot;
+}> {
+  const genRepo = new HypothesisGenerationRepository(ctx.db);
+
+  // ── 1. Create a valid hypothesis graph via the real validator ───────────
+  const graph: HypothesisGraph = {
+    schemaVersion: '1',
+    signals: [{ type: 'sma_cross', params: { fast: 10, slow: 30 } }],
+    filters: [{ type: 'volume_min', params: { min: 300000 } }],
+    entryRules: [{ type: 'range_breakout', params: { lookbackBars: 10, multiplier: 1.5 } }],
+    exitRules: [{ type: 'trailing_stop', params: { atrPeriod: 14, atrMultiplier: 3 } }],
+    riskRules: [{ type: 'position_size', params: { riskPercent: 1 } }],
+  };
+
+  const canonical = canonicalizeHypothesis(graph);
+  const hash = canonical.canonicalHash;
+
+  // 2. Validate and persist the hypothesis
+  const validationResult = ctx.validator.validateAndPersist(graph, Date.now());
+  if (validationResult.result.kind !== 'validated') {
+    throw new Error(
+      `Hypothesis validation failed: ${JSON.stringify(validationResult.result)}`,
+    );
+  }
+  const hypothesisId = validationResult.persistedId!;
+  const hypothesis = ctx.hypothesisRepo.getHypothesisById(hypothesisId)!;
+
+  // 3. Persist a walk-forward run + trial for FK linkage
+  const runRow = ctx.walkForwardRepo.insertRun({
+    label: 's05-generation-proof-run',
+    strategyId: 'india-nse-eq-v1',
+    strategyVersion: '1.0.0',
+    marketId: 'INDIA_NSE_EQ',
+    replaySessionId: null,
+    windowCount: 2,
+    totalTrials: 1,
+    status: WalkForwardStatus.Completed,
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+    completedAt: Date.now() + 500,
+  });
+  const runId = runRow.id;
+
+  const mergedScore = 0.82;
+  const trialRow = ctx.walkForwardRepo.insertTrial({
+    runId,
+    trialIndex: 0,
+    label: `hypothesis-${hypothesisId}`,
+    paramsJson: JSON.stringify({
+      hypothesisId,
+      canonicalHash: hash,
+      schemaVersion: '1',
+      signals: [],
+      filters: [],
+      entryRules: [],
+      exitRules: [],
+      riskRules: [],
+      maxCandidates: 5,
+    }),
+    mergedScore,
+    deterministicScore: 0.75,
+    llmScore: null,
+    llmStatus: null,
+    rank: 1,
+    createdAt: Date.now(),
+  });
+
+  // 4. Create a mocked walk-forward result
+  const mockResult = makeMockWalkForwardResult(runId, trialRow.id, hypothesisId, mergedScore);
+  const updatedMockResult = {
+    ...mockResult,
+    run: { ...mockResult.run, id: runId },
+    trials: mockResult.trials.map((t: any) => ({
+      ...t,
+      trialId: trialRow.id,
+      runId,
+    })),
+    rankedCandidates: mockResult.rankedCandidates.map((c: any) => ({
+      ...c,
+      trialId: trialRow.id,
+    })),
+  };
+
+  const mockEvaluator = { evaluate: async () => updatedMockResult } as any;
+
+  // 5. Run the real evaluator with mocked walk-forward
+  const dataProvider = new FakeDataProvider();
+  const marketProfile = new FakeMarketProfile();
+  const artifactWriter = new ResearchArtifactWriter();
+
+  const evaluator = new HypothesisResearchEvaluator({
+    db: ctx.db,
+    dataProvider,
+    marketProfile,
+    hypothesisRepo: ctx.hypothesisRepo,
+    walkForwardRepo: ctx.walkForwardRepo,
+    artifactWriter,
+    walkForwardEvaluator: mockEvaluator,
+  });
+
+  // 6. Evaluate
+  const evaluationResult = await evaluator.evaluate(hypothesisId, {
+    rangeStart: Date.now() - 30 * 86_400_000,
+    rangeEnd: Date.now(),
+    windowSizeMs: 7 * 86_400_000,
+    stepSizeMs: 1 * 86_400_000,
+    inSampleRatio: 0.8,
+    minMergedScore: 0.7,
+    minWindowCount: 1,
+    label: 's05-generation-proof-eval',
+    enablePaperExecution: false,
+  });
+
+  // 7. Insert the generation attempt that links to this hypothesis + evaluation
+  const attempt: NewHypothesisGenerationAttempt = {
+    verdict: GenerationVerdict.Accepted,
+    contextProvenance: {
+      providerUrl: 'https://api.provider.test/v1',
+      providerModel: 'gpt-4-test',
+      promptVersion: '1.0.0',
+      triggeredAt: Date.now(),
+      marketId: 'INDIA_NSE_EQ',
+      strategyId: 'research-hypothesis-generator',
+    },
+    rawProviderOutput: JSON.stringify(graph),
+    canonicalHash: hash,
+    hypothesisGraphId: hypothesisId,
+    hypothesisEvaluationId: evaluationResult.evaluation.id,
+    createdAt: Date.now(),
+  };
+
+  const generationAttempt = genRepo.insertAttemptWithReasons(attempt, []);
+
+  // 8. Assemble lineage through the real audit service
+  const lineage = ctx.auditService.assembleLineage(hash);
+
+  return { generationAttempt, hypothesis, evaluationResult, lineage };
+}
+

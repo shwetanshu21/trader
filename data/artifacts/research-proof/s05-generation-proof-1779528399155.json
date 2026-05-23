@@ -1,0 +1,210 @@
+{
+  "harness": "M011/S05 Real-generation Proof Harness",
+  "completedAt": "2026-05-23T09:26:39.154Z",
+  "verdict": "FAIL",
+  "totalAssertions": 34,
+  "passed": 33,
+  "failed": 1,
+  "assertions": [
+    {
+      "name": "Phase1: malformed attempt verdict is Rejected",
+      "pass": true,
+      "detail": "verdict=rejected"
+    },
+    {
+      "name": "Phase1: malformed attempt has id > 0",
+      "pass": true,
+      "detail": "id=1"
+    },
+    {
+      "name": "Phase1: malformed attempt has reasons",
+      "pass": true,
+      "detail": "reasons.length=1"
+    },
+    {
+      "name": "Phase1: malformed reason code is MalformedResponse",
+      "pass": true,
+      "detail": "code=malformed_response"
+    },
+    {
+      "name": "Phase1: malformed attempt has null canonicalHash",
+      "pass": true,
+      "detail": "hash=null"
+    },
+    {
+      "name": "Phase1: malformed attempt has null hypothesisGraphId",
+      "pass": true,
+      "detail": "graphId=null"
+    },
+    {
+      "name": "Phase1: malformed attempt has raw provider output preserved",
+      "pass": true,
+      "detail": "output={invalid json here}"
+    },
+    {
+      "name": "Phase1: malformed hash lineage has no hypothesis",
+      "pass": true,
+      "detail": "hypothesis present"
+    },
+    {
+      "name": "Phase1: malformed hash lineage has no evaluation",
+      "pass": true,
+      "detail": "evaluation present"
+    },
+    {
+      "name": "Phase2: skipped attempt verdict is Skipped",
+      "pass": true,
+      "detail": "verdict=skipped"
+    },
+    {
+      "name": "Phase2: skipped attempt has id > 0",
+      "pass": true,
+      "detail": "id=2"
+    },
+    {
+      "name": "Phase2: skipped attempt has reasons",
+      "pass": true,
+      "detail": "reasons.length=1"
+    },
+    {
+      "name": "Phase2: skipped reason code is DuplicateSkipped",
+      "pass": true,
+      "detail": "code=duplicate_skipped"
+    },
+    {
+      "name": "Phase2: skipped attempt has canonical hash",
+      "pass": true,
+      "detail": "hash=a1b2c3d4e5f6_skipped"
+    },
+    {
+      "name": "Phase2: skipped attempt has null hypothesisGraphId",
+      "pass": true,
+      "detail": "graphId=null"
+    },
+    {
+      "name": "Phase2: skipped lineage has no hypothesis (no prior accepted attempt)",
+      "pass": true,
+      "detail": "hypothesis present"
+    },
+    {
+      "name": "Phase2: skipped lineage has no evaluation",
+      "pass": true,
+      "detail": "evaluation present"
+    },
+    {
+      "name": "Phase3: accepted generation attempt verdict is Accepted",
+      "pass": true,
+      "detail": "verdict=accepted"
+    },
+    {
+      "name": "Phase3: accepted attempt has id > 0",
+      "pass": true,
+      "detail": "id=3"
+    },
+    {
+      "name": "Phase3: accepted attempt has no reasons",
+      "pass": true,
+      "detail": "reasons.length=0"
+    },
+    {
+      "name": "Phase3: accepted attempt has canonicalHash",
+      "pass": true,
+      "detail": "null canonicalHash"
+    },
+    {
+      "name": "Phase3: accepted attempt has hypothesisGraphId",
+      "pass": true,
+      "detail": "null hypothesisGraphId"
+    },
+    {
+      "name": "Phase3: accepted attempt has hypothesisEvaluationId",
+      "pass": true,
+      "detail": "null hypothesisEvaluationId"
+    },
+    {
+      "name": "Phase3: hypothesis was validated and persisted",
+      "pass": true,
+      "detail": "id=1"
+    },
+    {
+      "name": "Phase3: evaluation completed with a status",
+      "pass": true,
+      "detail": "status=completed"
+    },
+    {
+      "name": "Phase4: lineage has generationAttempt",
+      "pass": false,
+      "detail": "null generationAttempt"
+    },
+    {
+      "name": "Phase4: hypothesis row is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase4: hypothesis id matches",
+      "pass": true,
+      "detail": "got=1, expected=1"
+    },
+    {
+      "name": "Phase4: hypothesis has status",
+      "pass": true,
+      "detail": "status=failed_evaluation"
+    },
+    {
+      "name": "Phase4: evaluation snapshot is present",
+      "pass": true,
+      "detail": "null"
+    },
+    {
+      "name": "Phase4: evaluation id matches",
+      "pass": true,
+      "detail": "got=1, expected=1"
+    },
+    {
+      "name": "Phase4: at least one artifact exists",
+      "pass": true,
+      "detail": "count=3"
+    },
+    {
+      "name": "Phase4: assembledAt is valid",
+      "pass": true,
+      "detail": "assembledAt=1779528399153"
+    },
+    {
+      "name": "Phase4: duplicateEvidence is null (first occurrence)",
+      "pass": true,
+      "detail": "got=null"
+    }
+  ],
+  "branchesTested": [
+    "malformed/rejected (persist rejected attempt with MalformedResponse reason)",
+    "skipped/duplicate (persist skipped attempt with DuplicateSkipped reason)",
+    "accepted (validate -> evaluate -> generation-attempt linkage -> audit reconstruction)"
+  ],
+  "evidenceBlocks": {
+    "malformedGeneration": {
+      "attemptId": {
+        "id": 1
+      },
+      "reasonsPopulated": true,
+      "nullLinkage": true
+    },
+    "skippedGeneration": {
+      "attemptId": {
+        "id": 2
+      },
+      "reasonsPopulated": true,
+      "nullLinkage": true
+    },
+    "acceptedGeneration": {
+      "attemptId": 3,
+      "hypothesisId": 1,
+      "evaluationId": 1,
+      "attemptLinked": true,
+      "hypothesisPersisted": true,
+      "evaluationCompleted": true,
+      "lineageReconstructed": true
+    }
+  }
+}
