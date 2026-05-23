@@ -46,12 +46,25 @@ export interface OvernightPublicationSnapshot {
   recordedAt: number;
 }
 
+export interface OvernightPhaseResultSnapshot {
+  phase: OvernightPhase | 'generate' | 'evaluate' | 'publish';
+  recordedAt: number;
+  hypothesisId?: number | null;
+  hypothesisStatus?: string | null;
+  evaluationId?: number | null;
+  evaluationStatus?: string | null;
+  rationale?: string | null;
+  artifactPaths?: string[];
+  detail?: string | null;
+}
+
 export interface OvernightRunMetadata {
   schemaVersion: number;
   resumeAttempts: OvernightResumeEvent[];
   phaseTransitions: OvernightPhaseTransition[];
   lastSuccessfulPhase: string | null;
   publication: OvernightPublicationSnapshot | null;
+  phaseResults: Partial<Record<'generate' | 'evaluate' | 'publish', OvernightPhaseResultSnapshot>>;
   failureContext: {
     phase: string | null;
     message: string;
@@ -292,6 +305,7 @@ export function createEmptyOvernightRunMetadata(): OvernightRunMetadata {
     phaseTransitions: [],
     lastSuccessfulPhase: null,
     publication: null,
+    phaseResults: {},
     failureContext: null,
   };
 }
@@ -300,12 +314,20 @@ export function parseOvernightRunMetadata(raw: string | null | undefined): Overn
   if (!raw) return createEmptyOvernightRunMetadata();
   try {
     const parsed = JSON.parse(raw) as Partial<OvernightRunMetadata>;
+    const phaseResults = parsed.phaseResults && typeof parsed.phaseResults === 'object'
+      ? parsed.phaseResults
+      : {};
     return {
       schemaVersion: 1,
       resumeAttempts: Array.isArray(parsed.resumeAttempts) ? parsed.resumeAttempts : [],
       phaseTransitions: Array.isArray(parsed.phaseTransitions) ? parsed.phaseTransitions : [],
       lastSuccessfulPhase: typeof parsed.lastSuccessfulPhase === 'string' ? parsed.lastSuccessfulPhase : null,
       publication: parsed.publication ?? null,
+      phaseResults: {
+        generate: phaseResults.generate ?? undefined,
+        evaluate: phaseResults.evaluate ?? undefined,
+        publish: phaseResults.publish ?? undefined,
+      },
       failureContext: parsed.failureContext ?? null,
     };
   } catch {

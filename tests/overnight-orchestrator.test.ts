@@ -8,20 +8,14 @@ import { DatabaseManager } from '../src/persistence/sqlite.js';
 import { MarketPhase } from '../src/types/runtime.js';
 import { MarketClock } from '../src/runtime/market-clock.js';
 import { INDIA_NSE_EQ_MARKET } from '../src/market/india-profile.js';
-import { OvernightRunRepo, OvernightRunStatus } from '../src/research/overnight-run-repo.js';
+import { OvernightRunRepo, OvernightRunStatus, parseOvernightRunMetadata } from '../src/research/overnight-run-repo.js';
 import {
   OvernightOrchestrator,
-  type TryStartResult,
 } from '../src/research/overnight-orchestrator.js';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Build a UTC Date for a given calendar date + time in India (Asia/Kolkata = UTC+5:30). */
 function indiaTime(
   year: number,
-  month: number,  // 1-indexed
+  month: number,
   day: number,
   hours: number,
   minutes: number = 0,
@@ -30,7 +24,6 @@ function indiaTime(
   return new Date(Date.UTC(year, month - 1, day, hours - 5, minutes - 30, seconds));
 }
 
-/** Create an OvernightOrchestrator with an in-memory DB. */
 function createOrchestrator(): {
   repo: OvernightRunRepo;
   clock: MarketClock;
@@ -44,21 +37,13 @@ function createOrchestrator(): {
   return { repo, clock, orchestrator, dbm };
 }
 
-// ---------------------------------------------------------------------------
-// Shared fixture times
-// ---------------------------------------------------------------------------
-
-const REGULAR_TIME    = indiaTime(2025, 1, 6, 12, 0, 0);  // Mon 12:00 IST → Regular
-const PRE_MARKET_TIME = indiaTime(2025, 1, 6, 9, 5, 0);   // Mon 09:05 IST → PreMarket
-const POST_MARKET_TIME = indiaTime(2025, 1, 6, 15, 45, 0); // Mon 15:45 IST → PostMarket
-const CLOSED_AFTER    = indiaTime(2025, 1, 6, 16, 30, 0); // Mon 16:30 IST → Closed
-const SATURDAY        = indiaTime(2025, 1, 4, 12, 0, 0);  // Sat 12:00 IST → Closed
-const SUNDAY          = indiaTime(2025, 1, 5, 12, 0, 0);  // Sun 12:00 IST → Closed
-const HOLIDAY         = indiaTime(2025, 8, 15, 12, 0, 0); // Fri Independence Day → Closed
-
-// ---------------------------------------------------------------------------
-// Market-window gate tests
-// ---------------------------------------------------------------------------
+const REGULAR_TIME    = indiaTime(2025, 1, 6, 12, 0, 0);
+const PRE_MARKET_TIME = indiaTime(2025, 1, 6, 9, 5, 0);
+const POST_MARKET_TIME = indiaTime(2025, 1, 6, 15, 45, 0);
+const CLOSED_AFTER    = indiaTime(2025, 1, 6, 16, 30, 0);
+const SATURDAY        = indiaTime(2025, 1, 4, 12, 0, 0);
+const SUNDAY          = indiaTime(2025, 1, 5, 12, 0, 0);
+const HOLIDAY         = indiaTime(2025, 8, 15, 12, 0, 0);
 
 describe('OvernightOrchestrator tryStart — market-window gate', () => {
   it('refuses execution during Regular market phase', () => {
@@ -152,10 +137,6 @@ describe('OvernightOrchestrator tryStart — market-window gate', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Run-state transitions
-// ---------------------------------------------------------------------------
-
 describe('OvernightOrchestrator — run-state transitions', () => {
   it('persists a refused run with full audit trail', () => {
     const { repo, orchestrator, dbm } = createOrchestrator();
@@ -206,7 +187,7 @@ describe('OvernightOrchestrator — run-state transitions', () => {
     dbm.close();
   });
 
-  it('marks a run as failed with error message', () => {
+  it('marks a run as failed with error message and persisted failure context', () => {
     const { orchestrator, dbm } = createOrchestrator();
     const start = orchestrator.tryStart('fail-run', '/tmp/ws', CLOSED_AFTER);
 
@@ -215,6 +196,9 @@ describe('OvernightOrchestrator — run-state transitions', () => {
     expect(failed!.status).toBe(OvernightRunStatus.Failed);
     expect(failed!.lastError).toBe('LLM provider timeout');
     expect(failed!.completedAt).toBeGreaterThan(0);
+
+    const metadata = parseOvernightRunMetadata(failed!.metadataJson);
+    expect(metadata.failureContext?.message).toBe('LLM provider timeout');
 
     dbm.close();
   });
@@ -232,17 +216,12 @@ describe('OvernightOrchestrator — run-state transitions', () => {
     const phase3 = orchestrator.markPhase(start.run.id, 'publish');
     expect(phase3!.currentPhase).toBe('publish');
 
-    // Verify the last phase persisted
     const persisted = orchestrator.getRun(start.run.id);
     expect(persisted!.currentPhase).toBe('publish');
 
     dbm.close();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Checkpoint/resume metadata contract
-// ---------------------------------------------------------------------------
 
 describe('OvernightOrchestrator — checkpoint metadata', () => {
   it('saves and retrieves a checkpoint with phase, counts, and last processed id', () => {
@@ -324,11 +303,36 @@ describe('OvernightOrchestrator — checkpoint metadata', () => {
 
     dbm.close();
   });
-});
 
-// ---------------------------------------------------------------------------
-// getRun / getLatestRun
-// ---------------------------------------------------------------------------
+  it('persists per-phase result metadata and publication snapshot for later audit', () => {
+    const { orchestrator, repo, dbm } = createOrchestrator();
+    const start = orchestrator.tryStart('results-test', '/tmp/ws', CLOSED_AFTER);
+
+    orchestrator.recordPhaseResult(start.run.id, {
+      phase: 'evaluate',
+      recordedAt: 123,
+      evaluationId: 44,
+      evaluationStatus: 'completed',
+      detail: 'evaluation completed',
+    });
+    orchestrator.recordPublication(start.run.id, {
+      verdict: 'hold',
+      publicationId: null,
+      lifecycleStateId: null,
+      governanceDecisionId: null,
+      rationale: 'No completed hypothesis evaluation found in the research DB for publish-back.',
+      recordedAt: 456,
+    });
+
+    const persisted = repo.getRun(start.run.id)!;
+    const metadata = parseOvernightRunMetadata(persisted.metadataJson);
+    expect(metadata.phaseResults.evaluate?.evaluationId).toBe(44);
+    expect(metadata.phaseResults.evaluate?.detail).toBe('evaluation completed');
+    expect(metadata.publication?.verdict).toBe('hold');
+
+    dbm.close();
+  });
+});
 
 describe('OvernightOrchestrator — run queries', () => {
   it('returns null for non-existent run', () => {
@@ -340,9 +344,7 @@ describe('OvernightOrchestrator — run queries', () => {
   it('returns the latest run across multiple runs', () => {
     const { orchestrator, dbm } = createOrchestrator();
 
-    // First run — refused
     orchestrator.tryStart('first', '/ws/1', REGULAR_TIME);
-    // Second run — accepted
     const second = orchestrator.tryStart('second', '/ws/2', CLOSED_AFTER);
 
     const latest = orchestrator.getLatestRun();
@@ -360,15 +362,10 @@ describe('OvernightOrchestrator — run queries', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Repo-level queries
-// ---------------------------------------------------------------------------
-
 describe('OvernightRunRepo — status counts', () => {
   it('counts runs by status', () => {
     const { repo, orchestrator, dbm } = createOrchestrator();
 
-    // Two refused, one accepted
     orchestrator.tryStart('ref1', '/ws/1', REGULAR_TIME);
     orchestrator.tryStart('ref2', '/ws/2', PRE_MARKET_TIME);
     orchestrator.tryStart('ok', '/ws/3', CLOSED_AFTER);

@@ -705,6 +705,7 @@ CREATE TABLE IF NOT EXISTS overnight_runs (
   research_db_path      TEXT    NOT NULL DEFAULT '',
   refusal_reason        TEXT,
   last_error            TEXT,
+  metadata_json         TEXT,
   created_at            INTEGER NOT NULL,
   started_at            INTEGER,
   completed_at          INTEGER
@@ -878,6 +879,8 @@ export class DatabaseManager {
 
     // M012/S02: Add research_db_path to overnight_runs for workspace isolation audit
     this._migrateAddColumnIfNotExists('overnight_runs', 'research_db_path', "TEXT NOT NULL DEFAULT ''");
+    // M012/S03: Add metadata_json to overnight_runs for resume/publication audit lineage
+    this._migrateAddColumnIfNotExists('overnight_runs', 'metadata_json', 'TEXT');
   }
 
   /** Add a column to a table only if it does not already exist. */

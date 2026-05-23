@@ -15,6 +15,7 @@ import {
   type NewOvernightRun,
   type OvernightCheckpointMetadata,
   type OvernightPhase,
+  type OvernightPhaseResultSnapshot,
   type OvernightPublicationSnapshot,
 } from './overnight-run-repo.js';
 
@@ -94,6 +95,7 @@ export class OvernightOrchestrator {
         status: OvernightRunStatus.Running,
         researchDbPath: options.researchDbPath ?? resumable.researchDbPath,
         lastError: null,
+        completedAt: null,
       }) ?? resumable;
       return {
         run: reopened,
@@ -143,7 +145,6 @@ export class OvernightOrchestrator {
         recordedAt: now,
         detail,
       });
-      metadata.failureContext = null;
       return {
         currentPhase: phase,
         status: OvernightRunStatus.Running,
@@ -164,9 +165,9 @@ export class OvernightOrchestrator {
         detail,
       });
       metadata.lastSuccessfulPhase = phase;
-      metadata.failureContext = null;
       return {
         metadataJson: this._repo.serializeMetadata(metadata),
+        lastError: null,
       };
     });
   }
@@ -182,6 +183,15 @@ export class OvernightOrchestrator {
         checkpointPhase: checkpoint?.phase ?? null,
         reason,
       });
+      return {
+        metadataJson: this._repo.serializeMetadata(metadata),
+      };
+    });
+  }
+
+  recordPhaseResult(runId: number, snapshot: OvernightPhaseResultSnapshot): OvernightRunRow | null {
+    return this._appendMetadata(runId, (metadata) => {
+      metadata.phaseResults[snapshot.phase as 'generate' | 'evaluate' | 'publish'] = snapshot;
       return {
         metadataJson: this._repo.serializeMetadata(metadata),
       };
@@ -230,6 +240,16 @@ export class OvernightOrchestrator {
         lastError: error,
         completedAt: now,
         metadataJson: this._repo.serializeMetadata(metadata),
+      };
+    });
+  }
+
+  clearFailureContext(runId: number): OvernightRunRow | null {
+    return this._appendMetadata(runId, (metadata) => {
+      metadata.failureContext = null;
+      return {
+        metadataJson: this._repo.serializeMetadata(metadata),
+        lastError: null,
       };
     });
   }

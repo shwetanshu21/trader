@@ -21,6 +21,8 @@ import { HypothesisEvaluationStatus } from '../types/runtime.js';
 
 const RESEARCH_ARTIFACTS_ROOT = path.join('data', 'artifacts', 'overnight');
 
+type PhaseStop = 'generate' | 'evaluate' | 'publish' | null;
+
 export interface OvernightCliOptions {
   dbPath: string;
   researchDbPath: string | null;
@@ -34,6 +36,7 @@ export interface OvernightCliOptions {
   maxLlmCalls: number | null;
   dryRun: boolean;
   holdOpenMs: number;
+  stopAfterPhase: PhaseStop;
 }
 
 export function parseArgs(argv: string[]): OvernightCliOptions {
@@ -51,6 +54,7 @@ export function parseArgs(argv: string[]): OvernightCliOptions {
     maxLlmCalls: null,
     dryRun: false,
     holdOpenMs: 0,
+    stopAfterPhase: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -69,6 +73,14 @@ export function parseArgs(argv: string[]): OvernightCliOptions {
       case '--max-llm-calls': options.maxLlmCalls = Number(value); i++; break;
       case '--dry-run': options.dryRun = true; break;
       case '--hold-open-ms': options.holdOpenMs = Number(value); i++; break;
+      case '--stop-after-phase': {
+        if (!['generate', 'evaluate', 'publish'].includes(value)) {
+          throw new Error(`Unknown phase for --stop-after-phase: ${value}`);
+        }
+        options.stopAfterPhase = value as PhaseStop;
+        i++;
+        break;
+      }
       default:
         if (arg.startsWith('--')) throw new Error(`Unknown option: ${arg}`);
         break;
@@ -105,19 +117,20 @@ function simulateEvaluatePhase(
   orchestrator: OvernightOrchestrator,
   runId: number,
   evalCount: number,
+  totalItems: number,
 ): OvernightCheckpointMetadata {
   let checkpoint: OvernightCheckpointMetadata = {
     phase: 'evaluate',
     completedItems: 0,
-    totalItems: evalCount,
+    totalItems,
   };
   for (let i = 1; i <= evalCount; i++) {
     checkpoint = {
       phase: 'evaluate',
       completedItems: i,
-      totalItems: evalCount,
+      totalItems,
       lastProcessedId: `eval-trial-${i}`,
-      metadata: { trialIndex: i, simulated: true, meanScore: 0.5 + (i / Math.max(1, evalCount)) * 0.4 },
+      metadata: { trialIndex: i, simulated: true, meanScore: 0.5 + (i / Math.max(1, totalItems)) * 0.4 },
     };
     orchestrator.saveCheckpoint(runId, checkpoint);
   }
@@ -135,7 +148,7 @@ function findLatestCompletedEvaluationId(dbm: DatabaseManager): number | null {
   return null;
 }
 
-function simulatePublishPhase(dbm: DatabaseManager, run: OvernightRunRow) {
+function simulatePublishPhase(dbm: DatabaseManager) {
   const evaluationId = findLatestCompletedEvaluationId(dbm);
   if (evaluationId == null) {
     return {
@@ -179,6 +192,8 @@ export interface OvernightAuditArtifact {
   };
   resumed: boolean;
   nextPhaseAtStart: OvernightPhase | null;
+  nextPhaseAfterExecution: OvernightPhase | null;
+  stopAfterPhase: PhaseStop;
   budget?: {
     maxAcceptedCandidates: number | null;
     maxLlmCalls: number | null;
@@ -189,6 +204,10 @@ export interface OvernightAuditArtifact {
     prunedEvaluationCount: number;
     skipReasonCodes: string[];
   };
+}
+
+function shouldStopAfter(phase: OvernightPhase, stopAfterPhase: PhaseStop): boolean {
+  return stopAfterPhase != null && stopAfterPhase === phase;
 }
 
 async function main(): Promise<void> {
@@ -241,40 +260,60 @@ async function main(): Promise<void> {
 
       if (phase === 'generate') {
         orchestrator.markPhase(run.id, 'generate');
-        simulateGeneratePhase(orchestrator, run.id, acceptedCandidates);
+        const checkpoint = simulateGeneratePhase(orchestrator, run.id, acceptedCandidates);
         for (let i = 0; i < skippedCount; i++) simulatedSkippedGenerationReasons.push('provider_disallowed');
+        orchestrator.recordPhaseResult(run.id, {
+          phase: 'generate',
+          recordedAt: Date.now(),
+          detail: 'Simulated overnight generation batch completed.',
+        });
         orchestrator.markPhaseCompleted(run.id, 'generate');
-        run = orchestrator.getRun(run.id) ?? run;
-        phase = orchestrator.getNextPhase(run);
+        if (shouldStopAfter('generate', options.stopAfterPhase)) {
+          run = orchestrator.getRun(run.id) ?? run;
+          orchestrator.markFailed(run.id, `Intentional interruption after generate phase for resume verification (checkpoint ${checkpoint.completedItems}/${checkpoint.totalItems}).`);
+          run = orchestrator.getRun(run.id) ?? run;
+        } else {
+          run = orchestrator.getRun(run.id) ?? run;
+          phase = orchestrator.getNextPhase(run);
+        }
       }
 
-      if (phase === 'evaluate') {
+      if (run.status === 'running' && phase === 'evaluate') {
         orchestrator.markPhase(run.id, 'evaluate');
-        simulateEvaluatePhase(orchestrator, run.id, evaluatedCount);
-        const budgetCheckpoint: OvernightCheckpointMetadata = {
-          phase: 'evaluate',
-          completedItems: evaluatedCount,
-          totalItems: acceptedCandidates,
-          metadata: {
-            budget: {
-              acceptedCandidates,
-              skippedGenerationCount: skippedCount,
-              prunedEvaluationCount: simulatedPrunedEvaluationCount,
-              maxAcceptedCandidates: Number.isFinite(resolvedBudget.maxAcceptedCandidates) ? resolvedBudget.maxAcceptedCandidates : null,
-              maxLlmCalls: Number.isFinite(resolvedBudget.maxLlmCalls) ? resolvedBudget.maxLlmCalls : null,
-              skipReasonCodes: simulatedSkippedGenerationReasons,
-            },
+        const budgetCheckpoint = simulateEvaluatePhase(orchestrator, run.id, evaluatedCount, acceptedCandidates);
+        budgetCheckpoint.metadata = {
+          ...(budgetCheckpoint.metadata ?? {}),
+          budget: {
+            acceptedCandidates,
+            skippedGenerationCount: skippedCount,
+            prunedEvaluationCount: simulatedPrunedEvaluationCount,
+            maxAcceptedCandidates: Number.isFinite(resolvedBudget.maxAcceptedCandidates) ? resolvedBudget.maxAcceptedCandidates : null,
+            maxLlmCalls: Number.isFinite(resolvedBudget.maxLlmCalls) ? resolvedBudget.maxLlmCalls : null,
+            skipReasonCodes: simulatedSkippedGenerationReasons,
           },
         };
         orchestrator.saveCheckpoint(run.id, budgetCheckpoint);
+        orchestrator.recordPhaseResult(run.id, {
+          phase: 'evaluate',
+          recordedAt: Date.now(),
+          evaluationId: findLatestCompletedEvaluationId(dbManager),
+          evaluationStatus: findLatestCompletedEvaluationId(dbManager) == null ? null : HypothesisEvaluationStatus.Completed,
+          detail: 'Simulated overnight evaluation batch completed.',
+        });
         orchestrator.markPhaseCompleted(run.id, 'evaluate');
-        run = orchestrator.getRun(run.id) ?? run;
-        phase = orchestrator.getNextPhase(run);
+        if (shouldStopAfter('evaluate', options.stopAfterPhase)) {
+          run = orchestrator.getRun(run.id) ?? run;
+          orchestrator.markFailed(run.id, `Intentional interruption after evaluate phase for resume verification (checkpoint ${budgetCheckpoint.completedItems}/${budgetCheckpoint.totalItems}).`);
+          run = orchestrator.getRun(run.id) ?? run;
+        } else {
+          run = orchestrator.getRun(run.id) ?? run;
+          phase = orchestrator.getNextPhase(run);
+        }
       }
 
-      if (phase === 'publish') {
+      if (run.status === 'running' && phase === 'publish') {
         orchestrator.markPhase(run.id, 'publish');
-        const publication = simulatePublishPhase(dbManager, run);
+        const publication = simulatePublishPhase(dbManager);
         orchestrator.recordPublication(run.id, {
           verdict: publication.verdict,
           publicationId: publication.publicationId,
@@ -283,17 +322,29 @@ async function main(): Promise<void> {
           rationale: publication.rationale,
           recordedAt: Date.now(),
         });
+        orchestrator.recordPhaseResult(run.id, {
+          phase: 'publish',
+          recordedAt: Date.now(),
+          evaluationId: publication.evaluationId,
+          evaluationStatus: publication.evaluationId == null ? null : HypothesisEvaluationStatus.Completed,
+          detail: publication.rationale,
+        });
         orchestrator.markPhaseCompleted(run.id, 'publish', publication.rationale);
-        run = orchestrator.getRun(run.id) ?? run;
+        if (shouldStopAfter('publish', options.stopAfterPhase)) {
+          run = orchestrator.getRun(run.id) ?? run;
+          orchestrator.markFailed(run.id, 'Intentional interruption after publish phase for resume verification.');
+          run = orchestrator.getRun(run.id) ?? run;
+        } else {
+          orchestrator.markCompleted(run.id);
+          run = orchestrator.getRun(run.id) ?? run;
+        }
       }
-
-      orchestrator.markCompleted(run.id);
-      run = orchestrator.getRun(run.id) ?? run;
     }
 
     const durationMs = Date.now() - startTime;
     const finalRun = orchestrator.getRun(run.id) ?? run;
     const finalCheckpoint = orchestrator.readCheckpoint(finalRun);
+    const nextPhaseAfterExecution = result.accepted ? orchestrator.getNextPhase(finalRun) : null;
 
     const auditArtifact: OvernightAuditArtifact = {
       schemaVersion: 1,
@@ -309,6 +360,8 @@ async function main(): Promise<void> {
       workspacePath: options.workspacePath,
       resumed: result.resumed,
       nextPhaseAtStart,
+      nextPhaseAfterExecution,
+      stopAfterPhase: options.stopAfterPhase,
       simulation: {
         generateCheckpoints: options.simulateGenCount,
         evaluateCheckpoints: options.simulateEvalCount,
@@ -345,6 +398,8 @@ async function main(): Promise<void> {
       runStatus: finalRun.status,
       resumed: result.resumed,
       nextPhaseAtStart,
+      nextPhaseAfterExecution,
+      stopAfterPhase: options.stopAfterPhase,
       metadataJson: finalRun.metadataJson,
     };
 
@@ -370,6 +425,8 @@ async function main(): Promise<void> {
       checkpointProgress: finalCheckpoint ? `${finalCheckpoint.completedItems}/${finalCheckpoint.totalItems}` : null,
       checkpointPhase: finalCheckpoint?.phase ?? null,
       nextPhaseAtStart,
+      nextPhaseAfterExecution,
+      stopAfterPhase: options.stopAfterPhase,
       simulationDurationMs: durationMs,
     }, null, 2));
 
