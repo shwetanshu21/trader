@@ -16,6 +16,7 @@
     "witness:all": "npx vitest run tests/deployment-witness-contract.test.ts tests/deployment-witness-capture.test.ts && bash scripts/verify-m007-s01-witness.sh",
     "proof:paper:s06": "node --import tsx src/deployment/verify-m009-s06-paper-proof.ts",
     "proof:operator-ui:s04": "node --import tsx src/deployment/verify-m010-s04-operator-proof.ts",
+    "proof:research:s04": "node --import tsx src/deployment/verify-m011-s04-research-proof.ts",
     "proof:paper:s06:sh": "bash scripts/verify-m009-s06-paper-proof.sh",
     "start:upstox:notifier": "tsx src/upstox/notifier-main.ts",
     "start:upstox:mcp-local": "tsx src/upstox/mcp-local-main.ts",
