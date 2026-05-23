@@ -44,6 +44,19 @@ export function resolveWalkForwardDbPath(
   return trimmed ? trimmed : resolveDefaultWalkForwardDbPath(env);
 }
 
+/**
+ * Resolve a research DB path from an explicit argument only.
+ * Returns `null` when no explicit path is supplied — no env fallback.
+ * This prevents research tooling from silently drifting to the live
+ * runtime DB when the caller forgot to supply an isolated path.
+ */
+export function resolveResearchDbPath(
+  explicitPath: string | undefined,
+): string | null {
+  const trimmed = explicitPath?.trim();
+  return trimmed ? trimmed : null;
+}
+
 export function injectDefaultDbPathArg(
   argv: readonly string[],
   env: Record<string, string | undefined> = process.env,

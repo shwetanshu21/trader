@@ -47,6 +47,8 @@ export interface OvernightRunRow {
   checkpointPointer: string | null;
   /** Absolute or relative path to the research workspace for this run. */
   workspacePath: string;
+  /** Explicit path to the isolated research DB for this run (empty when not set). */
+  researchDbPath: string;
   /** Human-readable reason when status is 'refused'. */
   refusalReason: string | null;
   /** Error message when status is 'failed'. */
@@ -64,6 +66,7 @@ export interface NewOvernightRun {
   currentPhase?: string | null;
   checkpointPointer?: string | null;
   workspacePath: string;
+  researchDbPath?: string;
   refusalReason?: string | null;
   lastError?: string | null;
   createdAt: number;
@@ -97,6 +100,7 @@ interface OvernightRunDbRow {
   current_phase: string | null;
   checkpoint_pointer: string | null;
   workspace_path: string;
+  research_db_path: string;
   refusal_reason: string | null;
   last_error: string | null;
   created_at: number;
@@ -126,9 +130,9 @@ export class OvernightRunRepo {
     const result = this._db.prepare(`
       INSERT INTO overnight_runs
         (label, status, market_phase, current_phase, checkpoint_pointer,
-         workspace_path, refusal_reason, last_error,
+         workspace_path, research_db_path, refusal_reason, last_error,
          created_at, started_at, completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       run.label,
       run.status,
@@ -136,6 +140,7 @@ export class OvernightRunRepo {
       run.currentPhase ?? null,
       run.checkpointPointer ?? null,
       run.workspacePath,
+      run.researchDbPath ?? '',
       run.refusalReason ?? null,
       run.lastError ?? null,
       run.createdAt,
@@ -161,7 +166,7 @@ export class OvernightRunRepo {
   getLatestRun(): OvernightRunRow | null {
     const row = this._db.prepare(`
       SELECT id, label, status, market_phase, current_phase,
-             checkpoint_pointer, workspace_path,
+             checkpoint_pointer, workspace_path, research_db_path,
              refusal_reason, last_error,
              created_at, started_at, completed_at
       FROM overnight_runs
@@ -178,7 +183,7 @@ export class OvernightRunRepo {
   listRuns(limit: number = 20): OvernightRunRow[] {
     const rows = this._db.prepare(`
       SELECT id, label, status, market_phase, current_phase,
-             checkpoint_pointer, workspace_path,
+             checkpoint_pointer, workspace_path, research_db_path,
              refusal_reason, last_error,
              created_at, started_at, completed_at
       FROM overnight_runs
@@ -194,7 +199,7 @@ export class OvernightRunRepo {
    */
   updateRun(
     id: number,
-    updates: Partial<Pick<OvernightRunRow, 'status' | 'currentPhase' | 'checkpointPointer' | 'lastError' | 'startedAt' | 'completedAt'>>,
+    updates: Partial<Pick<OvernightRunRow, 'status' | 'currentPhase' | 'checkpointPointer' | 'researchDbPath' | 'lastError' | 'startedAt' | 'completedAt'>>,
   ): OvernightRunRow | null {
     const existing = this.getRun(id);
     if (!existing) return null;
@@ -204,6 +209,7 @@ export class OvernightRunRepo {
       SET status = ?,
           current_phase = ?,
           checkpoint_pointer = ?,
+          research_db_path = ?,
           last_error = ?,
           started_at = ?,
           completed_at = ?
@@ -212,6 +218,7 @@ export class OvernightRunRepo {
       updates.status ?? existing.status,
       updates.currentPhase !== undefined ? updates.currentPhase : existing.currentPhase,
       updates.checkpointPointer !== undefined ? updates.checkpointPointer : existing.checkpointPointer,
+      updates.researchDbPath !== undefined ? updates.researchDbPath : existing.researchDbPath,
       updates.lastError !== undefined ? updates.lastError : existing.lastError,
       updates.startedAt !== undefined ? updates.startedAt : existing.startedAt,
       updates.completedAt !== undefined ? updates.completedAt : existing.completedAt,
@@ -246,7 +253,7 @@ export class OvernightRunRepo {
   private _getRun(id: number): OvernightRunRow | null {
     const row = this._db.prepare(`
       SELECT id, label, status, market_phase, current_phase,
-             checkpoint_pointer, workspace_path,
+             checkpoint_pointer, workspace_path, research_db_path,
              refusal_reason, last_error,
              created_at, started_at, completed_at
       FROM overnight_runs
@@ -265,6 +272,7 @@ export class OvernightRunRepo {
       currentPhase: row.current_phase,
       checkpointPointer: row.checkpoint_pointer,
       workspacePath: row.workspace_path,
+      researchDbPath: row.research_db_path,
       refusalReason: row.refusal_reason,
       lastError: row.last_error,
       createdAt: row.created_at,

@@ -69,7 +69,7 @@ export class OvernightOrchestrator {
    * @param now - Optional timestamp override (used by tests).
    * @returns TryStartResult with the persisted run row and gate outcome.
    */
-  tryStart(label: string, workspacePath: string, now?: Date): TryStartResult {
+  tryStart(label: string, workspacePath: string, now?: Date, researchDbPath?: string): TryStartResult {
     const nowDate = now ?? new Date();
     const marketPhase = this._clock.getPhase(nowDate);
     const marketPhaseName = this._summarizePhase(marketPhase);
@@ -83,6 +83,7 @@ export class OvernightOrchestrator {
         marketPhase: marketPhase,
         currentPhase: 'generate',
         workspacePath,
+        researchDbPath: researchDbPath ?? '',
         createdAt,
         startedAt: createdAt,
       };
@@ -106,6 +107,7 @@ export class OvernightOrchestrator {
       status: OvernightRunStatus.Refused,
       marketPhase: marketPhase,
       workspacePath,
+      researchDbPath: researchDbPath ?? '',
       refusalReason,
       createdAt,
     };

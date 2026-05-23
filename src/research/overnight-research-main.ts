@@ -46,8 +46,9 @@ const RESEARCH_ARTIFACTS_ROOT = path.join('data', 'artifacts', 'overnight');
 // CLI options
 // ---------------------------------------------------------------------------
 
-interface OvernightCliOptions {
+export interface OvernightCliOptions {
   dbPath: string;
+  researchDbPath: string | null;
   workspacePath: string;
   label: string;
   now: Date | null;
@@ -58,10 +59,11 @@ interface OvernightCliOptions {
   holdOpenMs: number;
 }
 
-function parseArgs(argv: string[]): OvernightCliOptions {
+export function parseArgs(argv: string[]): OvernightCliOptions {
   const stamp = Date.now();
   const options: OvernightCliOptions = {
     dbPath: ':memory:',
+    researchDbPath: null,
     workspacePath: path.join(RESEARCH_ARTIFACTS_ROOT, `run-${stamp}`),
     label: `overnight-research-${stamp}`,
     now: null,
@@ -79,6 +81,10 @@ function parseArgs(argv: string[]): OvernightCliOptions {
     switch (arg) {
       case '--db-path':
         options.dbPath = value;
+        i++;
+        break;
+      case '--research-db-path':
+        options.researchDbPath = value;
         i++;
         break;
       case '--workspace-path':
@@ -228,6 +234,8 @@ export interface OvernightAuditArtifact {
   refusalReason: string | null;
   /** Path to the SQLite database used. */
   dbPath: string;
+  /** Explicit path to the isolated research DB. */
+  researchDbPath: string | null;
   /** Path to the research workspace. */
   workspacePath: string;
   /** Phase simulation timing metadata. */
@@ -248,11 +256,22 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const startTime = Date.now();
 
+  // ── Fail closed: require explicit research DB path when not simulating ──
+  if (!options.simulatePhases && !options.researchDbPath) {
+    console.error(JSON.stringify({
+      status: 'refused',
+      reason: 'Fail-closed: --research-db-path is required when --simulate-phases=false.',
+      timestamp: new Date().toISOString(),
+    }, null, 2));
+    process.exit(1);
+  }
+
   // ── Dry run ──
   if (options.dryRun) {
     console.log(JSON.stringify({
       status: 'dry_run',
       dbPath: options.dbPath,
+      researchDbPath: options.researchDbPath,
       workspacePath: options.workspacePath,
       label: options.label,
       now: options.now?.toISOString() ?? null,
@@ -275,7 +294,12 @@ async function main(): Promise<void> {
 
   try {
     // ── Attempt to start the run ──
-    const result = orchestrator.tryStart(options.label, options.workspacePath, options.now ?? undefined);
+    const result = orchestrator.tryStart(
+      options.label,
+      options.workspacePath,
+      options.now ?? undefined,
+      options.researchDbPath ?? undefined,
+    );
 
     // ── Simulation phases (only when accepted) ──
     let genCheckpoint: OvernightCheckpointMetadata | null = null;
@@ -314,6 +338,7 @@ async function main(): Promise<void> {
       accepted: result.accepted,
       refusalReason: result.refusalReason,
       dbPath: options.dbPath,
+      researchDbPath: options.researchDbPath,
       workspacePath: options.workspacePath,
       simulation: {
         generateCheckpoints: options.simulateGenCount,
@@ -337,6 +362,7 @@ async function main(): Promise<void> {
         : null,
       workspacePath: options.workspacePath,
       dbPath: options.dbPath,
+      researchDbPath: options.researchDbPath,
       runId: result.run.id,
       runLabel: options.label,
       runStatus: finalRun?.status ?? result.run.status,
@@ -358,6 +384,7 @@ async function main(): Promise<void> {
       marketPhaseValue: result.marketPhase,
       workspacePath: options.workspacePath,
       dbPath: options.dbPath,
+      researchDbPath: options.researchDbPath,
       auditArtifactPath: auditPath,
       resumeStubPath: resumePath,
       checkpointProgress: finalCheckpoint

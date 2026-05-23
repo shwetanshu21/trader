@@ -28,6 +28,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseManager } from '../persistence/sqlite.js';
+import { resolveResearchDbPath, resolveWalkForwardDbPath } from '../replay/walk-forward-db-path.js';
 import { HypothesisRepository } from '../persistence/hypothesis-repo.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
 import { HypothesisResearchEvaluator } from './hypothesis-evaluator.js';
@@ -46,9 +47,10 @@ import {
 // CLI options
 // ---------------------------------------------------------------------------
 
-interface EvaluateOptions {
+export interface EvaluateOptions {
   hypothesisId: number;
   dbPath: string;
+  researchDbPath: string | null;
   days: number;
   window: number;
   step: number;
@@ -66,10 +68,11 @@ interface EvaluateOptions {
   toDate?: string;
 }
 
-function parseArgs(argv: string[]): EvaluateOptions {
+export function parseArgs(argv: string[]): EvaluateOptions {
   const options: EvaluateOptions = {
     hypothesisId: 0,
     dbPath: ':memory:',
+    researchDbPath: null,
     days: 30,
     window: 7,
     step: 1,
@@ -96,6 +99,10 @@ function parseArgs(argv: string[]): EvaluateOptions {
         break;
       case '--db-path':
         options.dbPath = value;
+        i++;
+        break;
+      case '--research-db-path':
+        options.researchDbPath = value;
         i++;
         break;
       case '--days':
@@ -225,6 +232,18 @@ function buildFixtureCandidates(): BoundedCandidate[] {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
+
+  // Resolve DB path: research mode uses explicit path only (fail-closed).
+  // Standalone mode falls back to --db-path or :memory: default.
+  const dbPath = options.researchDbPath
+    ? resolveResearchDbPath(options.researchDbPath)
+    : (options.dbPath ? options.dbPath : ':memory:');
+
+  if (!dbPath) {
+    console.error('No database path resolved. Provide --research-db-path for research mode.');
+    process.exit(1);
+  }
+
   const { rangeStart, rangeEnd } = computeDateRange(options);
 
   // Validate the range
@@ -239,7 +258,7 @@ async function main(): Promise<void> {
   const originalCwd = process.cwd();
   process.chdir(options.workDir);
 
-  const dbManager = new DatabaseManager(options.dbPath);
+  const dbManager = new DatabaseManager(dbPath);
   const hypothesisRepo = new HypothesisRepository(dbManager.db);
   const walkForwardRepo = new WalkForwardRepository(dbManager.db);
 
@@ -248,7 +267,7 @@ async function main(): Promise<void> {
     const hypothesis = hypothesisRepo.getHypothesisById(options.hypothesisId);
     if (!hypothesis) {
       console.error(`Hypothesis graph ${options.hypothesisId} does not exist in the database.`);
-      console.error(`DB path: ${options.dbPath}`);
+      console.error(`DB path: ${dbPath}`);
       process.exitCode = 1;
       return;
     }
@@ -259,7 +278,7 @@ async function main(): Promise<void> {
     console.log(`  Hypothesis ID:   ${hypothesis.id}`);
     console.log(`  Status:          ${hypothesis.status}`);
     console.log(`  Canonical hash:  ${hypothesis.canonicalHash.slice(0, 16)}...`);
-    console.log(`  DB path:         ${options.dbPath}`);
+    console.log(`  DB path:         ${dbPath}`);
     console.log(`  Date range:      ${new Date(rangeStart).toISOString().slice(0, 10)} → ${new Date(rangeEnd).toISOString().slice(0, 10)}`);
     console.log(`  Window:          ${options.window}d, Step: ${options.step}d, Ratio: ${options.ratio}`);
     console.log(`  Strategy:        ${options.strategy}`);

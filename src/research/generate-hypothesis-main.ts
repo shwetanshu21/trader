@@ -36,7 +36,7 @@ import { FixtureHistoricalDataProvider } from '../replay/historical-data-provide
 import { WalkForwardEvaluator } from '../replay/walk-forward-evaluator.js';
 import { WinnerSelector } from '../replay/winner-selection.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
-import { loadProjectEnvFile, resolveWalkForwardDbPath } from '../replay/walk-forward-db-path.js';
+import { loadProjectEnvFile, resolveWalkForwardDbPath, resolveResearchDbPath } from '../replay/walk-forward-db-path.js';
 import {
   GenerationVerdict,
   type ProposalEngineConfig,
@@ -53,8 +53,9 @@ const DEFAULT_INSTRUCTION = 'Generate one novel trading hypothesis for NSE India
 // CLI options
 // ---------------------------------------------------------------------------
 
-interface GenerateOptions {
+export interface GenerateOptions {
   dbPath: string;
+  researchDbPath: string | null;
   instruction: string;
   skipEvaluation: boolean;
   maxCandidates: number;
@@ -62,9 +63,10 @@ interface GenerateOptions {
   showRawOutput: boolean;
 }
 
-function parseArgs(argv: string[]): GenerateOptions {
+export function parseArgs(argv: string[]): GenerateOptions {
   const options: GenerateOptions = {
     dbPath: '',
+    researchDbPath: null,
     instruction: DEFAULT_INSTRUCTION,
     skipEvaluation: false,
     maxCandidates: 5,
@@ -79,6 +81,10 @@ function parseArgs(argv: string[]): GenerateOptions {
     switch (arg) {
       case '--db-path':
         options.dbPath = value;
+        i++;
+        break;
+      case '--research-db-path':
+        options.researchDbPath = value;
         i++;
         break;
       case '--instruction':
@@ -146,7 +152,20 @@ async function main(): Promise<void> {
   }
 
   // 4. Resolve DB path
-  const dbPath = resolveWalkForwardDbPath(options.dbPath || undefined, process.env);
+  // Research mode: use explicit research path only (fail-closed, no env fallback).
+  // Standalone mode: fall back to env-driven resolution for backward compatibility.
+  const dbPath = options.researchDbPath
+    ? resolveResearchDbPath(options.researchDbPath)
+    : resolveWalkForwardDbPath(options.dbPath || undefined, process.env);
+
+  if (!dbPath) {
+    console.log(JSON.stringify({
+      status: 'error',
+      reason: 'No database path resolved. Provide --research-db-path for research mode or ensure env vars are set.',
+      timestamp: new Date().toISOString(),
+    }, null, 2));
+    process.exit(1);
+  }
 
   if (!fs.existsSync(dbPath)) {
     console.log(JSON.stringify({
@@ -164,6 +183,7 @@ async function main(): Promise<void> {
       providerMode: proposalConfig.providerMode,
       providerModel: proposalConfig.providerModel ?? null,
       dbPath,
+      researchDbPath: options.researchDbPath,
       instruction: options.instruction,
       skipEvaluation: options.skipEvaluation,
       maxCandidates: options.maxCandidates,

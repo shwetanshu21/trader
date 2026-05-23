@@ -702,6 +702,7 @@ CREATE TABLE IF NOT EXISTS overnight_runs (
   current_phase         TEXT,
   checkpoint_pointer    TEXT,
   workspace_path        TEXT    NOT NULL DEFAULT '',
+  research_db_path      TEXT    NOT NULL DEFAULT '',
   refusal_reason        TEXT,
   last_error            TEXT,
   created_at            INTEGER NOT NULL,
@@ -874,6 +875,9 @@ export class DatabaseManager {
     // T06: Add raw_output_content_hash and raw_output_preview to hypothesis_generation_attempts
     this._migrateAddColumnIfNotExists('hypothesis_generation_attempts', 'raw_output_content_hash', 'TEXT');
     this._migrateAddColumnIfNotExists('hypothesis_generation_attempts', 'raw_output_preview', 'TEXT');
+
+    // M012/S02: Add research_db_path to overnight_runs for workspace isolation audit
+    this._migrateAddColumnIfNotExists('overnight_runs', 'research_db_path', "TEXT NOT NULL DEFAULT ''");
   }
 
   /** Add a column to a table only if it does not already exist. */
