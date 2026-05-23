@@ -29,6 +29,7 @@ import { HypothesisValidator } from './hypothesis-validator.js';
 import { HypothesisResearchEvaluator } from './hypothesis-evaluator.js';
 import { ResearchArtifactWriter } from './artifact-writer.js';
 import { HypothesisGenerationService } from './hypothesis-generation-service.js';
+import { IndiaResearchBuilder } from '../strategy/india-research.js';
 import { FixtureHistoricalDataProvider } from '../replay/historical-data-provider.js';
 import { WalkForwardEvaluator } from '../replay/walk-forward-evaluator.js';
 import { WinnerSelector } from '../replay/winner-selection.js';
@@ -216,6 +217,9 @@ async function main(): Promise<void> {
       marketId: 'INDIA_NSE_EQ',
     };
 
+    // Wire India research evidence builder
+    const indiaResearchBuilder = new IndiaResearchBuilder();
+
     // 7. Create generation service
     const generationService = new HypothesisGenerationService({
       db,
@@ -226,6 +230,7 @@ async function main(): Promise<void> {
       validator,
       evaluator,
       strategyRunRepo,
+      indiaResearchBuilder,
     });
 
     // 8. Generate hypothesis
@@ -278,13 +283,30 @@ async function main(): Promise<void> {
       output.reason = result.reason;
     } else if (result.kind === 'provider_error') {
       output.error = result.error;
+    } else if (result.kind === 'accepted_without_evaluation') {
+      output.hypothesisId = result.hypothesis.id;
+      output.hypothesisStatus = result.hypothesis.status;
+      output.canonicalHash = result.hypothesis.canonicalHash;
+      output.evaluationError = result.evaluationError;
+
+      // Load audit snapshot for full lineage
+      if (result.hypothesis.canonicalHash) {
+        const lifecycleRepo = new StrategyLifecycleRepository(db);
+        const auditService = new ResearchAuditService({
+          hypothesisRepo,
+          memoryRepo,
+          lifecycleRepo,
+          generationRepo,
+        });
+        output.lineage = auditService.assembleLineage(result.hypothesis.canonicalHash);
+      }
     }
 
     // 10. Emit operator-readable JSON
     console.log(JSON.stringify(output, null, 2));
 
-    // Exit with error for provider errors
-    if (result.kind === 'provider_error') {
+    // Exit with error for provider errors or missing evaluation linkage
+    if (result.kind === 'provider_error' || result.kind === 'accepted_without_evaluation') {
       process.exit(1);
     }
   } finally {

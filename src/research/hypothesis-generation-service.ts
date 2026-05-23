@@ -381,21 +381,48 @@ export class HypothesisGenerationService {
 
         // ── 7e. Optionally evaluate ─────────────────────────────────
         let evaluation: HypothesisEvaluationResult | null = null;
+        let evaluationError: string | null = null;
 
         if (this._evaluator && !config.skipEvaluation && persistResult != null) {
           try {
             evaluation = await this._evaluator.evaluate(persistResult);
 
             // Link evaluation to generation attempt
-            if (evaluation && evaluation.evaluation) {
+            if (evaluation && evaluation.evaluation && evaluation.evaluation.id) {
               this._generationRepo.updateLinkage(attempt.id, {
                 hypothesisEvaluationId: evaluation.evaluation.id,
               });
+            } else if (evaluation && evaluation.evaluation) {
+              // Evaluation returned but without a valid id — treat as failure
+              evaluationError = `Evaluation returned without a valid hypothesis_evaluation_id. Status: ${evaluation.evaluation.status}. Rationale: ${evaluation.rationale || 'none'}`;
+            } else if (evaluation) {
+              // Evaluation returned but no evaluation row at all
+              evaluationError = 'Evaluation returned without an evaluation row.';
             }
-          } catch {
-            // Evaluation failure should not fail the generation — log and continue
-            // The generation is already persisted as accepted
+          } catch (err) {
+            // Evaluation failure — do NOT silently swallow; surface as
+            // accepted_without_evaluation so callers can react with
+            // persisted evidence and exit code.
+            evaluationError = err instanceof Error
+              ? `Evaluation threw: ${err.message}`
+              : `Evaluation threw: ${String(err)}`;
           }
+        }
+
+        // If evaluation was requested but did not produce a linked
+        // hypothesis_evaluation_id, return accepted_without_evaluation
+        // instead of accepted. The hypothesis IS persisted but the
+        // evaluation linkage is missing — callers (especially CLI) can
+        // decide to fail closed with persisted evidence.
+        if (evaluationError && persistResult != null) {
+          const hypothesis = this._hypothesisRepo.getHypothesisById(persistResult);
+
+          return {
+            kind: 'accepted_without_evaluation',
+            attempt,
+            hypothesis: hypothesis!,
+            evaluationError,
+          } as const;
         }
 
         const hypothesis = persistResult != null

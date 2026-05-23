@@ -27,6 +27,7 @@ import { HypothesisValidator } from '../hypothesis-validator.js';
 import {
   GenerationVerdict,
   GenerationReasonCode,
+  HypothesisEvaluationStatus,
   type HypothesisGenerationResult,
   type HypothesisGraph,
   type ProposalEngineConfig,
@@ -651,6 +652,217 @@ describe('HypothesisGenerationService', () => {
 
       // Should still work — context will just not have candidate data
       expect(result.kind).toBe('accepted');
+    });
+
+    // ── Accepted without evaluation: evaluator throws ──
+    it('should return accepted_without_evaluation when evaluator throws', async () => {
+      const graph = validGraph();
+
+      // Create a mock evaluator that throws
+      const throwingEvaluator = {
+        evaluate: vi.fn().mockRejectedValue(new Error('Walk-forward data provider unavailable')),
+      } as any;
+
+      const ctx = createContext({ evaluator: throwingEvaluator });
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted_without_evaluation');
+      if (result.kind === 'accepted_without_evaluation') {
+        // Hypothesis should still be persisted
+        expect(result.hypothesis).toBeTruthy();
+        expect(result.hypothesis.id).toBeGreaterThan(0);
+        expect(result.hypothesis.status).toBe('validated');
+
+        // Generation attempt should be Accepted
+        expect(result.attempt.verdict).toBe(GenerationVerdict.Accepted);
+        expect(result.attempt.canonicalHash).toBeTruthy();
+        expect(result.attempt.hypothesisGraphId).toBe(result.hypothesis.id);
+
+        // Should carry the evaluation error
+        expect(result.evaluationError).toContain('Evaluation threw');
+        expect(result.evaluationError).toContain('Walk-forward data provider unavailable');
+      }
+    });
+
+    // ── Accepted without evaluation: evaluator returns null evaluation row ──
+    it('should return accepted_without_evaluation when evaluator returns without evaluation row', async () => {
+      const graph = validGraph();
+
+      // Create a mock evaluator that returns no evaluation row
+      const emptyEvaluator = {
+        evaluate: vi.fn().mockResolvedValue({
+          evaluation: null,
+          walkForwardRun: null,
+          winner: null,
+          aggregateMetrics: null,
+          artifactPaths: [],
+          finalStatus: 'unknown',
+          rationale: 'No evaluation performed',
+        }),
+      } as any;
+
+      const ctx = createContext({ evaluator: emptyEvaluator });
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted_without_evaluation');
+      if (result.kind === 'accepted_without_evaluation') {
+        // Hypothesis should still be persisted
+        expect(result.hypothesis).toBeTruthy();
+        expect(result.hypothesis.id).toBeGreaterThan(0);
+
+        // Should carry the evaluation error explaining why
+        expect(result.evaluationError).toContain('without an evaluation row');
+      }
+    });
+
+    // ── Accepted without evaluation: evaluator returns evaluation without id ──
+    it('should return accepted_without_evaluation when evaluator returns evaluation without id', async () => {
+      const graph = validGraph();
+
+      // Create a mock evaluator that returns an evaluation without an id
+      const noIdEvaluator = {
+        evaluate: vi.fn().mockResolvedValue({
+          evaluation: { id: undefined, status: 'failed', rationale: 'Data error' },
+          walkForwardRun: null,
+          winner: null,
+          aggregateMetrics: null,
+          artifactPaths: [],
+          finalStatus: 'failed',
+          rationale: 'Data error during walk-forward',
+        }),
+      } as any;
+
+      const ctx = createContext({ evaluator: noIdEvaluator });
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted_without_evaluation');
+      if (result.kind === 'accepted_without_evaluation') {
+        // Should carry the evaluation error explaining why
+        expect(result.evaluationError).toContain('without a valid hypothesis_evaluation_id');
+      }
+    });
+
+    // ── Accepted with evaluation: successful evaluation produces linked id ──
+    it('should return accepted with linked evaluation when evaluator succeeds', async () => {
+      const graph = validGraph();
+
+      const ctx = createContext({});
+
+      // Insert a real evaluation row first so the FK constraint is satisfied
+      const hypothesisRepo = ctx.hypothesisRepo;
+
+      // Get a hypothesis first by running through the service once
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result1 = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result1.kind).toBe('accepted');
+      if (result1.kind !== 'accepted') return;
+
+      const hypothesisId = result1.hypothesis.id;
+
+      // Insert a real evaluation row into the same DB context
+      const insertedEval = hypothesisRepo.insertEvaluation({
+        hypothesisGraphId: hypothesisId,
+        status: HypothesisEvaluationStatus.Completed,
+        rationale: 'Evaluation completed successfully.',
+        outcomeDetail: 'Completed via test.',
+        createdAt: Date.now(),
+      });
+
+      // Create a mock evaluator that returns the real evaluation, using
+      // the same DB context so FK constraints are satisfied
+      const successfulEvaluator = {
+        evaluate: vi.fn().mockResolvedValue({
+          evaluation: {
+            id: insertedEval.id,
+            hypothesisGraphId: hypothesisId,
+            walkForwardRunId: null,
+            status: HypothesisEvaluationStatus.Completed,
+            winnerId: null,
+            rationale: 'Evaluation completed successfully.',
+            outcomeDetail: 'Completed via test.',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+          walkForwardRun: { id: 1, label: 'test-run', status: 'completed', windowCount: 3, totalTrials: 9 },
+          winner: { trialId: 5, trialLabel: 'best-trial', paramsJson: '{}', aggregateMergedScore: 0.8, aggregateDeterministicScore: 0.7, aggregateLlmScore: null },
+          aggregateMetrics: { scoreStability: 0.9, topKOverlap: 0.85, llmConsultationRate: null, llmDivergence: null },
+          artifactPaths: ['/tmp/artifact.json'],
+          finalStatus: 'completed',
+          rationale: 'Evaluation completed successfully.',
+        }),
+      } as any;
+
+      // Create a new service with the evaluator wired, using the SAME db
+      const service2 = new HypothesisGenerationService({
+        db: ctx.dbManager.db,
+        config: TEST_CONFIG,
+        hypothesisRepo: ctx.hypothesisRepo,
+        generationRepo: ctx.generationRepo,
+        memoryRepo: ctx.memoryRepo,
+        validator: new HypothesisValidator({
+          memoryRepo: ctx.memoryRepo,
+          hypothesisRepo: ctx.hypothesisRepo,
+        }),
+        evaluator: successfulEvaluator,
+      });
+
+      // New graph to avoid duplicate skip
+      const graph2 = validGraph({ metadata: { version: 2 } });
+      mockFetchResponse(JSON.stringify(graph2));
+
+      const result2 = await service2.generate({
+        instruction: 'Generate a different hypothesis.',
+      });
+
+      expect(result2.kind).toBe('accepted');
+      if (result2.kind === 'accepted') {
+        expect(result2.hypothesis).toBeTruthy();
+        expect(result2.evaluation).not.toBeNull();
+        expect(result2.evaluation!.evaluation.id).toBe(insertedEval.id);
+
+        // Verify persisted linkage
+        const persisted = ctx.generationRepo.getByIdWithReasons(result2.attempt.id);
+        expect(persisted!.hypothesisEvaluationId).toBe(insertedEval.id);
+      }
+    });
+
+    // ── Accepted without evaluation: skipEvaluation=true skips evaluator entirely ──
+    it('should return accepted when skipEvaluation=true even with evaluator wired', async () => {
+      const graph = validGraph();
+
+      const spyEvaluator = {
+        evaluate: vi.fn(),
+      } as any;
+
+      const ctx = createContext({ evaluator: spyEvaluator });
+      mockFetchResponse(JSON.stringify(graph));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+        skipEvaluation: true,
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(spyEvaluator.evaluate).not.toHaveBeenCalled();
+        expect(result.evaluation).toBeNull();
+      }
     });
   });
 });

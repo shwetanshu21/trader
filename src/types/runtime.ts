@@ -4190,6 +4190,11 @@ export interface ResearchLineageSnapshot {
  * - `accepted`: Provider returned a valid hypothesis graph that passed structural
  *   validation and was persisted. Carries the persisted hypothesis row and
  *   optional evaluation result.
+ * - `accepted_without_evaluation`: Provider returned a valid graph that was
+ *   persisted, but the requested evaluation failed without producing a
+ *   hypothesis_evaluation_id. Carries the persisted hypothesis row and the
+ *   evaluation error detail. Callers should treat this as a partial success
+ *   — the hypothesis is persisted but evaluation linkage is missing.
  * - `rejected`: Provider returned malformed, non-graph, or empty output that
  *   cannot be persisted as a hypothesis. Carries the generation attempt with
  *   explicit reason codes.
@@ -4207,6 +4212,15 @@ export type HypothesisGenerationResult =
       hypothesis: HypothesisGraphRow;
       /** Optional evaluation result when the evaluator was wired and invoked. */
       evaluation: HypothesisEvaluationResult | null;
+    }
+  | {
+      kind: 'accepted_without_evaluation';
+      /** The persisted generation attempt with its reasons (empty for accepted). */
+      attempt: HypothesisGenerationAttemptWithReasons;
+      /** The persisted hypothesis graph row created by validateAndPersist(). */
+      hypothesis: HypothesisGraphRow;
+      /** Human-readable error description explaining why evaluation failed. */
+      evaluationError: string;
     }
   | {
       kind: 'rejected';
