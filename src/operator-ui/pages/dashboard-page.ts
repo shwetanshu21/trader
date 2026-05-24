@@ -35,6 +35,8 @@ import {
   renderLink,
   strategyDetailHref,
   renderOperatorConsoleNav,
+  renderSummaryGrid,
+  renderResearchLineageBoundedEvidenceNote,
 } from '../render-utils.js';
 
 const DASHBOARD_SECTION_ORDER = [
@@ -1029,21 +1031,23 @@ function renderWalkForwardLeaderboardSection(
 }
 
 
-function renderResearchLineageSection(
+export function renderResearchLineageSection(
   section: DashboardSection<OperatorResearchLineageSummary>,
+  options: { emphasizeTotals?: boolean; boundedLabel?: string } = {},
 ): string {
   let content: string;
 
   if ((section.state === 'ok' || section.state === 'stale')) {
     const summary = section.data;
     const totals = summary.totals;
-    const totalGrid = `<div class="summary-grid">
-      <div class="summary-card"><div class="label">Generation Attempts Total</div><div class="value">${formatInt(totals.generationAttempts)}</div></div>
-      <div class="summary-card"><div class="label">Hypotheses Total</div><div class="value">${formatInt(totals.hypotheses)}</div></div>
-      <div class="summary-card"><div class="label">Evaluations Total</div><div class="value">${formatInt(totals.evaluations)}</div></div>
-      <div class="summary-card"><div class="label">Duplicate Skip Total</div><div class="value">${formatInt(totals.duplicateSkips)}</div></div>
-      <div class="summary-card"><div class="label">Published Research Total</div><div class="value">${formatInt(totals.publications)}</div></div>
-    </div>`;
+    const totalCards = [
+      { label: 'Generation Attempts Total', value: formatInt(totals.generationAttempts) },
+      { label: 'Hypotheses Total', value: formatInt(totals.hypotheses) },
+      { label: 'Evaluations Total', value: formatInt(totals.evaluations) },
+      { label: 'Duplicate Skip Total', value: formatInt(totals.duplicateSkips) },
+      { label: 'Published Research Total', value: formatInt(totals.publications) },
+    ];
+    const totalGrid = renderSummaryGrid(totalCards);
 
     const provenanceList = summary.status.provenance.length > 0
       ? `<ul>${summary.status.provenance.map(item => `<li><code>${escapeHtml(item.sourceLabel)}</code>${item.detail ? ` — ${escapeHtml(item.detail)}` : ''}</li>`).join('')}</ul>`
@@ -1053,8 +1057,12 @@ function renderResearchLineageSection(
       ? `<div style="margin-top:0.75rem;"><strong>Diagnostics</strong><ul>${summary.status.diagnostics.map(item => `<li><code>${escapeHtml(item.code)}</code> — ${escapeHtml(item.message)}</li>`).join('')}</ul></div>`
       : '';
 
+    const boundedHeading = options.boundedLabel ?? 'Recent bounded evidence';
+    const boundedNote = renderResearchLineageBoundedEvidenceNote(summary.recent.length);
     const recentRows = summary.recent.length > 0
-      ? `<table>
+      ? `<div style="margin-top:0.85rem;"><strong>${escapeHtml(boundedHeading)}</strong></div>
+        ${boundedNote}
+        <table>
           <thead><tr><th>When</th><th>Type</th><th>Status</th><th>Canonical Hash</th><th>Generation</th><th>Evaluation</th><th>Publication</th><th>Notes</th></tr></thead>
           <tbody>${summary.recent.map(row => `<tr>
             <td>${escapeHtml(formatTimestamp(row.happenedAt))}</td>
@@ -1067,10 +1075,14 @@ function renderResearchLineageSection(
             <td>${row.diagnostics.length > 0 ? escapeHtml(row.diagnostics.join('; ')) : '—'}</td>
           </tr>`).join('')}</tbody>
         </table>`
-      : renderEmptyState('No persisted research lineage has been produced on this host yet.');
+      : `${boundedNote}${renderEmptyState('No persisted research lineage has been produced on this host yet.')}`;
+
+    const leadNote = options.emphasizeTotals
+      ? '<div class="section-note">Repository-backed totals lead this section so operators can inspect the truthful full lineage first, then review only the bounded recent evidence window below.</div>'
+      : '<div class="section-note">Repository-backed totals stay truthful even when recent lineage rows remain bounded for operator payloads.</div>';
 
     content = `${totalGrid}
-      <div class="section-note">Repository-backed totals stay truthful even when recent lineage rows remain bounded for operator payloads.</div>
+      ${leadNote}
       ${recentRows}
       <div style="margin-top:0.75rem;"><strong>Lineage Sources</strong>${provenanceList}</div>
       ${diagnostics}`;

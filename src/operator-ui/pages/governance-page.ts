@@ -1,9 +1,13 @@
 import type { DashboardPayload } from '../dashboard-data.js';
-import { renderDashboardSectionHtml } from './dashboard-page.js';
+import { renderDashboardSectionHtml, renderResearchLineageSection } from './dashboard-page.js';
 import { escapeHtml, renderPageLayout } from '../render-utils.js';
 
 export function renderGovernancePage(payload: DashboardPayload): string {
   const sectionHtml = renderDashboardSectionHtml(payload);
+  const governanceResearchLineage = renderResearchLineageSection(payload.researchLineage, {
+    emphasizeTotals: true,
+    boundedLabel: 'Recent evidence window',
+  });
 
   return renderPageLayout({
     title: 'Governance & Backtests',
@@ -17,7 +21,7 @@ export function renderGovernancePage(payload: DashboardPayload): string {
       sectionHtml.governanceHistory,
       sectionHtml.promotionHistory,
       sectionHtml.walkForwardLeaderboard,
-      sectionHtml.researchLineage,
+      governanceResearchLineage,
     ].join('\n'),
   });
 }

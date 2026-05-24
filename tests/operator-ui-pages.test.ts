@@ -313,6 +313,9 @@ describe('Top-level operator pages', () => {
     expect(governanceHtml).toContain('Governance &amp; Backtests');
     expect(governanceHtml).toContain('Research Lineage');
     expect(governanceHtml).toContain('Published Research Total');
+    expect(governanceHtml).toContain('Repository-backed totals lead this section so operators can inspect the truthful full lineage first');
+    expect(governanceHtml).toContain('Recent evidence window');
+    expect(governanceHtml).toContain('Recent evidence below is intentionally bounded to the newest 1 lineage row for operator readability.');
 
     const healthHtml = renderSystemHealthPage({
       status: 'healthy',
@@ -501,6 +504,9 @@ it('renders research-lineage degradation states and bounded repository totals on
   const staleHtml = renderGovernancePage(stalePayload);
   expect(staleHtml).toContain('Research Lineage');
   expect(staleHtml).toContain('Published Research Total');
+  expect(staleHtml).toContain('Repository-backed totals lead this section so operators can inspect the truthful full lineage first');
+  expect(staleHtml).toContain('Recent evidence window');
+  expect(staleHtml).toContain('Recent evidence below is intentionally bounded to the newest 1 lineage row for operator readability.');
   expect(staleHtml).toContain('Failed to refresh research lineage: timeout');
   expect(staleHtml).toContain('Showing last known data from 2025-01-11 09:59:15.');
   expect(staleHtml).toContain('abc123');
@@ -518,5 +524,6 @@ it('renders research-lineage degradation states and bounded repository totals on
       provenance: testProvenance,
     }),
   }));
+  expect(emptyHtml).toContain('Recent evidence below is intentionally bounded to the newest 0 lineage rows for operator readability.');
   expect(emptyHtml).toContain('No persisted research lineage has been produced on this host yet.');
 });

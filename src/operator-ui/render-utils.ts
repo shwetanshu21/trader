@@ -499,6 +499,11 @@ export function renderSummaryGrid(cards: Array<{ label: string; value: string; m
   return `<div class="summary-grid">${body}</div>`;
 }
 
+export function renderResearchLineageBoundedEvidenceNote(count: number): string {
+  const rowLabel = count === 1 ? 'row' : 'rows';
+  return `<div class="section-note">Recent evidence below is intentionally bounded to the newest ${escapeHtml(String(count))} lineage ${rowLabel} for operator readability. Repository-backed totals above remain the truthful complete history.</div>`;
+}
+
 export function renderKeyValueGrid(rows: Array<{ key: string; value: string }>): string {
   const body = rows.map(row => `<div class="kv-card">
     <div class="key">${escapeHtml(row.key)}</div>
