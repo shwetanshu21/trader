@@ -346,11 +346,14 @@ describe('Top-level operator pages', () => {
       authClients: [],
       dbOpenBootstrap: { status: 'ready', lastError: null },
       detailReadModelBootstrap: { status: 'ready', lastError: null },
+      upstoxTokenRefresh: { refresh: { state: 'awaiting_approval' } },
       sections: { summaryCards: { status: 'ok', count: 3 } },
     });
     expect(healthHtml).toContain('System Health');
     expect(healthHtml).toContain('/api/health');
     expect(healthHtml).toContain('Section Health');
+    expect(healthHtml).toContain('Upstox Token Refresh');
+    expect(healthHtml).toContain('Request Upstox Token Refresh');
   });
 });
 

@@ -220,6 +220,61 @@ describe('operator-ui server detail routes', () => {
     expect(await backtestResponse.text()).toContain('Operator Backtest Detail');
   });
 
+  it('exposes manual Upstox token refresh routes and reports refresh status in health surfaces', async () => {
+    const coordinator = {
+      triggerRequest: async () => ({
+        action: 'request-sent',
+        status: {
+          state: 'awaiting_approval',
+          message: 'Refresh request accepted by Upstox. Awaiting approval and token delivery.',
+          checkedAt: new Date().toISOString(),
+        },
+      }),
+    };
+
+    const server = createOperatorUIServer({
+      config: baseConfig,
+      authenticator: authOk as any,
+      db: null,
+      dbError: null,
+      readModel: {
+        getSummaryCards: () => [{ key: 'current_pnl', label: 'Current P&L', value: 1000, unit: 'INR', change: null, display: null, provenance: null }],
+        getStrategyPerformance: () => [],
+        getTickerPerformance: () => [],
+        getStrategyExposure: () => [],
+        getDecisionPerformance: () => [],
+        getLifecycleStates: () => [],
+        getLifecycleHistory: () => [],
+        getPromotionHistory: () => [],
+        getWalkForwardLeaderboard: () => [],
+        getResearchLineageSummary: () => ({ totals: { generationAttempts: 0, hypotheses: 0, evaluations: 0, duplicateSkips: 0, publications: 0 }, recent: [], status: { availability: 'empty', diagnostics: [], provenance: [] }, provenance: null }),
+        getOvernightSummary: () => ({ totals: { totalRuns: 0, running: 0, completed: 0, failed: 0, refused: 0 }, latestRun: null, recentRuns: [], recentGenerationAttempts: [], status: { availability: 'empty', diagnostics: [], provenance: [] }, provenance: null }),
+      } as any,
+      detailReadModel: null,
+      upstoxTokenRefreshCoordinator: coordinator as any,
+    });
+    const baseUrl = await listen(server);
+
+    const apiResponse = await fetch(`${baseUrl}/api/upstox/token-refresh`, { method: 'POST', headers: { Authorization: 'Basic ok' } });
+    expect(apiResponse.status).toBe(202);
+    const apiPayload = await apiResponse.json();
+    expect(apiPayload.action).toBe('request-sent');
+    expect(apiPayload.refresh.state).toBe('awaiting_approval');
+
+    const htmlResponse = await fetch(`${baseUrl}/system-health/upstox/token-refresh`, { method: 'POST', headers: { Authorization: 'Basic ok' } });
+    expect(htmlResponse.status).toBe(202);
+    expect(await htmlResponse.text()).toContain('Upstox Token Refresh');
+
+    const healthResponse = await fetch(`${baseUrl}/api/health`, { headers: { Authorization: 'Basic ok' } });
+    const healthPayload = await healthResponse.json();
+    expect(healthPayload.upstoxTokenRefresh).toBeTruthy();
+
+    const systemHealthResponse = await fetch(`${baseUrl}/system-health`, { headers: { Authorization: 'Basic ok' } });
+    const systemHealthHtml = await systemHealthResponse.text();
+    expect(systemHealthHtml).toContain('Request Upstox Token Refresh');
+    expect(systemHealthHtml).toContain('Upstox Token Refresh');
+  });
+
   it('maps malformed params to 400 without touching the read model', async () => {
     const server = createOperatorUIServer({
       config: baseConfig,

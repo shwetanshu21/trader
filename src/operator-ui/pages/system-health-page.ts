@@ -10,6 +10,7 @@ export interface OperatorSystemHealthViewModel {
   authClients: unknown[];
   dbOpenBootstrap: unknown;
   detailReadModelBootstrap: unknown;
+  upstoxTokenRefresh?: unknown;
   sections: Record<string, unknown>;
 }
 
@@ -53,6 +54,22 @@ export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel): 
     { id: 'system-health-detail-bootstrap' },
   );
 
+  const upstoxTokenRefresh = renderSection(
+    'Upstox Token Refresh',
+    `<div class="action-stack">
+      <p class="meta">Manual trigger sends a fresh Upstox token request. If approval is required, approve it in Upstox / WhatsApp. Automatic recovery runs hourly and re-requests when the token is still expired.</p>
+      <form method="post" action="/system-health/upstox/token-refresh">
+        <button type="submit">Request Upstox Token Refresh</button>
+      </form>
+      <pre>${formatJson(payload.upstoxTokenRefresh ?? { status: 'unavailable' })}</pre>
+    </div>`,
+    'ok',
+    null,
+    null,
+    'Manual and automatic refresh request status for the notifier-backed Upstox token flow',
+    { id: 'system-health-upstox-refresh' },
+  );
+
   const sections = renderSection(
     'Section Health',
     `<pre>${formatJson(payload.sections)}</pre>`,
@@ -80,6 +97,6 @@ export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel): 
     meta: payload.dbConnected ? 'Healthy operator database connection.' : `Degraded: ${payload.dbError ?? 'database unavailable'}`,
     actions: '<a href="/">Back to overview</a><a href="/api/health">Raw JSON</a><a href="/positions">Positions & exposure</a>',
     navActive: 'system-health',
-    body: [summary, dbOpen, detailBootstrap, sections, authState].join('\n'),
+    body: [summary, dbOpen, detailBootstrap, upstoxTokenRefresh, sections, authState].join('\n'),
   });
 }

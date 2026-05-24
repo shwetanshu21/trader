@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { OperatorSummaryCard, OperatorProvenance } from '../types/runtime.js';
 import { getUpstoxTokenHealth } from '../upstox/token-store.js';
+import { getUpstoxTokenRefreshHealth } from '../upstox/token-refresh-status.js';
 
 interface BridgeStatusToken {
   exists?: boolean;
@@ -20,7 +21,7 @@ interface BridgeStatusFile {
   lastFailure?: BridgeRecentCall | null;
 }
 
-type BridgeAuthState = 'healthy' | 'approval-needed' | 'token-expired' | 'token-rejected' | 'token-present' | 'unknown';
+type BridgeAuthState = 'healthy' | 'approval-needed' | 'refresh-pending' | 'refresh-failed' | 'token-expired' | 'token-rejected' | 'token-present' | 'unknown';
 
 function resolveBridgeStatusPath(env: Record<string, string | undefined> = process.env): string {
   return path.resolve(env.TRADER_UPSTOX_MCP_LOCAL_STATUS_PATH?.trim() || './tmp/upstox/mcp-local/status.json');
@@ -50,7 +51,16 @@ function classifyBridgeAuthState(env: Record<string, string | undefined> = proce
 } {
   const status = safeReadBridgeStatus(env);
   const tokenHealth = getUpstoxTokenHealth(env);
+  const refreshHealth = getUpstoxTokenRefreshHealth(env);
   const checkedAt = parseIso(status?.token?.checkedAt ?? tokenHealth.checkedAt) ?? Date.now();
+
+  if (refreshHealth.refresh.state === 'awaiting_approval') {
+    return { state: 'refresh-pending', checkedAt, sourceLabel: 'token-refresh-status' };
+  }
+
+  if (refreshHealth.refresh.state === 'request_failed') {
+    return { state: 'refresh-failed', checkedAt, sourceLabel: 'token-refresh-status' };
+  }
 
   if (status?.token?.exists === false || tokenHealth.exists === false) {
     return { state: 'approval-needed', checkedAt, sourceLabel: 'mcp-local-status+token-store' };
@@ -93,6 +103,10 @@ function displayForState(state: BridgeAuthState): string {
       return 'Healthy';
     case 'approval-needed':
       return 'Approval needed';
+    case 'refresh-pending':
+      return 'Refresh pending';
+    case 'refresh-failed':
+      return 'Refresh failed';
     case 'token-expired':
       return 'Token expired';
     case 'token-rejected':

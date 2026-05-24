@@ -2,6 +2,9 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { UpstoxTokenRefreshCoordinator } from './token-refresh-coordinator.js';
+import { getUpstoxTokenRefreshHealth } from './token-refresh-status.js';
+
 interface UpstoxTokenPayload {
   client_id?: string;
   user_id?: string;
@@ -18,7 +21,12 @@ const host = process.env.TRADER_UPSTOX_NOTIFIER_HOST?.trim() || '127.0.0.1';
 const tokenPath = process.env.TRADER_UPSTOX_TOKEN_PATH?.trim() || './tmp/upstox/notifier/latest-token.json';
 const startTime = Date.now();
 const MAX_BODY_BYTES = 64 * 1024;
+const refreshCheckIntervalMs = Number(process.env.TRADER_UPSTOX_TOKEN_REFRESH_CHECK_INTERVAL_MS ?? '3600000');
 let lastDeliveryMeta: Record<string, unknown> | null = null;
+const refreshCoordinator = new UpstoxTokenRefreshCoordinator({
+  env: process.env,
+  requestCooldownMs: refreshCheckIntervalMs,
+});
 
 function ensureParent(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -118,6 +126,8 @@ async function handleNotifier(req: http.IncomingMessage, res: http.ServerRespons
     accessToken: maskedToken(payload.access_token),
   })}`);
 
+  refreshCoordinator.observeTokenRefresh(new Date(persistedAt));
+
   json(res, 200, { ok: true, receivedAt: lastDeliveryMeta.receivedAt });
 }
 
@@ -137,6 +147,7 @@ const server = http.createServer(async (req, res) => {
         notifierPath: '/upstox/notifier',
         tokenPath,
         lastDelivery: lastDeliveryMeta,
+        tokenRefresh: getUpstoxTokenRefreshHealth(),
       });
       return;
     }
@@ -145,6 +156,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, {
         tokenPath,
         lastDelivery: lastDeliveryMeta,
+        tokenRefresh: getUpstoxTokenRefreshHealth(),
       });
       return;
     }
@@ -166,6 +178,20 @@ server.listen(port, host, () => {
   console.log(`[upstox-notifier] health: http://${host}:${port}/health`);
   console.log(`[upstox-notifier] webhook path: http://${host}:${port}/upstox/notifier`);
   console.log(`[upstox-notifier] token path: ${tokenPath}`);
+  console.log(`[upstox-notifier] token refresh interval: ${refreshCheckIntervalMs}ms`);
+
+  void refreshCoordinator.runRecoveryCheck().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[upstox-notifier] initial token recovery check failed: ${message}`);
+  });
+
+  const timer = setInterval(() => {
+    void refreshCoordinator.runRecoveryCheck().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[upstox-notifier] scheduled token recovery check failed: ${message}`);
+    });
+  }, refreshCheckIntervalMs);
+  timer.unref();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

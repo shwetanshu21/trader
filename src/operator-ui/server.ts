@@ -23,6 +23,8 @@ import { renderStrategiesPage } from './pages/strategies-page.js';
 import { renderDecisionsPage } from './pages/decisions-page.js';
 import { renderGovernancePage } from './pages/governance-page.js';
 import { renderSystemHealthPage, type OperatorSystemHealthViewModel } from './pages/system-health-page.js';
+import { UpstoxTokenRefreshCoordinator } from '../upstox/token-refresh-coordinator.js';
+import { getUpstoxTokenRefreshHealth } from '../upstox/token-refresh-status.js';
 
 export interface OperatorUIServerOptions {
   config: OperatorUIConfig;
@@ -33,6 +35,7 @@ export interface OperatorUIServerOptions {
   dbOpenBootstrap?: DbOpenBootstrapState;
   detailReadModel?: OperatorDetailReadModel | null;
   detailReadModelFactory?: ((db: Database.Database) => OperatorDetailReadModel) | null;
+  upstoxTokenRefreshCoordinator?: UpstoxTokenRefreshCoordinator | null;
 }
 
 interface DbOpenBootstrapState {
@@ -119,10 +122,11 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
   };
   const dashboardPayloadAssembler = new DashboardPayloadAssembler();
   const corsOrigin = `http://${config.host === '0.0.0.0' ? '127.0.0.1' : config.host}`;
+  const upstoxTokenRefreshCoordinator = options.upstoxTokenRefreshCoordinator ?? new UpstoxTokenRefreshCoordinator();
 
   return http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Accept');
 
     if (req.method === 'OPTIONS') {
@@ -181,6 +185,18 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
           return;
         }
 
+        case '/system-health/upstox/token-refresh': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Method not allowed', allowed: ['POST'] }));
+            return;
+          }
+          void handleUpstoxTokenRefreshHtml(res, upstoxTokenRefreshCoordinator);
+          return;
+        }
+
         case '/decision': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
@@ -213,6 +229,18 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
           handleApiHealth(res, config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap);
+          return;
+        }
+
+        case '/api/upstox/token-refresh': {
+          const auth = verifyAuth(req, authenticator, res);
+          if (!auth.ok) return;
+          if (req.method !== 'POST') {
+            res.writeHead(405, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Method not allowed', allowed: ['POST'] }));
+            return;
+          }
+          void handleUpstoxTokenRefreshApi(res, upstoxTokenRefreshCoordinator);
           return;
         }
 
@@ -641,6 +669,7 @@ function buildOperatorHealthPayload(
     authClients: authenticator.getStateSummary(),
     dbOpenBootstrap,
     detailReadModelBootstrap,
+    upstoxTokenRefresh: getUpstoxTokenRefreshHealth(),
     sections,
   };
 }
@@ -670,6 +699,51 @@ function handleApiHealth(
 ): void {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap)));
+}
+
+async function handleUpstoxTokenRefreshApi(
+  res: http.ServerResponse,
+  coordinator: UpstoxTokenRefreshCoordinator,
+): Promise<void> {
+  const result = await coordinator.triggerRequest('operator-ui');
+  const statusCode = result.action === 'request-sent'
+    ? 202
+    : result.action === 'suppressed'
+      ? 409
+      : result.action === 'request-failed'
+        ? 503
+        : 200;
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ action: result.action, refresh: result.status }, null, 2));
+}
+
+async function handleUpstoxTokenRefreshHtml(
+  res: http.ServerResponse,
+  coordinator: UpstoxTokenRefreshCoordinator,
+): Promise<void> {
+  try {
+    const result = await coordinator.triggerRequest('operator-ui');
+    const statusCode = result.action === 'request-sent'
+      ? 202
+      : result.action === 'suppressed'
+        ? 409
+        : result.action === 'request-failed'
+          ? 503
+          : 200;
+    respondHtml(res, statusCode, renderStatusPage({
+      title: 'Upstox Token Refresh',
+      detail: result.status.message ?? 'Upstox token refresh request processed.',
+      statusLabel: `${statusCode}`,
+      actions: '<a href="/system-health">Back to system health</a><a href="/api/health">Raw JSON</a>',
+    }));
+  } catch (err) {
+    respondHtml(res, 503, renderStatusPage({
+      title: 'Upstox Token Refresh Failed',
+      detail: err instanceof Error ? err.message : String(err),
+      statusLabel: '503 Service Unavailable',
+      actions: '<a href="/system-health">Back to system health</a>',
+    }));
+  }
 }
 
 function parseRequiredInt(url: URL, key: string, label: string):

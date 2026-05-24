@@ -48,6 +48,34 @@ describe('getBridgeAuthSummaryCard', () => {
     expect(card.display).toBe('Token expired');
   });
 
+  it('reports refresh pending when a request is awaiting approval', () => {
+    const { env, dir } = makeEnv();
+    fs.writeFileSync(env.TRADER_UPSTOX_MCP_LOCAL_STATUS_PATH, JSON.stringify({
+      token: { exists: false, isExpired: false, checkedAt: new Date().toISOString() },
+    }));
+    fs.writeFileSync(path.join(dir, 'refresh-status.json'), JSON.stringify({
+      state: 'awaiting_approval',
+      checkedAt: new Date().toISOString(),
+      message: 'Awaiting approval.',
+    }));
+    env.TRADER_UPSTOX_TOKEN_REFRESH_STATUS_PATH = path.join(dir, 'refresh-status.json');
+
+    const card = getBridgeAuthSummaryCard(env);
+    expect(card.display).toBe('Refresh pending');
+  });
+
+  it('reports refresh failed when the latest refresh request failed', () => {
+    const { env, dir } = makeEnv();
+    fs.writeFileSync(path.join(dir, 'refresh-status.json'), JSON.stringify({
+      state: 'request_failed',
+      checkedAt: new Date().toISOString(),
+      lastError: 'bad request',
+    }));
+    env.TRADER_UPSTOX_TOKEN_REFRESH_STATUS_PATH = path.join(dir, 'refresh-status.json');
+
+    const card = getBridgeAuthSummaryCard(env);
+    expect(card.display).toBe('Refresh failed');
+  });
   it('reports healthy when bridge has a newer quote success than failure, even if the older failure mentioned expiry', () => {
     const { env } = makeEnv();
     fs.writeFileSync(env.TRADER_UPSTOX_TOKEN_PATH, JSON.stringify({
