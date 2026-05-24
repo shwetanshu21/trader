@@ -814,6 +814,8 @@ async function main(): Promise<void> {
     } catch {
       // Best-effort — do not let failure-marking crash the exit path.
     }
+    // Close DB before exit so WAL is checkpointed and the failure is persisted.
+    dbManager.close();
     process.exit(1);
   } finally {
     dbManager.close();
