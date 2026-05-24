@@ -17,6 +17,7 @@ import type {
   OperatorPromotionHistory,
   OperatorWalkForwardLeaderboard,
   OperatorResearchLineageSummary,
+  OperatorOvernightSummary,
 } from '../../types/runtime.js';
 import {
   escapeHtml,
@@ -49,11 +50,30 @@ const DASHBOARD_SECTION_ORDER = [
   'promotionHistory',
   'walkForwardLeaderboard',
   'researchLineage',
+  'overnightResearch',
 ] as const;
 
 type DashboardSectionKey = typeof DASHBOARD_SECTION_ORDER[number];
 
 type DashboardSectionHtmlMap = Record<DashboardSectionKey, string>;
+
+function defaultOvernightResearchSection(): DashboardSection<OperatorOvernightSummary> {
+  return {
+    state: 'unavailable',
+    data: {
+      totals: { totalRuns: 0, running: 0, completed: 0, failed: 0, refused: 0 },
+      latestRun: null,
+      recentRuns: [],
+      recentGenerationAttempts: [],
+      status: { availability: 'unavailable', diagnostics: [], provenance: [] },
+      provenance: { source: 'historical', asOf: 0, sourceLabel: null },
+    },
+    errorMessage: 'No overnight research payload available.',
+    stalenessMs: null,
+    lastFetchedAt: null,
+    isCachedData: false,
+  };
+}
 
 export interface DashboardPageOptions {
   pollIntervalMs?: number;
@@ -503,6 +523,7 @@ export function renderDashboardSectionHtml(payload: DashboardPayload): Dashboard
     promotionHistory: renderPromotionHistorySection(payload.promotionHistory),
     walkForwardLeaderboard: renderWalkForwardLeaderboardSection(payload.walkForwardLeaderboard),
     researchLineage: renderResearchLineageSection(payload.researchLineage),
+    overnightResearch: renderOvernightResearchSection(payload.overnightResearch ?? defaultOvernightResearchSection()),
   };
 }
 
@@ -514,8 +535,8 @@ function buildDashboardBootstrapJson(payload: DashboardPayload, pollIntervalMs: 
     dbAvailable: payload.dbAvailable,
     dbError: payload.dbError,
     sections: Object.fromEntries(DASHBOARD_SECTION_ORDER.map((key) => {
-      const section = payload[key] as DashboardSection<unknown>;
-      return [key, summarizeSection(section)];
+      const section = (payload as Record<string, unknown>)[key] as DashboardSection<unknown> | undefined;
+      return [key, summarizeSection(section ?? defaultOvernightResearchSection())];
     })),
   };
 
@@ -1098,6 +1119,70 @@ export function renderResearchLineageSection(
     'researchLineage',
     'Research Lineage',
     'Repository-backed totals plus bounded recent lineage rows',
+    section,
+    content,
+  );
+}
+
+function renderOvernightResearchSection(
+  section: DashboardSection<OperatorOvernightSummary>,
+): string {
+  let content: string;
+
+  if ((section.state === 'ok' || section.state === 'stale')) {
+    const summary = section.data;
+    const totalsGrid = renderSummaryGrid([
+      { label: 'Total Runs', value: formatInt(summary.totals.totalRuns) },
+      { label: 'Running', value: formatInt(summary.totals.running) },
+      { label: 'Completed', value: formatInt(summary.totals.completed) },
+      { label: 'Failed', value: formatInt(summary.totals.failed) },
+      { label: 'Refused', value: formatInt(summary.totals.refused) },
+    ]);
+
+    const latestRun = summary.latestRun
+      ? `<div class="section-note">Latest run <code>#${formatInt(summary.latestRun.id)}</code> ${escapeHtml(summary.latestRun.label)} is <span class="${statusClass(summary.latestRun.status)}">${escapeHtml(summary.latestRun.status)}</span> at <code>${escapeHtml(summary.latestRun.currentPhase ?? '—')}</code>. Last error: ${escapeHtml(summary.latestRun.lastError ?? summary.latestRun.failureContext?.message ?? '—')}</div>`
+      : '<div class="section-note">No overnight runs have been recorded yet.</div>';
+
+    const runRows = summary.recentRuns.length > 0
+      ? `<table>
+          <thead><tr><th>Run</th><th>Label</th><th>Status</th><th>Phase</th><th>Accepted / Evaluated</th><th>Last Error</th></tr></thead>
+          <tbody>${summary.recentRuns.map(run => `<tr>
+            <td><code>#${formatInt(run.id)}</code></td>
+            <td>${escapeHtml(run.label)}</td>
+            <td><span class="${statusClass(run.status)}">${escapeHtml(run.status)}</span></td>
+            <td><code>${escapeHtml(run.currentPhase ?? '—')}</code></td>
+            <td>${formatInt(run.generatedAcceptedCount)} / ${formatInt(run.evaluatedCompletedCount)}</td>
+            <td>${escapeHtml(run.lastError ?? run.failureContext?.message ?? '—')}</td>
+          </tr>`).join('')}</tbody>
+        </table>`
+      : renderEmptyState('No persisted overnight runs on this host yet.');
+
+    const attemptRows = summary.recentGenerationAttempts.length > 0
+      ? `<table style="margin-top:0.75rem;">
+          <thead><tr><th>Attempt</th><th>Model</th><th>Verdict</th><th>Primary Reason</th><th>When</th></tr></thead>
+          <tbody>${summary.recentGenerationAttempts.map(attempt => `<tr>
+            <td><code>#${formatInt(attempt.id)}</code></td>
+            <td>${escapeHtml(attempt.providerModel ?? attempt.providerLabel ?? 'unknown')}</td>
+            <td><span class="${statusClass(attempt.verdict)}">${escapeHtml(attempt.verdict)}</span></td>
+            <td>${escapeHtml(attempt.reasons[0] ?? '—')}</td>
+            <td>${escapeHtml(formatTimestamp(attempt.createdAt))}</td>
+          </tr>`).join('')}</tbody>
+        </table>`
+      : renderEmptyState('No hypothesis-generation attempts recorded yet.');
+
+    content = `${totalsGrid}${latestRun}${runRows}${attemptRows}`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('No database snapshot available.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load overnight research evidence.');
+  } else {
+    content = renderEmptyState('No overnight research evidence has been produced on this host yet.');
+  }
+
+  return renderDashboardSectionWrapper(
+    'overnightResearch',
+    'Overnight Research',
+    'Persisted overnight runs and recent model-attempt outcomes',
     section,
     content,
   );

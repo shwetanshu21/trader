@@ -11,6 +11,7 @@ function createReadModel(options?: {
   promotionHistory?: () => unknown;
   walkForwardLeaderboard?: () => unknown;
   researchLineage?: () => unknown;
+  overnightResearch?: () => unknown;
 }) {
   return {
     getSummaryCards: () => options?.summaryCards ? options.summaryCards() : [{ key: 'current_pnl', label: 'Current P&L', value: 1234, unit: 'INR', change: null, display: null, provenance: null }],
@@ -42,6 +43,44 @@ function createReadModel(options?: {
       },
       provenance: { source: 'historical', asOf: 1736503500000, sourceLabel: 'research_lineage' },
     }),
+    getOvernightSummary: () => options?.overnightResearch ? options.overnightResearch() : ({
+      totals: { totalRuns: 3, running: 1, completed: 1, failed: 1, refused: 0 },
+      latestRun: {
+        id: 25,
+        label: 'overnight-auto-2025-01-10',
+        status: 'failed',
+        marketPhase: 'closed',
+        currentPhase: 'publish',
+        workspacePath: '/tmp/overnight',
+        researchDbPath: '/tmp/research.db',
+        refusalReason: null,
+        lastError: 'Provider timeout',
+        createdAt: '2025-01-10T10:00:00.000Z',
+        startedAt: '2025-01-10T10:00:05.000Z',
+        completedAt: '2025-01-10T10:10:00.000Z',
+        lastSuccessfulPhase: 'evaluate',
+        failureContext: { phase: 'publish', message: 'Provider timeout', recordedAt: '2025-01-10T10:10:00.000Z' },
+        publication: null,
+        generatedAcceptedCount: 1,
+        evaluatedCompletedCount: 1,
+        resumeAttemptsCount: 0,
+      },
+      recentRuns: [],
+      recentGenerationAttempts: [{
+        id: 55,
+        verdict: 'rejected',
+        providerModel: 'glm-5.1',
+        providerLabel: 'glm-5.1',
+        createdAt: '2025-01-10T10:09:00.000Z',
+        canonicalHash: null,
+        hypothesisGraphId: null,
+        hypothesisEvaluationId: null,
+        rawOutputPreview: null,
+        reasons: ['Provider transport error'],
+      }],
+      status: { availability: 'ready', diagnostics: [], provenance: [{ sourceLabel: 'overnight_runs', detail: 'persisted overnight run evidence' }] },
+      provenance: { source: 'historical', asOf: 1736503500000, sourceLabel: 'overnight_runs' },
+    }),
   };
 }
 
@@ -61,6 +100,9 @@ describe('DashboardPayloadAssembler', () => {
     expect(payload.researchLineage.state).toBe('ok');
     expect(payload.researchLineage.data.totals.publications).toBe(1);
     expect(payload.researchLineage.data.recent).toHaveLength(1);
+    expect(payload.overnightResearch.state).toBe('ok');
+    expect(payload.overnightResearch.data.totals.totalRuns).toBe(3);
+    expect(payload.overnightResearch.data.recentGenerationAttempts).toHaveLength(1);
   });
 
   it('preserves last-known rows as stale when a later section refresh fails', () => {
@@ -176,12 +218,12 @@ it('treats malformed research lineage summaries as errors', () => {
   expect(payload.researchLineage.errorMessage).toContain('malformed rows');
 });
 
-it('returns unavailable research lineage when DB-open/read-model access is absent', () => {
+it('returns unavailable overnight research when DB-open/read-model access is absent', () => {
   const assembler = new DashboardPayloadAssembler();
   const payload = assembler.fetchDashboardPayload(null, 'open failed', 9_000);
 
-  expect(payload.researchLineage.state).toBe('unavailable');
-  expect(payload.researchLineage.data.totals.generationAttempts).toBe(0);
-  expect(payload.researchLineage.data.recent).toEqual([]);
-  expect(payload.researchLineage.errorMessage).toBe('open failed');
+  expect(payload.overnightResearch.state).toBe('unavailable');
+  expect(payload.overnightResearch.data.totals.totalRuns).toBe(0);
+  expect(payload.overnightResearch.data.recentRuns).toEqual([]);
+  expect(payload.overnightResearch.errorMessage).toBe('open failed');
 });

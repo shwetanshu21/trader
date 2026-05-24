@@ -29,7 +29,11 @@ import {
   type OperatorResearchLineageTotals,
   type OperatorLineageSectionStatus,
   type OperatorResearchPublicationProvenance,
+  type OperatorOvernightSummary,
+  type DashboardOvernightRun,
+  type DashboardOvernightGenerationAttempt,
 } from '../types/runtime.js';
+import { parseOvernightRunMetadata } from '../research/overnight-run-repo.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1200,6 +1204,123 @@ export class OperatorReadModel {
     }
   }
 
+  getOvernightSummary(limit: number = DEFAULT_LIMIT): OperatorOvernightSummary {
+    const totals = {
+      totalRuns: this._countTable('overnight_runs'),
+      running: this._countByValue('overnight_runs', 'status', 'running'),
+      completed: this._countByValue('overnight_runs', 'status', 'completed'),
+      failed: this._countByValue('overnight_runs', 'status', 'failed'),
+      refused: this._countByValue('overnight_runs', 'status', 'refused'),
+    };
+    const status = this._emptyLineageStatus();
+
+    try {
+      const recentRuns = this._db.prepare(`
+        SELECT id, label, status, market_phase, current_phase, workspace_path,
+               research_db_path, refusal_reason, last_error, metadata_json,
+               created_at, started_at, completed_at
+        FROM overnight_runs
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      `).all(limit) as Array<{
+        id: number; label: string; status: string; market_phase: string | null; current_phase: string | null;
+        workspace_path: string; research_db_path: string; refusal_reason: string | null; last_error: string | null;
+        metadata_json: string | null; created_at: number; started_at: number | null; completed_at: number | null;
+      }>;
+
+      const recentGenerationAttempts = this._db.prepare(`
+        SELECT id, verdict, provider_url, provider_model, raw_output_preview,
+               canonical_hash, hypothesis_graph_id, hypothesis_evaluation_id, created_at
+        FROM hypothesis_generation_attempts
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+      `).all(limit) as Array<{
+        id: number; verdict: string; provider_url: string; provider_model: string | null;
+        raw_output_preview: string | null; canonical_hash: string | null; hypothesis_graph_id: number | null;
+        hypothesis_evaluation_id: number | null; created_at: number;
+      }>;
+
+      const mappedRuns = recentRuns.map(run => {
+        const metadata = parseOvernightRunMetadata(run.metadata_json);
+        return {
+          id: run.id,
+          label: run.label,
+          status: run.status,
+          marketPhase: run.market_phase,
+          currentPhase: run.current_phase,
+          workspacePath: run.workspace_path,
+          researchDbPath: run.research_db_path,
+          refusalReason: run.refusal_reason,
+          lastError: run.last_error,
+          createdAt: new Date(run.created_at).toISOString(),
+          startedAt: run.started_at != null ? new Date(run.started_at).toISOString() : null,
+          completedAt: run.completed_at != null ? new Date(run.completed_at).toISOString() : null,
+          lastSuccessfulPhase: metadata.lastSuccessfulPhase,
+          failureContext: metadata.failureContext ? {
+            phase: metadata.failureContext.phase,
+            message: metadata.failureContext.message,
+            recordedAt: new Date(metadata.failureContext.recordedAt).toISOString(),
+          } : null,
+          publication: metadata.publication ? {
+            verdict: metadata.publication.verdict,
+            publicationId: metadata.publication.publicationId,
+            lifecycleStateId: metadata.publication.lifecycleStateId,
+            governanceDecisionId: metadata.publication.governanceDecisionId,
+            rationale: metadata.publication.rationale,
+            recordedAt: new Date(metadata.publication.recordedAt).toISOString(),
+          } : null,
+          generatedAcceptedCount: metadata.phaseResults.generate?.detail?.match(/(\d+) hypotheses accepted/) ? Number(metadata.phaseResults.generate.detail.match(/(\d+) hypotheses accepted/)?.[1] ?? 0) : 0,
+          evaluatedCompletedCount: metadata.phaseResults.evaluate?.detail?.match(/(\d+)\/(\d+) hypotheses evaluated successfully/) ? Number(metadata.phaseResults.evaluate.detail.match(/(\d+)\/(\d+) hypotheses evaluated successfully/)?.[1] ?? 0) : 0,
+          resumeAttemptsCount: metadata.resumeAttempts.length,
+        } satisfies DashboardOvernightRun;
+      });
+
+      const mappedAttempts = recentGenerationAttempts.map(attempt => {
+        const reasons = this._db.prepare(`
+          SELECT reason_message
+          FROM hypothesis_generation_reasons
+          WHERE generation_attempt_id = ?
+          ORDER BY id ASC
+        `).all(attempt.id) as Array<{ reason_message: string }>;
+        return {
+          id: attempt.id,
+          verdict: attempt.verdict,
+          providerModel: attempt.provider_model,
+          providerLabel: attempt.provider_model ?? attempt.provider_url,
+          createdAt: new Date(attempt.created_at).toISOString(),
+          canonicalHash: attempt.canonical_hash,
+          hypothesisGraphId: attempt.hypothesis_graph_id,
+          hypothesisEvaluationId: attempt.hypothesis_evaluation_id,
+          rawOutputPreview: attempt.raw_output_preview,
+          reasons: reasons.map(reason => reason.reason_message),
+        } satisfies DashboardOvernightGenerationAttempt;
+      });
+
+      status.availability = mappedRuns.length === 0 && mappedAttempts.length === 0 ? 'empty' : 'ready';
+      return {
+        totals,
+        latestRun: mappedRuns[0] ?? null,
+        recentRuns: mappedRuns,
+        recentGenerationAttempts: mappedAttempts,
+        status,
+        provenance: this._provenance('historical', 'overnight_runs+hypothesis_generation_attempts'),
+      };
+    } catch {
+      return {
+        totals,
+        latestRun: null,
+        recentRuns: [],
+        recentGenerationAttempts: [],
+        status: {
+          ...status,
+          availability: totals.totalRuns > 0 ? 'error' : 'unavailable',
+          diagnostics: [{ code: 'overnight_query_failed', message: 'Overnight research evidence is temporarily unavailable.' }],
+        },
+        provenance: this._provenance('historical', 'overnight_runs+hypothesis_generation_attempts'),
+      };
+    }
+  }
+
   private _getResearchLineageTotals(): OperatorResearchLineageTotals {
     return {
       generationAttempts: this._countTable('hypothesis_generation_attempts'),
@@ -1347,6 +1468,15 @@ export class OperatorReadModel {
   private _countTable(tableName: string): number {
     try {
       const row = this._db.prepare(`SELECT COUNT(*) AS cnt FROM ${tableName}`).get() as CountRow;
+      return row.cnt;
+    } catch {
+      return 0;
+    }
+  }
+
+  private _countByValue(tableName: string, columnName: string, value: string): number {
+    try {
+      const row = this._db.prepare(`SELECT COUNT(*) AS cnt FROM ${tableName} WHERE ${columnName} = ?`).get(value) as CountRow;
       return row.cnt;
     } catch {
       return 0;

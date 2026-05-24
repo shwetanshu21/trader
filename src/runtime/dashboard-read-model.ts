@@ -23,9 +23,14 @@ import type {
   DashboardPaperFill,
   DashboardPaperPosition,
   DashboardPositionEvent,
+  DashboardOvernight,
+  DashboardOvernightRun,
+  DashboardOvernightGenerationAttempt,
   ProposalAttemptWithReasons,
   BlockedOrderRow,
   LifecycleEvent,
+  ProposalEngineConfig,
+  OvernightConfig,
 } from '../types/runtime.js';
 import type { HealthService } from './health-service.js';
 import type { RuntimeStateRepository } from '../persistence/runtime-state-repo.js';
@@ -43,6 +48,9 @@ import type { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import type { PaperPositionRepository } from '../persistence/paper-position-repo.js';
 import type { ExecutionRiskRepository } from '../persistence/execution-risk-repo.js';
 import type { HybridScoreRepository } from '../persistence/hybrid-score-repo.js';
+import type { OvernightRunRepo } from '../research/overnight-run-repo.js';
+import { OvernightRunStatus, parseOvernightRunMetadata } from '../research/overnight-run-repo.js';
+import type { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -80,6 +88,14 @@ export interface DashboardReadModelOptions {
   hybridScoreRepo?: HybridScoreRepository | null;
   /** Optional — strategy lifecycle repository for governance evidence. */
   strategyLifecycleRepo?: StrategyLifecycleRepository | null;
+  /** Optional — overnight run repository for autonomous research tracking. */
+  overnightRunRepo?: OvernightRunRepo | null;
+  /** Optional — hypothesis generation repository for recent provider-attempt evidence. */
+  hypothesisGenerationRepo?: HypothesisGenerationRepository | null;
+  /** Optional — runtime config seam for showing configured overnight model chain. */
+  proposalEngineConfig?: ProposalEngineConfig | null;
+  /** Optional — runtime overnight config seam for showing whether overnight is enabled. */
+  overnightConfig?: OvernightConfig | null;
 }
 
 export class DashboardReadModel {
@@ -99,6 +115,10 @@ export class DashboardReadModel {
   private readonly _riskRepo: ExecutionRiskRepository | null;
   private readonly _hybridScoreRepo: HybridScoreRepository | null;
   private readonly _lifecycleRepo: StrategyLifecycleRepository | null;
+  private readonly _overnightRunRepo: OvernightRunRepo | null;
+  private readonly _hypothesisGenerationRepo: HypothesisGenerationRepository | null;
+  private readonly _proposalEngineConfig: ProposalEngineConfig | null;
+  private readonly _overnightConfig: OvernightConfig | null;
 
   constructor(options: DashboardReadModelOptions) {
     this._healthService = options.healthService;
@@ -117,6 +137,10 @@ export class DashboardReadModel {
     this._riskRepo = options.riskRepo ?? null;
     this._hybridScoreRepo = options.hybridScoreRepo ?? null;
     this._lifecycleRepo = options.strategyLifecycleRepo ?? null;
+    this._overnightRunRepo = options.overnightRunRepo ?? null;
+    this._hypothesisGenerationRepo = options.hypothesisGenerationRepo ?? null;
+    this._proposalEngineConfig = options.proposalEngineConfig ?? null;
+    this._overnightConfig = options.overnightConfig ?? null;
   }
 
   /** Assemble a full dashboard snapshot. */
@@ -137,6 +161,7 @@ export class DashboardReadModel {
       recentStrategyDecisions: this._getRecentStrategyDecisions(),
       universe: this._getDashboardUniverse(),
       execution: this._getExecutionEvidence(),
+      overnight: this._getOvernightEvidence(),
       lifecycleGovernance: this._getLifecycleGovernance(),
     };
   }
@@ -391,6 +416,99 @@ export class DashboardReadModel {
     } catch {
       return null;
     }
+  }
+
+  private _getOvernightEvidence(): DashboardOvernight | null {
+    if (!this._overnightConfig?.enabled || !this._overnightRunRepo) return null;
+
+    const modelChain = [
+      this._proposalEngineConfig?.providerModel,
+      this._proposalEngineConfig?.fallbackProviderModel,
+      ...(this._proposalEngineConfig?.fallbackProviderModels ?? []),
+    ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+
+    try {
+      const recentRuns = this._overnightRunRepo.listRuns(10).map(run => this._mapOvernightRun(run));
+      const recentGenerationAttempts = this._hypothesisGenerationRepo
+        ? this._hypothesisGenerationRepo.getRecentWithReasons(10).map(attempt => ({
+            id: attempt.id,
+            verdict: attempt.verdict,
+            providerModel: attempt.contextProvenance.providerModel,
+            providerLabel: attempt.contextProvenance.providerModel ?? attempt.contextProvenance.providerUrl,
+            createdAt: new Date(attempt.createdAt).toISOString(),
+            canonicalHash: attempt.canonicalHash,
+            hypothesisGraphId: attempt.hypothesisGraphId,
+            hypothesisEvaluationId: attempt.hypothesisEvaluationId,
+            rawOutputPreview: attempt.rawOutputPreview,
+            reasons: attempt.reasons.map(reason => reason.reasonMessage),
+          }))
+        : [];
+
+      return {
+        enabled: true,
+        modelChain,
+        workspaceRoot: this._overnightConfig.workspacePath,
+        latestRun: recentRuns[0] ?? null,
+        recentRuns,
+        recentGenerationAttempts,
+        totals: {
+          running: this._overnightRunRepo.countByStatus(OvernightRunStatus.Running),
+          completed: this._overnightRunRepo.countByStatus(OvernightRunStatus.Completed),
+          failed: this._overnightRunRepo.countByStatus(OvernightRunStatus.Failed),
+          refused: this._overnightRunRepo.countByStatus(OvernightRunStatus.Refused),
+        },
+      };
+    } catch {
+      return {
+        enabled: true,
+        modelChain,
+        workspaceRoot: this._overnightConfig.workspacePath,
+        latestRun: null,
+        recentRuns: [],
+        recentGenerationAttempts: [],
+        totals: {
+          running: 0,
+          completed: 0,
+          failed: 0,
+          refused: 0,
+        },
+      };
+    }
+  }
+
+  private _mapOvernightRun(run: import('../research/overnight-run-repo.js').OvernightRunRow): DashboardOvernightRun {
+    const metadata = parseOvernightRunMetadata(run.metadataJson);
+    return {
+      id: run.id,
+      label: run.label,
+      status: run.status,
+      marketPhase: run.marketPhase,
+      currentPhase: run.currentPhase,
+      workspacePath: run.workspacePath,
+      researchDbPath: run.researchDbPath,
+      refusalReason: run.refusalReason,
+      lastError: run.lastError,
+      createdAt: new Date(run.createdAt).toISOString(),
+      startedAt: run.startedAt != null ? new Date(run.startedAt).toISOString() : null,
+      completedAt: run.completedAt != null ? new Date(run.completedAt).toISOString() : null,
+      lastSuccessfulPhase: metadata.lastSuccessfulPhase,
+      failureContext: metadata.failureContext ? {
+        phase: metadata.failureContext.phase,
+        message: metadata.failureContext.message,
+        recordedAt: new Date(metadata.failureContext.recordedAt).toISOString(),
+      } : null,
+      publication: metadata.publication ? {
+        verdict: metadata.publication.verdict,
+        publicationId: metadata.publication.publicationId,
+        lifecycleStateId: metadata.publication.lifecycleStateId,
+        governanceDecisionId: metadata.publication.governanceDecisionId,
+        rationale: metadata.publication.rationale,
+        recordedAt: new Date(metadata.publication.recordedAt).toISOString(),
+      } : null,
+      generatedAcceptedCount: metadata.phaseResults.generate?.detail?.match(/(\d+) hypotheses accepted/) ? Number(metadata.phaseResults.generate.detail.match(/(\d+) hypotheses accepted/)?.[1] ?? 0) : 0,
+      evaluatedCompletedCount: metadata.phaseResults.evaluate?.detail?.match(/(\d+)\/(\d+) hypotheses evaluated successfully/) ? Number(metadata.phaseResults.evaluate.detail.match(/(\d+)\/(\d+) hypotheses evaluated successfully/)?.[1] ?? 0) : 0,
+      resumeAttemptsCount: metadata.resumeAttempts.length,
+    };
   }
 
   private _getExecutionEvidence(): ExecutionHealth | null {

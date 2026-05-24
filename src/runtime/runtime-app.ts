@@ -19,6 +19,7 @@ import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import { BlockedOrderRepository } from '../persistence/blocked-order-repo.js';
 import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-repo.js';
+import { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
 import { LifecycleManager } from './lifecycle.js';
 import { HealthService } from './health-service.js';
 import { MarketClock } from './market-clock.js';
@@ -279,6 +280,7 @@ export class RuntimeApp {
     let strategyDecisionRepo: StrategyDecisionRepository | null = null;
     let hybridScoreRepo: HybridScoreRepository | null = null;
     let strategyRunRepo: StrategyRunRepository | null = null;
+    let hypothesisGenerationRepo: HypothesisGenerationRepository | null = null;
     let executionService: ModeAwareExecutionService | null = null;
     let riskRepo: ExecutionRiskRepository | null = null;
     let riskGuard: ExecutionRiskGuard | null = null;
@@ -297,6 +299,7 @@ export class RuntimeApp {
       strategyDecisionRepo = new StrategyDecisionRepository(dbManager.db);
       hybridScoreRepo = new HybridScoreRepository(dbManager.db);
       strategyRunRepo = new StrategyRunRepository(dbManager.db);
+      hypothesisGenerationRepo = new HypothesisGenerationRepository(dbManager.db);
       const engine = new ProposalEngine(this.config.proposalEngine);
       const validator = new IndiaProposalValidator();
 
@@ -406,8 +409,9 @@ export class RuntimeApp {
 
     // ── Phase 6b: initialise overnight research trigger ──────────────────
     let overnightTrigger: OvernightTriggerSupervisor | null = null;
+    let overnightRepo: OvernightRunRepo | null = null;
     if (this.config.overnight?.enabled) {
-      const overnightRepo = new OvernightRunRepo(dbManager.db);
+      overnightRepo = new OvernightRunRepo(dbManager.db);
       const overnightOrchestrator = new OvernightOrchestrator(overnightRepo, clock);
       const overnightLauncher = new OvernightProcessLauncher({
         scriptPath: 'src/research/overnight-research-main.ts',
@@ -478,6 +482,10 @@ export class RuntimeApp {
       riskRepo,
       hybridScoreRepo,
       strategyLifecycleRepo: lifecycleRepo,
+      overnightRunRepo: overnightRepo,
+      hypothesisGenerationRepo,
+      proposalEngineConfig: this.config.proposalEngine,
+      overnightConfig: this.config.overnight,
     });
 
     // ── Phase 9: create health HTTP server with dashboard routes ───────────

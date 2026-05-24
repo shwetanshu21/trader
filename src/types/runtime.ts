@@ -1067,6 +1067,8 @@ export interface DashboardSnapshot {
   universe: DashboardUniverse | null;
   /** Execution evidence block — null when no attempt repo is wired. */
   execution: ExecutionHealth | null;
+  /** Overnight research evidence — null when overnight is disabled/unwired. */
+  overnight: DashboardOvernight | null;
   /** Lifecycle governance evidence — null when no lifecycle repo is wired. */
   lifecycleGovernance: DashboardLifecycleGovernance | null;
 }
@@ -1159,6 +1161,76 @@ export interface DashboardUniverse {
   missingQuoteCount: number;
   /** Threshold configuration label. */
   thresholdLabel: string;
+}
+
+/** Latest overnight run + model-attempt evidence for the runtime dashboard. */
+export interface DashboardOvernight {
+  /** Whether the overnight trigger is enabled in runtime config. */
+  enabled: boolean;
+  /** Configured model chain in the order it will be attempted. */
+  modelChain: string[];
+  /** Workspace root path used for overnight artifacts. */
+  workspaceRoot: string;
+  /** Latest overnight run row, or null when none exists. */
+  latestRun: DashboardOvernightRun | null;
+  /** Recent overnight runs, newest first. */
+  recentRuns: DashboardOvernightRun[];
+  /** Recent generation attempts, newest first. */
+  recentGenerationAttempts: DashboardOvernightGenerationAttempt[];
+  /** Aggregate persisted run counts by status. */
+  totals: {
+    running: number;
+    completed: number;
+    failed: number;
+    refused: number;
+  };
+}
+
+/** Compact overnight run summary for runtime/operator dashboards. */
+export interface DashboardOvernightRun {
+  id: number;
+  label: string;
+  status: string;
+  marketPhase: string | null;
+  currentPhase: string | null;
+  workspacePath: string;
+  researchDbPath: string;
+  refusalReason: string | null;
+  lastError: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  lastSuccessfulPhase: string | null;
+  failureContext: {
+    phase: string | null;
+    message: string;
+    recordedAt: string;
+  } | null;
+  publication: {
+    verdict: string;
+    publicationId: number | null;
+    lifecycleStateId: number | null;
+    governanceDecisionId: number | null;
+    rationale: string;
+    recordedAt: string;
+  } | null;
+  generatedAcceptedCount: number;
+  evaluatedCompletedCount: number;
+  resumeAttemptsCount: number;
+}
+
+/** Recent LLM generation attempt evidence for overnight tracking surfaces. */
+export interface DashboardOvernightGenerationAttempt {
+  id: number;
+  verdict: string;
+  providerModel: string | null;
+  providerLabel: string | null;
+  createdAt: string;
+  canonicalHash: string | null;
+  hypothesisGraphId: number | null;
+  hypothesisEvaluationId: number | null;
+  rawOutputPreview: string | null;
+  reasons: string[];
 }
 
 /** A recent proposal attempt for the dashboard (redacted — no tokens). */
@@ -4096,6 +4168,22 @@ export interface OperatorResearchLineageSummary {
   /** Explicit section status for empty/degraded behavior. */
   status: OperatorLineageSectionStatus;
   /** Provenance metadata for the composed payload. */
+  provenance: OperatorProvenance;
+}
+
+/** Persisted overnight research summary for operator UI surfaces. */
+export interface OperatorOvernightSummary {
+  totals: {
+    totalRuns: number;
+    running: number;
+    completed: number;
+    failed: number;
+    refused: number;
+  };
+  latestRun: DashboardOvernightRun | null;
+  recentRuns: DashboardOvernightRun[];
+  recentGenerationAttempts: DashboardOvernightGenerationAttempt[];
+  status: OperatorLineageSectionStatus;
   provenance: OperatorProvenance;
 }
 

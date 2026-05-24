@@ -17,6 +17,7 @@ import type {
   OperatorPromotionHistory,
   OperatorWalkForwardLeaderboard,
   OperatorResearchLineageSummary,
+  OperatorOvernightSummary,
 } from '../types/runtime.js';
 
 export type SectionState = 'ok' | 'error' | 'stale' | 'unavailable';
@@ -41,6 +42,7 @@ export interface DashboardPayload {
   promotionHistory: DashboardSection<OperatorPromotionHistory[]>;
   walkForwardLeaderboard: DashboardSection<OperatorWalkForwardLeaderboard[]>;
   researchLineage: DashboardSection<OperatorResearchLineageSummary>;
+  overnightResearch: DashboardSection<OperatorOvernightSummary>;
   dbAvailable: boolean;
   dbError: string | null;
 }
@@ -56,6 +58,7 @@ type DashboardSectionMap = Pick<
   | 'promotionHistory'
   | 'walkForwardLeaderboard'
   | 'researchLineage'
+  | 'overnightResearch'
 >;
 
 type SectionKey = keyof DashboardSectionMap;
@@ -116,6 +119,29 @@ const EMPTY_RESEARCH_LINEAGE: OperatorResearchLineageSummary = {
     publications: 0,
   },
   recent: [],
+  status: {
+    availability: 'empty',
+    diagnostics: [],
+    provenance: [],
+  },
+  provenance: {
+    source: 'historical',
+    asOf: 0,
+    sourceLabel: null,
+  },
+};
+
+const EMPTY_OVERNIGHT_RESEARCH: OperatorOvernightSummary = {
+  totals: {
+    totalRuns: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    refused: 0,
+  },
+  latestRun: null,
+  recentRuns: [],
+  recentGenerationAttempts: [],
   status: {
     availability: 'empty',
     diagnostics: [],
@@ -235,6 +261,18 @@ const SECTION_DEFINITIONS: {
       return summary;
     },
   },
+  overnightResearch: {
+    key: 'overnightResearch',
+    label: 'overnight research',
+    empty: EMPTY_OVERNIGHT_RESEARCH,
+    fetch: readModel => {
+      const summary = readModel.getOvernightSummary();
+      if (!summary || typeof summary !== 'object' || !summary.totals || !Array.isArray(summary.recentRuns) || !Array.isArray(summary.recentGenerationAttempts) || !summary.status || typeof summary.status !== 'object') {
+        throw new Error('overnight research query returned malformed rows.');
+      }
+      return summary;
+    },
+  },
 };
 
 function buildUnavailablePayload(assembledAt: string, dbError: string | null): DashboardPayload {
@@ -252,6 +290,7 @@ function buildUnavailablePayload(assembledAt: string, dbError: string | null): D
     promotionHistory: unavailableSection(SECTION_DEFINITIONS.promotionHistory.empty, message),
     walkForwardLeaderboard: unavailableSection(SECTION_DEFINITIONS.walkForwardLeaderboard.empty, message),
     researchLineage: unavailableSection(SECTION_DEFINITIONS.researchLineage.empty, message),
+    overnightResearch: unavailableSection(SECTION_DEFINITIONS.overnightResearch.empty, message),
   };
 }
 
@@ -282,6 +321,7 @@ export class DashboardPayloadAssembler {
       promotionHistory: this.fetchSection(SECTION_DEFINITIONS.promotionHistory, readModel, nowMs),
       walkForwardLeaderboard: this.fetchSection(SECTION_DEFINITIONS.walkForwardLeaderboard, readModel, nowMs),
       researchLineage: this.fetchSection(SECTION_DEFINITIONS.researchLineage, readModel, nowMs),
+      overnightResearch: this.fetchSection(SECTION_DEFINITIONS.overnightResearch, readModel, nowMs),
     };
   }
 

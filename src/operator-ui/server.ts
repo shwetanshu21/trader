@@ -518,6 +518,8 @@ function handleApiRefresh(
         governanceHistory: serializeDashboardSection(payload.governanceHistory, sectionHtml.governanceHistory),
         promotionHistory: serializeDashboardSection(payload.promotionHistory, sectionHtml.promotionHistory),
         walkForwardLeaderboard: serializeDashboardSection(payload.walkForwardLeaderboard, sectionHtml.walkForwardLeaderboard),
+        researchLineage: serializeDashboardSection(payload.researchLineage, sectionHtml.researchLineage),
+        overnightResearch: serializeDashboardSection(payload.overnightResearch, sectionHtml.overnightResearch),
       },
     }, null, 2));
   } catch (err) {
@@ -529,17 +531,25 @@ function handleApiRefresh(
   }
 }
 
-function serializeDashboardSection<T extends { length: number }>(section: {
+function serializeDashboardSection(section: {
   state: string;
-  data: T;
+  data: unknown;
   errorMessage: string | null;
   stalenessMs: number | null;
   lastFetchedAt: string | null;
   isCachedData: boolean;
 }, html: string) {
+  const data = section.data as any;
+  const count = Array.isArray(data)
+    ? data.length
+    : Array.isArray(data?.recent)
+      ? data.recent.length
+      : Array.isArray(data?.recentRuns)
+        ? data.recentRuns.length
+        : 0;
   return {
     state: section.state,
-    count: section.data.length,
+    count,
     data: section.data,
     errorMessage: section.errorMessage,
     stalenessMs: section.stalenessMs,
@@ -602,6 +612,20 @@ function buildOperatorHealthPayload(
       sections.lifecycle = { status: 'ok', count: lifecycle.length };
     } catch (err) {
       sections.lifecycle = { status: 'error', error: err instanceof Error ? err.message : String(err) };
+    }
+
+    try {
+      const lineage = readModel.getResearchLineageSummary();
+      sections.researchLineage = { status: 'ok', count: lineage.recent.length, availability: lineage.status.availability };
+    } catch (err) {
+      sections.researchLineage = { status: 'error', error: err instanceof Error ? err.message : String(err) };
+    }
+
+    try {
+      const overnight = readModel.getOvernightSummary();
+      sections.overnightResearch = { status: 'ok', count: overnight.recentRuns.length, availability: overnight.status.availability };
+    } catch (err) {
+      sections.overnightResearch = { status: 'error', error: err instanceof Error ? err.message : String(err) };
     }
   } else {
     sections.summaryCards = { status: 'unavailable', error: dbError ?? 'Read model not initialized' };

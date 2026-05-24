@@ -84,7 +84,7 @@ function formatStaleness(ms: number): string {
 // ---------------------------------------------------------------------------
 
 export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
-  const { marketProfile, health, runtime, broker, universe, recentProposals, recentBlockedOrders, recentLifecycleEvents, recentStrategyDecisions, execution } = snapshot;
+  const { marketProfile, health, runtime, broker, universe, recentProposals, recentBlockedOrders, recentLifecycleEvents, recentStrategyDecisions, execution, overnight } = snapshot;
 
   const healthColor = verdictColor(health.verdict);
 
@@ -346,6 +346,55 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
       </div>`;
   }
 
+  const overnightSection = overnight ? (() => {
+    const latest = overnight.latestRun;
+    const recentRunRows = overnight.recentRuns.length === 0
+      ? '<tr><td colspan="6" class="muted">No overnight runs recorded</td></tr>'
+      : overnight.recentRuns.map(run => `<tr>
+          <td>#${run.id}</td>
+          <td>${escapeHtml(run.label)}</td>
+          <td class="status-${escapeHtml(run.status)}">${escapeHtml(run.status)}</td>
+          <td>${escapeHtml(run.currentPhase ?? '—')}</td>
+          <td>${run.generatedAcceptedCount}/${run.evaluatedCompletedCount}</td>
+          <td>${escapeHtml(run.lastError ?? run.failureContext?.message ?? '—')}</td>
+        </tr>`).join('');
+    const recentAttemptRows = overnight.recentGenerationAttempts.length === 0
+      ? '<tr><td colspan="5" class="muted">No generation attempts recorded</td></tr>'
+      : overnight.recentGenerationAttempts.map(attempt => `<tr>
+          <td>#${attempt.id}</td>
+          <td>${escapeHtml(attempt.providerModel ?? attempt.providerLabel ?? 'unknown')}</td>
+          <td class="status-${escapeHtml(attempt.verdict)}">${escapeHtml(attempt.verdict)}</td>
+          <td>${escapeHtml(attempt.reasons[0] ?? '—')}</td>
+          <td>${escapeHtml(attempt.createdAt)}</td>
+        </tr>`).join('');
+    return `
+      <div class="section">
+        <h2>Overnight Research</h2>
+        <table>
+          <tr><td>Enabled</td><td class="td-value">${overnight.enabled ? 'Yes' : 'No'}</td></tr>
+          <tr><td>Model Chain</td><td class="td-value">${escapeHtml(overnight.modelChain.join(' → ') || '—')}</td></tr>
+          <tr><td>Workspace Root</td><td class="td-value"><code>${escapeHtml(overnight.workspaceRoot)}</code></td></tr>
+          <tr><td>Run Totals</td><td class="td-value">running ${overnight.totals.running}, completed ${overnight.totals.completed}, failed ${overnight.totals.failed}, refused ${overnight.totals.refused}</td></tr>
+          <tr><td>Latest Run</td><td class="td-value">${latest ? `${escapeHtml(latest.label)} (#${latest.id}) — ${escapeHtml(latest.status)} @ ${escapeHtml(latest.currentPhase ?? '—')}` : '—'}</td></tr>
+          <tr><td>Latest Failure</td><td class="td-value">${escapeHtml(latest?.lastError ?? latest?.failureContext?.message ?? '—')}</td></tr>
+        </table>
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Recent Runs (${overnight.recentRuns.length})</h3>
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>Run</td><td>Label</td><td>Status</td><td>Phase</td><td>Accepted/Evaluated</td><td>Last Error</td></tr></thead>
+          <tbody>${recentRunRows}</tbody>
+        </table>
+        <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Recent Generation Attempts (${overnight.recentGenerationAttempts.length})</h3>
+        <table style="margin-top:0.5rem;">
+          <thead><tr><td>Attempt</td><td>Model</td><td>Verdict</td><td>Primary Reason</td><td>Created At</td></tr></thead>
+          <tbody>${recentAttemptRows}</tbody>
+        </table>
+      </div>`;
+  })() : `
+      <div class="section">
+        <h2>Overnight Research</h2>
+        <p class="muted">Overnight trigger not enabled in this runtime.</p>
+      </div>`;
+
   // ── Degraded reasons ──────────────────────────────────────────────────
   const degradedSection = health.degradedReasons.length > 0 ? `
       <div class="section">
@@ -476,6 +525,8 @@ ${universeSection}
 </div>
 
 ${executionSection}
+
+${overnightSection}
 
 ${renderLifecycleGovernanceSection(snapshot.lifecycleGovernance)}
 
