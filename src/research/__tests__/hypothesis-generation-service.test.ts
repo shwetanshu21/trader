@@ -402,6 +402,61 @@ describe('HypothesisGenerationService', () => {
       }
     });
 
+    it('should repair wrapped hypothesis envelopes from OpenAI-compatible providers', async () => {
+      const ctx = createContext({ config: TEST_OPENAI_CONFIG });
+      mockFetchResponse(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                version: '1.0',
+                task: 'generate_hypothesis',
+                hypothesis: validGraph(),
+              }),
+            },
+          },
+        ],
+      }));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(result.hypothesis).toBeTruthy();
+      }
+    });
+
+    it('should repair non-object junk entries inside rule arrays when a valid graph is otherwise present', async () => {
+      const ctx = createContext({ config: TEST_OPENAI_CONFIG });
+      const graph = validGraph();
+      mockFetchResponse(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                ...graph,
+                exitRules: [
+                  ...graph.exitRules,
+                  -1.5,
+                ],
+              }),
+            },
+          },
+        ],
+      }));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(result.hypothesis.graph.exitRules).toHaveLength(graph.exitRules.length);
+      }
+    });
+
     // ── Valid JSON but not HypothesisGraph shape ──
     it('should return rejected with NonGraphResponse when JSON is not a hypothesis graph', async () => {
       const ctx = createContext();

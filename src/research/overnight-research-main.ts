@@ -252,7 +252,7 @@ async function runRealGenerationPhase(
   });
 
   const genConfig: HypothesisGenerationConfig = {
-    instruction: 'Generate one novel trading hypothesis for NSE India equities using mean-reversion or trend-following signals. Focus on liquid stocks (volume > 500k). Combine entry and exit rules with an ATR-based risk stop. Return a valid hypothesis graph JSON object.',
+    instruction: 'Generate one novel trading hypothesis for NSE India equities using mean-reversion or trend-following signals. Focus on liquid stocks (volume > 500k). Combine entry and exit rules with an ATR-based risk stop. Return exactly one top-level valid hypothesis graph JSON object with schemaVersion, signals, filters, entryRules, exitRules, and riskRules. Do not wrap it inside a "hypothesis" field or any outer envelope.',
     skipEvaluation: true,
     maxContextCandidates: 5,
     marketId: 'INDIA_NSE_EQ',

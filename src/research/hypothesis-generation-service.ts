@@ -275,6 +275,7 @@ export class HypothesisGenerationService {
     let parsed: unknown;
     try {
       parsed = JSON.parse(normalizeJsonLikeText(rawOutputStr));
+      parsed = repairHypothesisPayload(parsed);
     } catch {
       const reasons: GenerationReason[] = [
         {
@@ -860,19 +861,19 @@ export class HypothesisGenerationService {
       instruction,
       context: Object.keys(context).length > 0 ? context : undefined,
       outputFormat: {
-        description: 'Return a single JSON object representing a trading strategy hypothesis graph.',
+        description: 'Return exactly one top-level JSON object representing the hypothesis graph itself — no wrapper keys like "hypothesis", "task", or "version".',
         schema: {
           schemaVersion: 'string (e.g. "1")',
-          signals: 'array of rule objects (signal-generation rules)',
-          filters: 'array of rule objects (candidate filtering rules)',
-          entryRules: 'array of rule objects (entry rules)',
-          exitRules: 'array of rule objects (exit rules)',
-          riskRules: 'array of rule objects (risk rules)',
+          signals: 'non-empty array of rule objects (signal-generation rules)',
+          filters: 'non-empty array of rule objects (candidate filtering rules)',
+          entryRules: 'non-empty array of rule objects (entry rules)',
+          exitRules: 'non-empty array of rule objects (exit rules)',
+          riskRules: 'non-empty array of rule objects (risk rules)',
           metadata: 'optional object with additional context',
         },
         ruleSchema: {
           type: 'string (machine-readable, e.g. "ema_cross", "volume_min", "atr_stop")',
-          params: 'object with rule-specific parameters',
+          params: 'object with rule-specific parameters; never return scalars, arrays, or null as rule entries',
         },
       },
     };
@@ -1066,4 +1067,52 @@ function normalizeJsonLikeText(raw: string): string {
     return fenced[1].trim();
   }
   return trimmed;
+}
+
+function repairHypothesisPayload(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+
+  const root = value as Record<string, unknown>;
+  const candidate = isWrappedHypothesisEnvelope(root)
+    ? (root.hypothesis as Record<string, unknown>)
+    : root;
+
+  const repaired: Record<string, unknown> = { ...candidate };
+  if (typeof repaired.schemaVersion === 'number') {
+    repaired.schemaVersion = String(repaired.schemaVersion);
+  }
+
+  for (const group of ['signals', 'filters', 'entryRules', 'exitRules', 'riskRules'] as const) {
+    const current = repaired[group];
+    if (Array.isArray(current)) {
+      repaired[group] = current.filter(isRuleNodeLike);
+      continue;
+    }
+    if (isRuleNodeLike(current)) {
+      repaired[group] = [current];
+    }
+  }
+
+  if (repaired.metadata != null && (typeof repaired.metadata !== 'object' || Array.isArray(repaired.metadata))) {
+    delete repaired.metadata;
+  }
+
+  return repaired;
+}
+
+function isWrappedHypothesisEnvelope(value: Record<string, unknown>): boolean {
+  if (!value.hypothesis || typeof value.hypothesis !== 'object' || Array.isArray(value.hypothesis)) {
+    return false;
+  }
+
+  const nested = value.hypothesis as Record<string, unknown>;
+  return ['schemaVersion', 'signals', 'filters', 'entryRules', 'exitRules', 'riskRules']
+    .every((key) => key in nested)
+    && !('signals' in value && 'filters' in value && 'entryRules' in value && 'exitRules' in value && 'riskRules' in value);
+}
+
+function isRuleNodeLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
