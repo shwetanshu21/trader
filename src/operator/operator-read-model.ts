@@ -24,6 +24,11 @@ import {
   type OperatorLifecycleHistory,
   type OperatorPromotionHistory,
   type OperatorWalkForwardLeaderboard,
+  type OperatorResearchLineageSummary,
+  type OperatorResearchLineageEntry,
+  type OperatorResearchLineageTotals,
+  type OperatorLineageSectionStatus,
+  type OperatorResearchPublicationProvenance,
 } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -193,9 +198,29 @@ interface CountRow {
   cnt: number;
 }
 
-interface PnlSumRow {
-  total: number;
+interface ResearchGenerationAggRow {
+  canonical_hash: string | null;
+  generation_attempt_id: number;
+  verdict: string;
+  provider_url: string;
+  provider_model: string | null;
+  created_at: number;
+  hypothesis_graph_id: number | null;
+  hypothesis_evaluation_id: number | null;
+  publication_id: number | null;
+  publication_status: string | null;
+  strategy_id: string | null;
+  strategy_version: string | null;
+  market_id: string | null;
+  lifecycle_phase: string | null;
+  governance_verdict: string | null;
+  published_at: number | null;
 }
+
+interface ResearchReasonCodeRow {
+  reason_code: string;
+}
+
 
 // ---------------------------------------------------------------------------
 // OperatorReadModel
@@ -1142,5 +1167,189 @@ export class OperatorReadModel {
     }
 
     return results;
+  }
+
+  // -----------------------------------------------------------------------
+  // Research-lineage aggregates
+  // -----------------------------------------------------------------------
+
+  getResearchLineageSummary(limit: number = DEFAULT_LIMIT): OperatorResearchLineageSummary {
+    const totals = this._getResearchLineageTotals();
+    const status = this._emptyLineageStatus();
+
+    try {
+      const recent = this._getRecentResearchLineage(limit);
+      status.availability = recent.length === 0 ? 'empty' : 'ready';
+      return {
+        totals,
+        recent,
+        status,
+        provenance: this._provenance('historical', 'hypothesis_generation_attempts+hypothesis_memory_ledger+hypothesis_graphs+hypothesis_evaluations+research_publications'),
+      };
+    } catch {
+      return {
+        totals,
+        recent: [],
+        status: {
+          ...status,
+          availability: this._hasAnyResearchLineageEvidence(totals) ? 'error' : 'unavailable',
+          diagnostics: [{ code: 'research_lineage_query_failed', message: 'Research lineage evidence is temporarily unavailable.' }],
+        },
+        provenance: this._provenance('historical', 'hypothesis_generation_attempts+hypothesis_memory_ledger+hypothesis_graphs+hypothesis_evaluations+research_publications'),
+      };
+    }
+  }
+
+  private _getResearchLineageTotals(): OperatorResearchLineageTotals {
+    return {
+      generationAttempts: this._countTable('hypothesis_generation_attempts'),
+      hypotheses: this._countTable('hypothesis_graphs'),
+      evaluations: this._countTable('hypothesis_evaluations'),
+      duplicateSkips: this._countTable('hypothesis_memory_ledger'),
+      publications: this._countTable('research_publications'),
+    };
+  }
+
+  private _getRecentResearchLineage(limit: number): OperatorResearchLineageEntry[] {
+    const rows = this._db.prepare(`
+      SELECT
+        hga.canonical_hash,
+        hga.id AS generation_attempt_id,
+        hga.verdict,
+        hga.provider_url,
+        hga.provider_model,
+        hga.created_at,
+        hga.hypothesis_graph_id,
+        hga.hypothesis_evaluation_id,
+        rp.id AS publication_id,
+        rp.status AS publication_status,
+        rp.strategy_id,
+        rp.strategy_version,
+        rp.market_id,
+        sls.phase AS lifecycle_phase,
+        (
+          SELECT gd.verdict
+          FROM governance_decisions gd
+          WHERE gd.strategy_id = rp.strategy_id
+            AND gd.strategy_version = rp.strategy_version
+            AND gd.market_id = rp.market_id
+          ORDER BY gd.recorded_at DESC, gd.id DESC
+          LIMIT 1
+        ) AS governance_verdict,
+        rp.published_at
+      FROM hypothesis_generation_attempts hga
+      LEFT JOIN research_publications rp ON rp.hypothesis_evaluation_id = hga.hypothesis_evaluation_id
+      LEFT JOIN strategy_lifecycle_state sls ON sls.id = rp.lifecycle_state_id
+      ORDER BY hga.created_at DESC, hga.id DESC
+      LIMIT ?
+    `).all(limit) as ResearchGenerationAggRow[];
+
+    return rows.map(row => {
+      const reasonCodes = this._db.prepare(`
+        SELECT reason_code
+        FROM hypothesis_generation_reasons
+        WHERE generation_attempt_id = ?
+        ORDER BY id ASC
+      `).all(row.generation_attempt_id) as ResearchReasonCodeRow[];
+
+      const diagnostics: string[] = [];
+      const lineageType = row.publication_id !== null
+        ? 'publication'
+        : row.hypothesis_evaluation_id !== null
+          ? 'evaluation'
+          : row.hypothesis_graph_id !== null
+            ? 'hypothesis'
+            : row.verdict === 'skipped'
+              ? 'duplicate_skip'
+              : 'generation';
+
+      if (row.canonical_hash === null && row.verdict !== 'accepted') {
+        diagnostics.push('Canonical hash is absent for this non-graph generation record.');
+      }
+
+      return {
+        canonicalHash: row.canonical_hash,
+        lineageType,
+        status: row.verdict,
+        happenedAt: new Date(row.created_at).toISOString(),
+        generationAttempt: {
+          id: row.generation_attempt_id,
+          verdict: row.verdict,
+          reasonCodes: reasonCodes.map(reason => reason.reason_code),
+          providerLabel: row.provider_model ?? row.provider_url,
+        },
+        duplicateSkip: row.verdict === 'skipped'
+          ? {
+              memoryEntryId: 0,
+              memoryStatus: 'skipped',
+              reasonCode: reasonCodes[0]?.reason_code ?? 'duplicate_skipped',
+              hasLaterHypothesis: row.hypothesis_graph_id !== null,
+            }
+          : null,
+        hypothesis: row.hypothesis_graph_id !== null
+          ? {
+              id: row.hypothesis_graph_id,
+              status: row.verdict === 'accepted' ? 'validated' : row.verdict,
+              createdAt: new Date(row.created_at).toISOString(),
+            }
+          : null,
+        evaluation: row.hypothesis_evaluation_id !== null
+          ? {
+              id: row.hypothesis_evaluation_id,
+              status: row.publication_id !== null ? 'published_linked' : 'persisted',
+              walkForwardRunId: null,
+              winnerId: null,
+            }
+          : null,
+        publication: row.publication_id !== null
+          ? this._mapPublicationProvenance(row)
+          : null,
+        diagnostics,
+      };
+    });
+  }
+
+  private _mapPublicationProvenance(row: ResearchGenerationAggRow): OperatorResearchPublicationProvenance {
+    return {
+      publicationId: row.publication_id!,
+      publicationStatus: row.publication_status ?? 'unknown',
+      strategyId: row.strategy_id ?? 'unknown',
+      strategyVersion: row.strategy_version ?? 'unknown',
+      marketId: row.market_id ?? 'unknown',
+      lifecyclePhase: row.lifecycle_phase,
+      governanceVerdict: row.governance_verdict,
+      publishedAt: row.published_at === null ? null : new Date(row.published_at).toISOString(),
+    };
+  }
+
+  private _emptyLineageStatus(): OperatorLineageSectionStatus {
+    return {
+      availability: 'empty',
+      diagnostics: [],
+      provenance: [
+        { sourceLabel: 'hypothesis_generation_attempts', detail: 'recent generation lineage rows' },
+        { sourceLabel: 'hypothesis_memory_ledger', detail: 'duplicate-skip totals' },
+        { sourceLabel: 'hypothesis_graphs', detail: 'persisted hypothesis totals' },
+        { sourceLabel: 'hypothesis_evaluations', detail: 'persisted evaluation totals' },
+        { sourceLabel: 'research_publications', detail: 'publication provenance' },
+      ],
+    };
+  }
+
+  private _hasAnyResearchLineageEvidence(totals: OperatorResearchLineageTotals): boolean {
+    return totals.generationAttempts > 0
+      || totals.hypotheses > 0
+      || totals.evaluations > 0
+      || totals.duplicateSkips > 0
+      || totals.publications > 0;
+  }
+
+  private _countTable(tableName: string): number {
+    try {
+      const row = this._db.prepare(`SELECT COUNT(*) AS cnt FROM ${tableName}`).get() as CountRow;
+      return row.cnt;
+    } catch {
+      return 0;
+    }
   }
 }

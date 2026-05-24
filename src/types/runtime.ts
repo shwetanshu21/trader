@@ -3912,6 +3912,143 @@ export interface OperatorBacktestDetail {
 }
 
 // ---------------------------------------------------------------------------
+// Operator research-lineage read-model DTOs — truthful aggregate totals and
+// bounded recent lineage rows with explicit empty/degraded behavior.
+// ---------------------------------------------------------------------------
+
+/** Availability state for operator lineage sections. */
+export type OperatorLineageAvailability = 'ready' | 'empty' | 'stale' | 'error' | 'unavailable';
+
+/** Redacted, operator-safe diagnostic envelope for lineage sections. */
+export interface OperatorLineageDiagnostic {
+  /** Stable machine-readable code. */
+  code: string;
+  /** Human-readable, redacted message. */
+  message: string;
+}
+
+/** Provenance describing which persisted seam produced a lineage section. */
+export interface OperatorLineageSourceProvenance {
+  /** Source table/service identifier. */
+  sourceLabel: string;
+  /** Optional detail about the query/composition seam. */
+  detail: string | null;
+}
+
+/** Explicit status wrapper for lineage sections. */
+export interface OperatorLineageSectionStatus {
+  /** Whether the section is queryable, empty, stale, or degraded. */
+  availability: OperatorLineageAvailability;
+  /** Redacted diagnostics for degraded states. */
+  diagnostics: OperatorLineageDiagnostic[];
+  /** Source tables/services consulted for this section. */
+  provenance: OperatorLineageSourceProvenance[];
+}
+
+/** Persisted aggregate totals for research-lineage evidence. */
+export interface OperatorResearchLineageTotals {
+  /** Total hypothesis generation attempts persisted. */
+  generationAttempts: number;
+  /** Total hypotheses persisted. */
+  hypotheses: number;
+  /** Total completed/started hypothesis evaluations persisted. */
+  evaluations: number;
+  /** Total duplicate-skip memory entries persisted. */
+  duplicateSkips: number;
+  /** Total research publications persisted. */
+  publications: number;
+}
+
+/** Compact strategy-publication provenance attached to lineage rows. */
+export interface OperatorResearchPublicationProvenance {
+  /** Publication row ID. */
+  publicationId: number;
+  /** Publication status. */
+  publicationStatus: string;
+  /** Published strategy identity. */
+  strategyId: string;
+  /** Published strategy version. */
+  strategyVersion: string;
+  /** Published market profile ID. */
+  marketId: string;
+  /** Linked lifecycle phase, or null when absent. */
+  lifecyclePhase: string | null;
+  /** Latest governance verdict for the published strategy, or null. */
+  governanceVerdict: string | null;
+  /** ISO-8601 publication timestamp, or null when not finalized. */
+  publishedAt: string | null;
+}
+
+/** Recent research-lineage row shown on operator surfaces. */
+export interface OperatorResearchLineageEntry {
+  /** Canonical hash when known, else null for malformed/non-graph generation rows. */
+  canonicalHash: string | null;
+  /** Primary lineage event type. */
+  lineageType: 'generation' | 'duplicate_skip' | 'hypothesis' | 'evaluation' | 'publication';
+  /** Event/status label for the primary row. */
+  status: string;
+  /** ISO-8601 timestamp of the freshest persisted evidence for this row. */
+  happenedAt: string;
+  /** Generation attempt evidence, or null. */
+  generationAttempt: {
+    id: number;
+    verdict: string;
+    reasonCodes: string[];
+    providerLabel: string | null;
+  } | null;
+  /** Duplicate-skip evidence, or null. */
+  duplicateSkip: {
+    memoryEntryId: number;
+    memoryStatus: string;
+    reasonCode: string;
+    hasLaterHypothesis: boolean;
+  } | null;
+  /** Hypothesis evidence, or null. */
+  hypothesis: {
+    id: number;
+    status: string;
+    createdAt: string;
+  } | null;
+  /** Evaluation evidence, or null. */
+  evaluation: {
+    id: number;
+    status: string;
+    walkForwardRunId: number | null;
+    winnerId: number | null;
+  } | null;
+  /** Publication provenance, or null. */
+  publication: OperatorResearchPublicationProvenance | null;
+  /** Non-fatal diagnostics such as malformed optional JSON/evidence. */
+  diagnostics: string[];
+}
+
+/** Operator-facing research-lineage summary with truthful totals and bounded rows. */
+export interface OperatorResearchLineageSummary {
+  /** Persisted aggregate totals sourced from COUNT queries. */
+  totals: OperatorResearchLineageTotals;
+  /** Bounded recent lineage rows (newest first). */
+  recent: OperatorResearchLineageEntry[];
+  /** Explicit section status for empty/degraded behavior. */
+  status: OperatorLineageSectionStatus;
+  /** Provenance metadata for the composed payload. */
+  provenance: OperatorProvenance;
+}
+
+/** Operator-facing deep lineage detail for one canonical hash. */
+export interface OperatorResearchLineageDetail {
+  /** Canonical hash this detail is keyed by. */
+  canonicalHash: string;
+  /** Totals snapshot from the same operator lineage seam. */
+  totals: OperatorResearchLineageTotals;
+  /** Bound, operator-safe lineage rows for this hash (oldest-to-newest composition order). */
+  entries: OperatorResearchLineageEntry[];
+  /** Explicit section status for empty/degraded behavior. */
+  status: OperatorLineageSectionStatus;
+  /** Provenance metadata for the composed payload. */
+  provenance: OperatorProvenance;
+}
+
+// ---------------------------------------------------------------------------
 // Research publication — governed publish-back handoff (M011/S03)
 // ---------------------------------------------------------------------------
 

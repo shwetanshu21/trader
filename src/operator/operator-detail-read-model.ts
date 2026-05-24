@@ -15,6 +15,11 @@ import {
   type OperatorProvenance,
   type OperatorStrategyDetail,
   type OperatorStrategyWalkForwardDetail,
+  type OperatorResearchLineageDetail,
+  type OperatorResearchLineageEntry,
+  type OperatorResearchLineageTotals,
+  type OperatorLineageSectionStatus,
+  type OperatorResearchPublicationProvenance,
 } from '../types/runtime.js';
 import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
 import { HybridScoreRepository } from '../persistence/hybrid-score-repo.js';
@@ -525,6 +530,231 @@ export class OperatorDetailReadModel {
         cause: error,
       });
     }
+  }
+
+  getResearchLineageDetail(canonicalHash: string): OperatorResearchLineageDetail {
+    const totals = this._getResearchLineageTotals();
+    const provenance = this._provenance('historical', 'hypothesis_generation_attempts+hypothesis_memory_ledger+hypothesis_graphs+hypothesis_evaluations+research_publications');
+
+    try {
+      const entries = this._composeResearchLineageEntries(canonicalHash);
+      return {
+        canonicalHash,
+        totals,
+        entries,
+        status: {
+          availability: entries.length === 0 ? (this._hasAnyResearchLineageEvidence(totals) ? 'empty' : 'unavailable') : 'ready',
+          diagnostics: [],
+          provenance: this._lineageSourceProvenance(),
+        },
+        provenance,
+      };
+    } catch {
+      return {
+        canonicalHash,
+        totals,
+        entries: [],
+        status: {
+          availability: this._hasAnyResearchLineageEvidence(totals) ? 'error' : 'unavailable',
+          diagnostics: [{ code: 'research_lineage_detail_failed', message: 'Research lineage detail is temporarily unavailable.' }],
+          provenance: this._lineageSourceProvenance(),
+        },
+        provenance,
+      };
+    }
+  }
+
+  private _composeResearchLineageEntries(canonicalHash: string): OperatorResearchLineageEntry[] {
+    const entries: OperatorResearchLineageEntry[] = [];
+    const diagnostics: string[] = [];
+
+    const generationRows = this._db.prepare(`
+      SELECT id, verdict, provider_url, provider_model, hypothesis_graph_id, hypothesis_evaluation_id, created_at
+      FROM hypothesis_generation_attempts
+      WHERE canonical_hash = ?
+      ORDER BY created_at ASC, id ASC
+    `).all(canonicalHash) as Array<{
+      id: number;
+      verdict: string;
+      provider_url: string;
+      provider_model: string | null;
+      hypothesis_graph_id: number | null;
+      hypothesis_evaluation_id: number | null;
+      created_at: number;
+    }>;
+
+    for (const row of generationRows) {
+      const reasonCodes = this._db.prepare(`
+        SELECT reason_code FROM hypothesis_generation_reasons
+        WHERE generation_attempt_id = ?
+        ORDER BY id ASC
+      `).all(row.id) as Array<{ reason_code: string }>;
+
+      entries.push({
+        canonicalHash,
+        lineageType: row.hypothesis_evaluation_id !== null
+          ? 'evaluation'
+          : row.hypothesis_graph_id !== null
+            ? 'hypothesis'
+            : row.verdict === 'skipped'
+              ? 'duplicate_skip'
+              : 'generation',
+        status: row.verdict,
+        happenedAt: this._iso(row.created_at),
+        generationAttempt: {
+          id: row.id,
+          verdict: row.verdict,
+          reasonCodes: reasonCodes.map(reason => reason.reason_code),
+          providerLabel: row.provider_model ?? row.provider_url,
+        },
+        duplicateSkip: row.verdict === 'skipped'
+          ? {
+              memoryEntryId: 0,
+              memoryStatus: 'skipped',
+              reasonCode: reasonCodes[0]?.reason_code ?? 'duplicate_skipped',
+              hasLaterHypothesis: row.hypothesis_graph_id !== null,
+            }
+          : null,
+        hypothesis: row.hypothesis_graph_id !== null
+          ? { id: row.hypothesis_graph_id, status: row.verdict === 'accepted' ? 'validated' : row.verdict, createdAt: this._iso(row.created_at) }
+          : null,
+        evaluation: row.hypothesis_evaluation_id !== null
+          ? { id: row.hypothesis_evaluation_id, status: 'persisted', walkForwardRunId: null, winnerId: null }
+          : null,
+        publication: null,
+        diagnostics: [],
+      });
+    }
+
+    const memory = this._db.prepare(`
+      SELECT id, status, reason_code, created_at
+      FROM hypothesis_memory_ledger
+      WHERE canonical_hash = ?
+      ORDER BY created_at ASC, id ASC
+    `).all(canonicalHash) as Array<{ id: number; status: string; reason_code: string; created_at: number }>;
+
+    for (const row of memory) {
+      entries.push({
+        canonicalHash,
+        lineageType: 'duplicate_skip',
+        status: row.status,
+        happenedAt: this._iso(row.created_at),
+        generationAttempt: null,
+        duplicateSkip: {
+          memoryEntryId: row.id,
+          memoryStatus: row.status,
+          reasonCode: row.reason_code,
+          hasLaterHypothesis: generationRows.some(g => g.hypothesis_graph_id !== null),
+        },
+        hypothesis: null,
+        evaluation: null,
+        publication: null,
+        diagnostics: [],
+      });
+    }
+
+    const publications = this._db.prepare(`
+      SELECT rp.id, rp.status, rp.strategy_id, rp.strategy_version, rp.market_id, rp.published_at, sls.phase AS lifecycle_phase,
+             (
+               SELECT gd.verdict
+               FROM governance_decisions gd
+               WHERE gd.strategy_id = rp.strategy_id
+                 AND gd.strategy_version = rp.strategy_version
+                 AND gd.market_id = rp.market_id
+               ORDER BY gd.recorded_at DESC, gd.id DESC
+               LIMIT 1
+             ) AS governance_verdict,
+             he.hypothesis_graph_id,
+             hg.canonical_hash,
+             he.id AS evaluation_id,
+             he.status AS evaluation_status,
+             he.walk_forward_run_id,
+             he.winner_id,
+             rp.created_at
+      FROM research_publications rp
+      INNER JOIN hypothesis_evaluations he ON he.id = rp.hypothesis_evaluation_id
+      INNER JOIN hypothesis_graphs hg ON hg.id = he.hypothesis_graph_id
+      LEFT JOIN strategy_lifecycle_state sls ON sls.id = rp.lifecycle_state_id
+      WHERE hg.canonical_hash = ?
+      ORDER BY rp.created_at ASC, rp.id ASC
+    `).all(canonicalHash) as Array<{
+      id: number;
+      status: string;
+      strategy_id: string;
+      strategy_version: string;
+      market_id: string;
+      published_at: number | null;
+      lifecycle_phase: string | null;
+      governance_verdict: string | null;
+      hypothesis_graph_id: number;
+      canonical_hash: string;
+      evaluation_id: number;
+      evaluation_status: string;
+      walk_forward_run_id: number | null;
+      winner_id: number | null;
+      created_at: number;
+    }>;
+
+    for (const row of publications) {
+      entries.push({
+        canonicalHash: row.canonical_hash,
+        lineageType: 'publication',
+        status: row.status,
+        happenedAt: this._iso(row.created_at),
+        generationAttempt: null,
+        duplicateSkip: null,
+        hypothesis: { id: row.hypothesis_graph_id, status: 'persisted', createdAt: this._iso(row.created_at) },
+        evaluation: {
+          id: row.evaluation_id,
+          status: row.evaluation_status,
+          walkForwardRunId: row.walk_forward_run_id,
+          winnerId: row.winner_id,
+        },
+        publication: {
+          publicationId: row.id,
+          publicationStatus: row.status,
+          strategyId: row.strategy_id,
+          strategyVersion: row.strategy_version,
+          marketId: row.market_id,
+          lifecyclePhase: row.lifecycle_phase,
+          governanceVerdict: row.governance_verdict,
+          publishedAt: this._isoNullable(row.published_at),
+        },
+        diagnostics: diagnostics.slice(),
+      });
+    }
+
+    return entries.sort((a, b) => a.happenedAt.localeCompare(b.happenedAt));
+  }
+
+  private _getResearchLineageTotals(): OperatorResearchLineageTotals {
+    return {
+      generationAttempts: this._countRows('SELECT COUNT(*) AS cnt FROM hypothesis_generation_attempts'),
+      hypotheses: this._countRows('SELECT COUNT(*) AS cnt FROM hypothesis_graphs'),
+      evaluations: this._countRows('SELECT COUNT(*) AS cnt FROM hypothesis_evaluations'),
+      duplicateSkips: this._countRows('SELECT COUNT(*) AS cnt FROM hypothesis_memory_ledger'),
+      publications: this._countRows('SELECT COUNT(*) AS cnt FROM research_publications'),
+    };
+  }
+
+  private _lineageSourceProvenance(): OperatorLineageSectionStatus['provenance'] {
+    return [
+      { sourceLabel: 'hypothesis_generation_attempts', detail: 'recent generation lineage rows' },
+      { sourceLabel: 'hypothesis_memory_ledger', detail: 'duplicate-skip lineage rows' },
+      { sourceLabel: 'hypothesis_graphs', detail: 'persisted hypothesis linkage' },
+      { sourceLabel: 'hypothesis_evaluations', detail: 'persisted evaluation linkage' },
+      { sourceLabel: 'research_publications', detail: 'publication provenance' },
+      { sourceLabel: 'strategy_lifecycle_state', detail: 'publication lifecycle phase' },
+      { sourceLabel: 'governance_decisions', detail: 'latest publication governance verdict' },
+    ];
+  }
+
+  private _hasAnyResearchLineageEvidence(totals: OperatorResearchLineageTotals): boolean {
+    return totals.generationAttempts > 0
+      || totals.hypotheses > 0
+      || totals.evaluations > 0
+      || totals.duplicateSkips > 0
+      || totals.publications > 0;
   }
 
   private _getStrategyDecisionRawById(id: number): StrategyDecisionRawRow | null {

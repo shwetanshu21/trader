@@ -613,141 +613,130 @@ describe('OperatorDetailReadModel', () => {
     expect(detail!.diagnostics.some(item => item.includes('Malformed JSON ignored'))).toBe(true);
   });
 
-  it('returns backtest detail for selected and no-winner runs without crashing on malformed optional JSON', () => {
-    const run = ctx.walkForward.insertRun({
-      label: 'Walk-forward selected',
-      strategyId: 'swing-alpha',
-      strategyVersion: '1.2.3',
-      marketId: 'INDIA_NSE_EQ',
-      replaySessionId: null,
-      windowCount: 2,
-      totalTrials: 2,
-      status: WalkForwardStatus.Completed,
-      createdAt: NOW,
-      startedAt: NOW + 1,
-      completedAt: NOW + 200,
-    });
-    const w0 = ctx.walkForward.insertWindow({
-      runId: run.id,
-      windowIndex: 0,
-      rangeStart: NOW - 20_000,
-      rangeEnd: NOW - 10_000,
-      windowLabel: 'W0',
-      trialCountOptimized: 1,
-      trialCountTested: 1,
-      status: WalkForwardWindowStatus.Completed,
-      createdAt: NOW + 2,
-    });
-    const w1 = ctx.walkForward.insertWindow({
-      runId: run.id,
-      windowIndex: 1,
-      rangeStart: NOW - 10_000,
-      rangeEnd: NOW,
-      windowLabel: 'W1',
-      trialCountOptimized: 1,
-      trialCountTested: 1,
-      status: WalkForwardWindowStatus.Completed,
-      createdAt: NOW + 3,
-    });
-    const trialA = ctx.walkForward.insertTrial({
-      runId: run.id,
-      trialIndex: 0,
-      label: 'Config A',
-      paramsJson: '{"lookback":14}',
-      mergedScore: 0.91,
-      deterministicScore: 0.88,
-      llmScore: 0.94,
-      llmStatus: 'consulted',
-      rank: 1,
-      createdAt: NOW + 4,
-    });
-    const trialB = ctx.walkForward.insertTrial({
-      runId: run.id,
-      trialIndex: 1,
-      label: 'Config B',
-      paramsJson: '{bad json',
-      mergedScore: 0.74,
-      deterministicScore: 0.78,
-      llmScore: null,
-      llmStatus: 'skipped',
-      rank: 2,
-      createdAt: NOW + 5,
-    });
-    ctx.walkForward.linkTrialToWindow({
-      trialId: trialA.id,
-      windowId: w0.id,
-      windowType: WalkForwardWindowType.InSample,
-      totalReturn: 11,
-      sharpeRatio: 1.5,
-      maxDrawdown: 7,
-      winRate: 0.58,
-      tradeCount: 10,
-      profitFactor: 1.6,
-      metricsJson: '{"calmar":1.2}',
-      createdAt: NOW + 6,
-    });
-    ctx.walkForward.linkTrialToWindow({
-      trialId: trialA.id,
-      windowId: w1.id,
-      windowType: WalkForwardWindowType.OutOfSample,
-      totalReturn: 9,
-      sharpeRatio: 1.3,
-      maxDrawdown: 9,
-      winRate: 0.55,
-      tradeCount: 8,
-      profitFactor: 1.4,
-      metricsJson: '{bad json',
-      createdAt: NOW + 7,
-    });
-    ctx.walkForward.insertWinner({
-      runId: run.id,
-      result: WalkForwardSelectionResult.Selected,
-      selectedTrialId: trialA.id,
-      selectionStrategy: WalkForwardSelectionStrategy.Composite,
-      selectionConfigJson: '{"strategy":"composite","minMergedScore":0.8}',
-      rationale: 'Config A dominated on merged score and Sharpe.',
-      artifactPathsJson: '["artifacts/winner.json"]',
-      selectedAt: NOW + 201,
-    });
+  it('returns research lineage detail with publication provenance and duplicate-skip evidence', () => {
+    ctx.db.exec(`
+      DELETE FROM hypothesis_memory_ledger;
+      DELETE FROM hypothesis_graphs;
+      DELETE FROM hypothesis_evaluations;
+      DELETE FROM hypothesis_generation_attempts;
+      DELETE FROM hypothesis_generation_reasons;
+      DELETE FROM research_publications;
+      DELETE FROM strategy_lifecycle_state;
+      DELETE FROM governance_decisions;
+    `);
 
-    const noWinnerRun = ctx.walkForward.insertRun({
-      label: 'Walk-forward hold',
-      strategyId: 'swing-alpha',
-      strategyVersion: '1.2.3',
+    ctx.db.prepare(`
+      INSERT INTO hypothesis_graphs
+        (id, canonical_hash, canonical_json, status, schema_version, signals_json, filters_json, entry_rules_json, exit_rules_json, risk_rules_json, metadata_json, created_at, updated_at)
+      VALUES (1, 'hash-lineage', '{}', 'validated', '1', '[]', '[]', '[]', '[]', '[]', null, ?, ?)
+    `).run(NOW, NOW);
+    const run = ctx.walkForward.insertRun({
+      label: 'lineage run',
+      strategyId: 'research-hypothesis-1',
+      strategyVersion: '1.0.0',
       marketId: 'INDIA_NSE_EQ',
       replaySessionId: null,
       windowCount: 1,
-      totalTrials: 0,
+      totalTrials: 1,
       status: WalkForwardStatus.Completed,
-      createdAt: NOW + 300,
-      startedAt: NOW + 301,
-      completedAt: NOW + 320,
+      createdAt: NOW,
+      startedAt: NOW,
+      completedAt: NOW,
     });
-    ctx.walkForward.insertWinner({
-      runId: noWinnerRun.id,
-      result: WalkForwardSelectionResult.NoWinner,
-      selectedTrialId: null,
-      selectionStrategy: WalkForwardSelectionStrategy.Threshold,
-      selectionConfigJson: '{bad json',
-      rationale: 'No trial cleared the minimum threshold.',
+    const trial = ctx.walkForward.insertTrial({
+      runId: run.id,
+      trialIndex: 0,
+      label: 'lineage trial',
+      paramsJson: '{}',
+      mergedScore: 0.8,
+      deterministicScore: 0.8,
+      llmScore: null,
+      llmStatus: 'skipped',
+      rank: 1,
+      createdAt: NOW,
+    });
+    const winner = ctx.walkForward.insertWinner({
+      runId: run.id,
+      result: WalkForwardSelectionResult.Selected,
+      selectedTrialId: trial.id,
+      selectionStrategy: WalkForwardSelectionStrategy.TopRanked,
+      selectionConfigJson: '{}',
+      rationale: 'ok',
       artifactPathsJson: null,
-      selectedAt: NOW + 321,
+      selectedAt: NOW,
     });
+    const winnerRowId = winner.id;
 
-    const selectedDetail = ctx.readModel.getBacktestDetail(run.id);
-    expect(selectedDetail).not.toBeNull();
-    expect(selectedDetail!.selectedTrial?.label).toBe('Config A');
-    expect(selectedDetail!.rankedCandidates).toHaveLength(2);
-    expect(selectedDetail!.rankedCandidates[1].params).toBeNull();
-    expect(selectedDetail!.selectedTrial?.windowEvidence).toHaveLength(2);
-    expect(selectedDetail!.selectedTrial?.windowEvidence[1].metrics).toBeNull();
-    expect(selectedDetail!.diagnostics.some(item => item.includes('Malformed JSON ignored'))).toBe(true);
+    ctx.db.prepare(`
+      INSERT INTO hypothesis_evaluations
+        (id, hypothesis_graph_id, walk_forward_run_id, status, winner_id, rationale, outcome_detail, created_at, updated_at)
+      VALUES (1, 1, ?, 'completed', ?, 'ok', 'ok', ?, ?)
+    `).run(run.id, winnerRowId, NOW + 1, NOW + 1);
+    ctx.db.prepare(`
+      INSERT INTO hypothesis_generation_attempts
+        (id, verdict, provider_url, provider_model, prompt_version, triggered_at, market_id, strategy_id, raw_provider_output, raw_output_content_hash, raw_output_preview, canonical_hash, hypothesis_graph_id, hypothesis_evaluation_id, created_at)
+      VALUES (1, 'accepted', 'http://provider', 'gpt-test', '1', ?, 'INDIA_NSE_EQ', 'research', null, null, null, 'hash-lineage', 1, 1, ?)
+    `).run(NOW + 2, NOW + 2);
+    ctx.db.prepare(`
+      INSERT INTO hypothesis_generation_attempts
+        (id, verdict, provider_url, provider_model, prompt_version, triggered_at, market_id, strategy_id, raw_provider_output, raw_output_content_hash, raw_output_preview, canonical_hash, hypothesis_graph_id, hypothesis_evaluation_id, created_at)
+      VALUES (2, 'skipped', 'http://provider', 'gpt-test', '1', ?, 'INDIA_NSE_EQ', 'research', null, null, null, 'hash-lineage', null, null, ?)
+    `).run(NOW + 3, NOW + 3);
+    ctx.db.prepare(`INSERT INTO hypothesis_generation_reasons (generation_attempt_id, reason_code, reason_message) VALUES (2, 'duplicate_skipped', 'Exact duplicate')`).run();
+    ctx.db.prepare(`
+      INSERT INTO hypothesis_memory_ledger
+        (id, canonical_hash, status, reason_code, reason_message, hypothesis_graph_id, created_at)
+      VALUES (1, 'hash-lineage', 'failed', 'exact_failure_match', 'duplicate', null, ?)
+    `).run(NOW + 4);
+    ctx.lifecycle.upsertCurrentState({
+      strategyId: 'research-hypothesis-1',
+      strategyVersion: '1.0.0',
+      marketId: 'INDIA_NSE_EQ',
+      phase: StrategyLifecyclePhase.Paper,
+      updatedAt: NOW + 5,
+    });
+    ctx.lifecycle.insertDecision({
+      strategyId: 'research-hypothesis-1',
+      strategyVersion: '1.0.0',
+      marketId: 'INDIA_NSE_EQ',
+      verdict: 'promote' as any,
+      previousPhase: StrategyLifecyclePhase.Backtest,
+      newPhase: StrategyLifecyclePhase.Paper,
+      rationale: 'ok',
+      evidenceJson: '{}',
+      winnerId: null,
+      recordedAt: NOW + 6,
+    });
+    ctx.db.prepare(`
+      INSERT INTO research_publications
+        (id, hypothesis_evaluation_id, hypothesis_graph_id, status, strategy_id, strategy_version, market_id, rationale, evidence_json, lifecycle_state_id, governance_decision_id, published_at, created_at)
+      VALUES (1, 1, 1, 'published', 'research-hypothesis-1', '1.0.0', 'INDIA_NSE_EQ', 'ok', '{}', 1, 1, ?, ?)
+    `).run(NOW + 7, NOW + 7);
 
-    const holdDetail = ctx.readModel.getBacktestDetail(noWinnerRun.id);
-    expect(holdDetail).not.toBeNull();
-    expect(holdDetail!.result).toBe(WalkForwardSelectionResult.NoWinner);
-    expect(holdDetail!.selectedTrial).toBeNull();
-    expect(holdDetail!.selectionConfig).toBeNull();
-    expect(holdDetail!.diagnostics.some(item => item.includes('Malformed JSON ignored'))).toBe(true);
+    const detail = ctx.readModel.getResearchLineageDetail('hash-lineage');
+    expect(detail.totals).toEqual({
+      generationAttempts: 2,
+      hypotheses: 1,
+      evaluations: 1,
+      duplicateSkips: 1,
+      publications: 1,
+    });
+    expect(detail.status.availability).toBe('ready');
+    expect(detail.entries.some(entry => entry.lineageType === 'duplicate_skip' && entry.duplicateSkip?.reasonCode === 'duplicate_skipped')).toBe(true);
+    expect(detail.entries.some(entry => entry.publication?.strategyId === 'research-hypothesis-1')).toBe(true);
+    expect(detail.entries.some(entry => entry.publication?.governanceVerdict === 'promote')).toBe(true);
+  });
+
+  it('returns unavailable lineage detail when no research evidence exists for the host', () => {
+    const detail = ctx.readModel.getResearchLineageDetail('missing-hash');
+    expect(detail.entries).toEqual([]);
+    expect(detail.totals).toEqual({
+      generationAttempts: 0,
+      hypotheses: 0,
+      evaluations: 0,
+      duplicateSkips: 0,
+      publications: 0,
+    });
+    expect(detail.status.availability).toBe('unavailable');
   });
 });

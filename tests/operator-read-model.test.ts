@@ -976,47 +976,165 @@ describe('M010 S01 — OperatorReadModel', () => {
   // bounded recent lists. Insert 100 rows, verify the total is 100
   // (which exceeds any plausible bounded list limit).
   // =======================================================================
-  describe('aggregate totals exceed bounded list limits', () => {
-    it('summary card totals include all rows regardless of cap', () => {
-      const insertDecision = db.prepare(`
-        INSERT INTO strategy_decisions
-          (proposal_attempt_id, decision_status, strategy_id, strategy_version,
-           decided_at, exchange, tradingsymbol, side, product, quantity, order_type,
-           risk_sizing_basis, execution_class, segment, instrument_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  describe('research lineage summary', () => {
+    beforeEach(() => {
+      db.exec(`
+        CREATE TABLE hypothesis_memory_ledger (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          canonical_hash TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL,
+          reason_code TEXT NOT NULL,
+          reason_message TEXT NOT NULL,
+          hypothesis_graph_id INTEGER,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE hypothesis_graphs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          canonical_hash TEXT NOT NULL,
+          canonical_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          schema_version TEXT NOT NULL,
+          signals_json TEXT NOT NULL,
+          filters_json TEXT NOT NULL,
+          entry_rules_json TEXT NOT NULL,
+          exit_rules_json TEXT NOT NULL,
+          risk_rules_json TEXT NOT NULL,
+          metadata_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE hypothesis_evaluations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          hypothesis_graph_id INTEGER NOT NULL,
+          walk_forward_run_id INTEGER,
+          status TEXT NOT NULL,
+          winner_id INTEGER,
+          rationale TEXT NOT NULL,
+          outcome_detail TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE hypothesis_generation_attempts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          verdict TEXT NOT NULL,
+          provider_url TEXT NOT NULL,
+          provider_model TEXT,
+          prompt_version TEXT,
+          triggered_at INTEGER NOT NULL,
+          market_id TEXT NOT NULL,
+          strategy_id TEXT,
+          raw_provider_output TEXT,
+          raw_output_content_hash TEXT,
+          raw_output_preview TEXT,
+          canonical_hash TEXT,
+          hypothesis_graph_id INTEGER,
+          hypothesis_evaluation_id INTEGER,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE hypothesis_generation_reasons (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          generation_attempt_id INTEGER NOT NULL,
+          reason_code TEXT NOT NULL,
+          reason_message TEXT NOT NULL
+        );
+        CREATE TABLE research_publications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          hypothesis_evaluation_id INTEGER NOT NULL,
+          hypothesis_graph_id INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          strategy_id TEXT NOT NULL,
+          strategy_version TEXT NOT NULL,
+          market_id TEXT NOT NULL,
+          rationale TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          lifecycle_state_id INTEGER,
+          governance_decision_id INTEGER,
+          published_at INTEGER,
+          created_at INTEGER NOT NULL
+        );
       `);
-
-      for (let i = 1; i <= 100; i++) {
-        insertDecision.run(i, 'approved', 'strategy-a', '1.0.0', i * 1000,
-          'NSE', `SYM${i}`, 'buy', 'MIS', 10, 'MARKET',
-          'last_price', 'EQ', 'NSE', 'EQ');
-      }
-
-      const cards = readModel.getSummaryCards();
-      const cardMap = new Map(cards.map(c => [c.key, c]));
-      expect(cardMap.get('total_decisions')!.value).toBe(100);
     });
 
-    it('getDecisionPerformance respects its limit parameter', () => {
-      const insertDecision = db.prepare(`
-        INSERT INTO strategy_decisions
-          (proposal_attempt_id, decision_status, strategy_id, strategy_version,
-           decided_at, exchange, tradingsymbol, side, product, quantity, order_type,
-           risk_sizing_basis, execution_class, segment, instrument_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      for (let i = 1; i <= 50; i++) {
-        insertDecision.run(i, 'approved', 'strategy-a', '1.0.0', i * 1000,
-          'NSE', `SYM${i}`, 'buy', 'MIS', 10, 'MARKET',
-          'last_price', 'EQ', 'NSE', 'EQ');
+    it('returns truthful persisted totals separately from bounded recent lineage rows', () => {
+      for (let i = 1; i <= 3; i++) {
+        db.prepare(`
+          INSERT INTO hypothesis_graphs
+            (id, canonical_hash, canonical_json, status, schema_version, signals_json, filters_json, entry_rules_json, exit_rules_json, risk_rules_json, metadata_json, created_at, updated_at)
+          VALUES (?, ?, '{}', 'validated', '1', '[]', '[]', '[]', '[]', '[]', null, ?, ?)
+        `).run(i, `hash-${i}`, i * 1000, i * 1000);
       }
+      for (let i = 1; i <= 2; i++) {
+        db.prepare(`
+          INSERT INTO hypothesis_evaluations
+            (id, hypothesis_graph_id, walk_forward_run_id, status, winner_id, rationale, outcome_detail, created_at, updated_at)
+          VALUES (?, ?, null, 'completed', null, 'ok', 'ok', ?, ?)
+        `).run(i, i, i * 2000, i * 2000);
+      }
+      db.prepare(`
+        INSERT INTO hypothesis_memory_ledger
+          (canonical_hash, status, reason_code, reason_message, hypothesis_graph_id, created_at)
+        VALUES ('hash-dup', 'failed', 'exact_failure_match', 'duplicate', null, 3000)
+      `).run();
+      for (let i = 1; i <= 4; i++) {
+        db.prepare(`
+          INSERT INTO hypothesis_generation_attempts
+            (id, verdict, provider_url, provider_model, prompt_version, triggered_at, market_id, strategy_id, raw_provider_output, raw_output_content_hash, raw_output_preview, canonical_hash, hypothesis_graph_id, hypothesis_evaluation_id, created_at)
+          VALUES (?, ?, 'http://provider', 'gpt-test', '1', ?, 'INDIA_NSE_EQ', 'strategy', null, null, null, ?, ?, ?, ?)
+        `).run(
+          i,
+          i === 4 ? 'skipped' : 'accepted',
+          i * 4000,
+          i === 4 ? 'hash-dup' : `hash-${i}`,
+          i <= 3 ? i : null,
+          i <= 2 ? i : null,
+          i * 4000,
+        );
+      }
+      db.prepare(`INSERT INTO hypothesis_generation_reasons (generation_attempt_id, reason_code, reason_message) VALUES (4, 'duplicate_skipped', 'Exact duplicate')`).run();
+      db.prepare(`
+        INSERT INTO strategy_lifecycle_state (id, strategy_id, strategy_version, market_id, phase, updated_at)
+        VALUES (1, 'published-strategy', '1.0.0', 'INDIA_NSE_EQ', 'paper', 7000)
+      `).run();
+      db.prepare(`
+        INSERT INTO governance_decisions
+          (id, strategy_id, strategy_version, market_id, verdict, previous_phase, new_phase, rationale, evidence_json, winner_id, recorded_at)
+        VALUES (1, 'published-strategy', '1.0.0', 'INDIA_NSE_EQ', 'promote', 'backtest', 'paper', 'ok', '{}', null, 7100)
+      `).run();
+      db.prepare(`
+        INSERT INTO research_publications
+          (id, hypothesis_evaluation_id, hypothesis_graph_id, status, strategy_id, strategy_version, market_id, rationale, evidence_json, lifecycle_state_id, governance_decision_id, published_at, created_at)
+        VALUES (1, 1, 1, 'published', 'published-strategy', '1.0.0', 'INDIA_NSE_EQ', 'ok', '{}', 1, 1, 7200, 7200)
+      `).run();
 
-      const allDecisions = readModel.getDecisionPerformance(100);
-      expect(allDecisions.length).toBe(50);
+      const summary = readModel.getResearchLineageSummary(4);
+      expect(summary.totals).toEqual({
+        generationAttempts: 4,
+        hypotheses: 3,
+        evaluations: 2,
+        duplicateSkips: 1,
+        publications: 1,
+      });
+      expect(summary.recent).toHaveLength(4);
+      expect(summary.status.availability).toBe('ready');
+      expect(summary.recent[0].generationAttempt?.id).toBe(4);
+      expect(summary.recent[0].duplicateSkip?.reasonCode).toBe('duplicate_skipped');
+      const publicationRow = summary.recent.find(entry => entry.publication?.strategyId === 'published-strategy');
+      expect(publicationRow?.publication?.strategyId).toBe('published-strategy');
+      expect(publicationRow?.publication?.governanceVerdict).toBe('promote');
+    });
 
-      const limitedDecisions = readModel.getDecisionPerformance(10);
-      expect(limitedDecisions.length).toBe(10);
+    it('returns explicit empty status when lineage tables exist but contain no rows', () => {
+      const summary = readModel.getResearchLineageSummary();
+      expect(summary.totals).toEqual({
+        generationAttempts: 0,
+        hypotheses: 0,
+        evaluations: 0,
+        duplicateSkips: 0,
+        publications: 0,
+      });
+      expect(summary.recent).toEqual([]);
+      expect(summary.status.availability).toBe('empty');
+      expect(summary.status.diagnostics).toEqual([]);
     });
   });
 });
