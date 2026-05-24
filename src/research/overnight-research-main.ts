@@ -22,7 +22,18 @@ import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-r
 import { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
 import { ResearchPublishBackService } from './publish-back-service.js';
 import { ResearchAuditService } from './research-audit-service.js';
-import { HypothesisEvaluationStatus, type ResearchLineageSnapshot } from '../types/runtime.js';
+import { HypothesisEvaluationStatus, type ResearchLineageSnapshot, type HypothesisGenerationConfig, type ProposalEngineConfig } from '../types/runtime.js';
+import { HypothesisGenerationService } from './hypothesis-generation-service.js';
+import { HypothesisValidator } from './hypothesis-validator.js';
+import { HypothesisResearchEvaluator } from './hypothesis-evaluator.js';
+import { ResearchArtifactWriter } from './artifact-writer.js';
+import { WinnerSelector } from '../replay/winner-selection.js';
+import { WalkForwardEvaluator } from '../replay/walk-forward-evaluator.js';
+import { FixtureHistoricalDataProvider } from '../replay/historical-data-provider.js';
+import { IndiaResearchBuilder } from '../strategy/india-research.js';
+import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
+import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
+import { loadConfig } from '../config/env.js';
 
 const RESEARCH_ARTIFACTS_ROOT = path.join('data', 'artifacts', 'overnight');
 
@@ -166,6 +177,226 @@ function findEvaluatedHypothesisIds(dbm: DatabaseManager): number[] {
 function findGeneratedHypothesisIds(dbm: DatabaseManager): number[] {
   const repo = new HypothesisRepository(dbm.db);
   return repo.getRecentHypotheses(200).map(hypothesis => hypothesis.id);
+}
+
+// ---------------------------------------------------------------------------
+// Real overnight phase helpers (non-simulate)
+// ---------------------------------------------------------------------------
+
+function buildProposalConfig(): ProposalEngineConfig | null {
+  try {
+    const config = loadConfig(process.env);
+    return config.proposalEngine;
+  } catch {
+    return null;
+  }
+}
+
+async function runRealGenerationPhase(
+  dbManager: DatabaseManager,
+  orchestrator: OvernightOrchestrator,
+  runId: number,
+  budget: ReturnType<typeof resolveBudgetPolicy>,
+): Promise<number[]> {
+  const proposalConfig = buildProposalConfig();
+  if (!proposalConfig) {
+    throw new Error('No proposal engine configured. Set TRADER_PROPOSAL_PROVIDER_URL and related env vars.');
+  }
+
+  const db = dbManager.db;
+  const hypothesisRepo = new HypothesisRepository(db);
+  const memoryRepo = new HypothesisMemoryRepository(db);
+  const generationRepo = new HypothesisGenerationRepository(db);
+  const strategyRunRepo = new StrategyRunRepository(db);
+  const validator = new HypothesisValidator({ memoryRepo, hypothesisRepo });
+
+  let evaluator: HypothesisResearchEvaluator | undefined;
+  {
+    const dataProvider = new FixtureHistoricalDataProvider({
+      candidates: [],
+      rangeStart: Date.now() - 30 * 86_400_000,
+      rangeEnd: Date.now(),
+    });
+    const walkForwardEval = new WalkForwardEvaluator({
+      db,
+      marketProfile: INDIA_NSE_EQ_MARKET,
+      dataProvider,
+    });
+    const artifactWriter = new ResearchArtifactWriter();
+    const winnerSelector = new WinnerSelector();
+    const walkForwardRepo = new WalkForwardRepository(db);
+    evaluator = new HypothesisResearchEvaluator({
+      db,
+      dataProvider,
+      marketProfile: INDIA_NSE_EQ_MARKET,
+      hypothesisRepo,
+      walkForwardRepo,
+      artifactWriter,
+      winnerSelector,
+      walkForwardEvaluator: walkForwardEval,
+    });
+  }
+
+  const indiaResearchBuilder = new IndiaResearchBuilder();
+
+  const generationService = new HypothesisGenerationService({
+    db,
+    config: proposalConfig,
+    hypothesisRepo,
+    generationRepo,
+    memoryRepo,
+    validator,
+    evaluator,
+    strategyRunRepo,
+    indiaResearchBuilder,
+  });
+
+  const genConfig: HypothesisGenerationConfig = {
+    instruction: 'Generate one novel trading hypothesis for NSE India equities using mean-reversion or trend-following signals. Focus on liquid stocks (volume > 500k). Combine entry and exit rules with an ATR-based risk stop. Return a valid hypothesis graph JSON object.',
+    skipEvaluation: true,
+    maxContextCandidates: 5,
+    marketId: 'INDIA_NSE_EQ',
+  };
+
+  const generatedIds: number[] = [];
+  const maxGen = Number.isFinite(budget.maxAcceptedCandidates) ? budget.maxAcceptedCandidates : 5;
+
+  orchestrator.markPhase(runId, 'generate');
+
+  for (let i = 0; i < maxGen; i++) {
+    const result = await generationService.generate(genConfig);
+    if (result.kind === 'accepted') {
+      generatedIds.push(result.hypothesis.id);
+      orchestrator.saveCheckpoint(runId, {
+        phase: 'generate',
+        completedItems: generatedIds.length,
+        totalItems: maxGen,
+        lastProcessedId: String(result.hypothesis.id),
+      });
+    } else if (result.kind === 'rejected' || result.kind === 'skipped') {
+      // Budget exhausted or duplicate — stop generation
+      break;
+    } else if (result.kind === 'provider_error') {
+      throw new Error(`Provider error during generation: ${result.error}`);
+    }
+  }
+
+  orchestrator.recordPhaseResult(runId, {
+    phase: 'generate',
+    recordedAt: Date.now(),
+    detail: `Real overnight generation completed. ${generatedIds.length} hypotheses accepted.`,
+  });
+  orchestrator.markPhaseCompleted(runId, 'generate');
+
+  return generatedIds;
+}
+
+async function runRealEvaluatePhase(
+  dbManager: DatabaseManager,
+  orchestrator: OvernightOrchestrator,
+  runId: number,
+  hypothesisIds: number[],
+): Promise<number[]> {
+  const db = dbManager.db;
+  const hypothesisRepo = new HypothesisRepository(db);
+  const walkForwardRepo = new WalkForwardRepository(db);
+
+  const dataProvider = new FixtureHistoricalDataProvider({
+    candidates: [],
+    rangeStart: Date.now() - 30 * 86_400_000,
+    rangeEnd: Date.now(),
+  });
+  const walkForwardEval = new WalkForwardEvaluator({
+    db,
+    marketProfile: INDIA_NSE_EQ_MARKET,
+    dataProvider,
+  });
+  const artifactWriter = new ResearchArtifactWriter();
+  const winnerSelector = new WinnerSelector();
+
+  const evaluator = new HypothesisResearchEvaluator({
+    db,
+    dataProvider,
+    marketProfile: INDIA_NSE_EQ_MARKET,
+    hypothesisRepo,
+    walkForwardRepo,
+    artifactWriter,
+    winnerSelector,
+    walkForwardEvaluator: walkForwardEval,
+  });
+
+  orchestrator.markPhase(runId, 'evaluate');
+
+  const completedEvaluationIds: number[] = [];
+  for (const hypothesisId of hypothesisIds) {
+    const hypothesis = hypothesisRepo.getHypothesisById(hypothesisId);
+    if (!hypothesis) continue;
+
+    const evalResult = await evaluator.evaluate(hypothesis.id);
+    if (evalResult.evaluation?.status === HypothesisEvaluationStatus.Completed) {
+      completedEvaluationIds.push(evalResult.evaluation.id);
+    }
+
+    orchestrator.saveCheckpoint(runId, {
+      phase: 'evaluate',
+      completedItems: completedEvaluationIds.length,
+      totalItems: hypothesisIds.length,
+      lastProcessedId: String(hypothesisId),
+    });
+  }
+
+  orchestrator.recordPhaseResult(runId, {
+    phase: 'evaluate',
+    recordedAt: Date.now(),
+    detail: `Real overnight evaluation completed. ${completedEvaluationIds.length}/${hypothesisIds.length} hypotheses evaluated successfully.`,
+  });
+  orchestrator.markPhaseCompleted(runId, 'evaluate');
+
+  return completedEvaluationIds;
+}
+
+function runRealPublishPhase(
+  dbManager: DatabaseManager,
+  orchestrator: OvernightOrchestrator,
+  runId: number,
+): { evaluationId: number | null; verdict: 'publish' | 'hold' } {
+  const db = dbManager.db;
+  const hypothesisRepo = new HypothesisRepository(db);
+
+  const completedEvaluations = hypothesisRepo
+    .getRecentEvaluations(200)
+    .filter(e => e.status === HypothesisEvaluationStatus.Completed);
+
+  if (completedEvaluations.length === 0) {
+    return { evaluationId: null, verdict: 'hold' };
+  }
+
+  // Pick the most recent completed evaluation
+  const bestEvaluation = completedEvaluations[0];
+
+  orchestrator.markPhase(runId, 'publish');
+
+  const service = new ResearchPublishBackService({ db, hypothesisRepo });
+  const result = service.publish(bestEvaluation.id, { dryRun: false });
+
+  orchestrator.recordPublication(runId, {
+    verdict: result.verdict,
+    publicationId: result.publication?.id ?? null,
+    lifecycleStateId: result.lifecycleStateId,
+    governanceDecisionId: result.governanceDecisionId,
+    rationale: result.rationale,
+    recordedAt: Date.now(),
+  });
+  orchestrator.recordPhaseResult(runId, {
+    phase: 'publish',
+    recordedAt: Date.now(),
+    evaluationId: bestEvaluation.id,
+    evaluationStatus: HypothesisEvaluationStatus.Completed,
+    detail: result.rationale,
+  });
+  orchestrator.markPhaseCompleted(runId, 'publish', result.rationale);
+
+  return { evaluationId: bestEvaluation.id, verdict: result.verdict };
 }
 
 function simulatePublishPhase(dbm: DatabaseManager) {
@@ -378,6 +609,50 @@ async function main(): Promise<void> {
           run = orchestrator.getRun(run.id) ?? run;
         } else {
           orchestrator.markCompleted(run.id);
+          run = orchestrator.getRun(run.id) ?? run;
+        }
+      }
+    } else if (result.accepted && !options.simulatePhases) {
+      // Real overnight research pipeline: generate → evaluate → publish
+      run = orchestrator.getRun(run.id) ?? run;
+      let phase = orchestrator.getNextPhase(run);
+
+      if (phase === 'generate') {
+        const generatedIds = await runRealGenerationPhase(dbManager, orchestrator, run.id, resolvedBudget);
+        if (shouldStopAfter('generate', options.stopAfterPhase)) {
+          run = orchestrator.getRun(run.id) ?? run;
+          orchestrator.markFailed(run.id, `Intentional interruption after generate phase (${generatedIds.length} hypotheses generated).`);
+          run = orchestrator.getRun(run.id) ?? run;
+        } else {
+          run = orchestrator.getRun(run.id) ?? run;
+          phase = orchestrator.getNextPhase(run);
+        }
+      }
+
+      if (run.status === 'running' && phase === 'evaluate') {
+        const generatedIds = findGeneratedHypothesisIds(dbManager);
+        const evaluatedIds = await runRealEvaluatePhase(dbManager, orchestrator, run.id, generatedIds);
+        if (shouldStopAfter('evaluate', options.stopAfterPhase)) {
+          run = orchestrator.getRun(run.id) ?? run;
+          orchestrator.markFailed(run.id, `Intentional interruption after evaluate phase (${evaluatedIds.length} evaluations completed).`);
+          run = orchestrator.getRun(run.id) ?? run;
+        } else {
+          run = orchestrator.getRun(run.id) ?? run;
+          phase = orchestrator.getNextPhase(run);
+        }
+      }
+
+      if (run.status === 'running' && phase === 'publish') {
+        const publication = runRealPublishPhase(dbManager, orchestrator, run.id);
+        if (shouldStopAfter('publish', options.stopAfterPhase)) {
+          run = orchestrator.getRun(run.id) ?? run;
+          orchestrator.markFailed(run.id, 'Intentional interruption after publish phase for resume verification.');
+          run = orchestrator.getRun(run.id) ?? run;
+        } else if (publication.verdict === 'publish') {
+          orchestrator.markCompleted(run.id);
+          run = orchestrator.getRun(run.id) ?? run;
+        } else {
+          orchestrator.markFailed(run.id, 'Publish phase returned hold — no strategy promoted.');
           run = orchestrator.getRun(run.id) ?? run;
         }
       }
