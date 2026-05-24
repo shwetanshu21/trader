@@ -509,6 +509,8 @@ async function main(): Promise<void> {
     maxLlmCalls: options.maxLlmCalls ?? undefined,
   });
 
+  let currentRunId: number | null = null;
+
   try {
     const result = orchestrator.tryStartOrResume({
       label: options.label,
@@ -518,6 +520,7 @@ async function main(): Promise<void> {
     });
 
     let run = orchestrator.getRun(result.run.id) ?? result.run;
+    currentRunId = run.id;
     const nextPhaseAtStart = result.accepted ? orchestrator.getNextPhase(run) : null;
     let simulatedSkippedGenerationReasons: string[] = [];
     let simulatedPrunedEvaluationCount = 0;
@@ -799,6 +802,18 @@ async function main(): Promise<void> {
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error(JSON.stringify({ status: 'error', error: errorMessage, timestamp: new Date().toISOString() }, null, 2));
+    // Mark the run as failed so duplicate detection does not leave stale
+    // "running" rows that block future triggers.
+    try {
+      if (currentRunId != null) {
+        const failedRun = orchestrator.getRun(currentRunId);
+        if (failedRun && failedRun.status === 'running') {
+          orchestrator.markFailed(failedRun.id, errorMessage);
+        }
+      }
+    } catch {
+      // Best-effort — do not let failure-marking crash the exit path.
+    }
     process.exit(1);
   } finally {
     dbManager.close();
