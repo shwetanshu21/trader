@@ -288,6 +288,50 @@ describe('HypothesisGenerationService', () => {
       }
     });
 
+    it('should fall back to the configured OpenAI-compatible fallback model after primary failure', async () => {
+      const ctx = createContext({
+        config: {
+          ...TEST_OPENAI_CONFIG,
+          providerModel: 'glm-5.1',
+          fallbackProviderModel: 'mimo-v2.5-pro',
+        },
+      });
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          text: vi.fn().mockResolvedValue('{"error":{"message":"primary failed"}}'),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          text: vi.fn().mockResolvedValue(JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify(validGraph()),
+                },
+              },
+            ],
+          })),
+        } as unknown as Response);
+      globalThis.fetch = fetchMock;
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const firstPayload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}')) as { model?: string };
+      const secondPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body ?? '{}')) as { model?: string };
+      expect(firstPayload.model).toBe('glm-5.1');
+      expect(secondPayload.model).toBe('mimo-v2.5-pro');
+    });
+
     // ── Valid JSON but not HypothesisGraph shape ──
     it('should return rejected with NonGraphResponse when JSON is not a hypothesis graph', async () => {
       const ctx = createContext();

@@ -599,9 +599,30 @@ export class HypothesisGenerationService {
    * Extracts the assistant content text from the response.
    */
   private async _sendOpenAiRequest(payload: Record<string, unknown>): Promise<string> {
+    const models = [
+      this._config.providerModel ?? 'default',
+      this._config.fallbackProviderModel,
+    ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+
+    const errors: string[] = [];
+    for (const model of models) {
+      try {
+        return await this._sendOpenAiRequestWithModel(payload, model);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        errors.push(`${model}: ${errorMessage}`);
+      }
+    }
+
+    throw new Error(errors.length > 0
+      ? `All configured OpenAI-compatible models failed. ${errors.join(' | ')}`
+      : 'No OpenAI-compatible model configured.');
+  }
+
+  private async _sendOpenAiRequestWithModel(payload: Record<string, unknown>, model: string): Promise<string> {
     // Build an OpenAI-compatible chat completions payload
     const openAiPayload: Record<string, unknown> = {
-      model: this._config.providerModel ?? 'default',
+      model,
       response_format: { type: 'json_object' },
       messages: [
         {

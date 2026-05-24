@@ -346,6 +346,7 @@ function parseProposalEngineConfig(
   }
 
   const providerModel = env.TRADER_PROPOSAL_PROVIDER_MODEL?.trim() || undefined;
+  const fallbackProviderModel = env.TRADER_PROPOSAL_FALLBACK_PROVIDER_MODEL?.trim() || undefined;
   if (providerModeRaw === 'openai-compatible' && !providerModel) {
     errors.push({
       field: 'TRADER_PROPOSAL_PROVIDER_MODEL',
@@ -386,6 +387,7 @@ function parseProposalEngineConfig(
     providerMode: providerModeRaw,
     providerUrl,
     providerModel,
+    fallbackProviderModel,
     timeoutMs,
     maxProposalsPerTick,
     apiKey,
