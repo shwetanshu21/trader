@@ -53,6 +53,7 @@ export class OvernightTriggerSupervisor implements TickWork {
   private _duplicateSkipCount = 0;
   private _overlapSkipCount = 0;
   private _launchErrorCount = 0;
+  private readonly _launchedWindowKeys = new Set<string>();
 
   constructor(options: OvernightTriggerSupervisorOptions) {
     this._orchestrator = options.orchestrator;
@@ -70,6 +71,12 @@ export class OvernightTriggerSupervisor implements TickWork {
     }
 
     const window = this._resolveWindow(now);
+
+    if (this._launchedWindowKeys.has(window.key)) {
+      this._duplicateSkipCount++;
+      return;
+    }
+
     const result = this._orchestrator.tryTriggerWindow({
       label: window.label,
       workspacePath: window.workspacePath,
@@ -88,6 +95,7 @@ export class OvernightTriggerSupervisor implements TickWork {
 
     this._inFlight = true;
     this._lastLaunchedRunId = result.run.id;
+    this._launchedWindowKeys.add(window.key);
 
     try {
       await this._launcher.launch({

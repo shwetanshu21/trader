@@ -136,6 +136,38 @@ describe('OvernightTriggerSupervisor', () => {
     dbm.close();
   });
 
+  it('does not relaunch the same window key after a failed launch within the same supervisor lifecycle', async () => {
+    const { dbm, repo, orchestrator } = createFixtures();
+    const launches: number[] = [];
+
+    const supervisor = new OvernightTriggerSupervisor({
+      orchestrator,
+      researchDbPath: '/tmp/research.db',
+      resolveWindow: () => ({
+        key: '2025-01-06',
+        label: 'overnight-auto-2025-01-06',
+        workspacePath: '/tmp/ws-2025-01-06',
+      }),
+      launcher: {
+        async launch(input) {
+          launches.push(input.runId);
+          orchestrator.markFailed(input.runId, 'provider timeout');
+        },
+      },
+    });
+
+    await supervisor.doWork(CLOSED_TIME, {} as never);
+    await supervisor.doWork(LATER_CLOSED_TIME, {} as never);
+
+    expect(launches).toHaveLength(1);
+    expect(repo.countRuns()).toBe(1);
+    const run = repo.getLatestRun();
+    expect(run?.status).toBe(OvernightRunStatus.Failed);
+    expect(supervisor.getDiagnostics().duplicateSkipCount).toBe(1);
+
+    dbm.close();
+  });
+
   it('marks the run failed when autonomous launch bootstrap throws', async () => {
     const { dbm, repo, orchestrator } = createFixtures();
 
