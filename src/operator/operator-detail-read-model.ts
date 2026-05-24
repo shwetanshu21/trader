@@ -129,6 +129,26 @@ interface StrategyWalkForwardRunRow {
   completed_at: number | null;
 }
 
+interface StrategyPublicationRow {
+  publication_id: number;
+  publication_status: string;
+  strategy_id: string;
+  strategy_version: string;
+  market_id: string;
+  rationale: string;
+  evidence_json: string;
+  lifecycle_phase: string | null;
+  governance_verdict: string | null;
+  published_at: number | null;
+  created_at: number;
+  hypothesis_graph_id: number;
+  canonical_hash: string;
+  hypothesis_evaluation_id: number;
+  evaluation_status: string;
+  walk_forward_run_id: number | null;
+  winner_id: number | null;
+}
+
 interface CountRow {
   cnt: number;
 }
@@ -329,6 +349,7 @@ export class OperatorDetailReadModel {
       `).all(strategyId, strategyVersion) as GovernanceDecisionDbRow[];
 
       const recentDecisions = this._getRecentDecisionPerformance(strategyId, strategyVersion);
+      const publishedResearchProvenance = this._getStrategyPublicationProvenance(strategyId, strategyVersion, diagnostics);
       const promotionHistory: OperatorPromotionHistory[] = governanceRows
         .filter(row => row.verdict === 'promote')
         .map(row => ({
@@ -398,6 +419,7 @@ export class OperatorDetailReadModel {
         governanceHistory: this._countRows('SELECT COUNT(*) AS cnt FROM governance_decisions') > 0,
         promotionHistory: this._countRows("SELECT COUNT(*) AS cnt FROM governance_decisions WHERE verdict = 'promote'") > 0,
         walkForwardRuns: this._countRows('SELECT COUNT(*) AS cnt FROM walk_forward_runs') > 0,
+        researchPublications: this._countRows('SELECT COUNT(*) AS cnt FROM research_publications') > 0,
       };
 
       return {
@@ -414,6 +436,7 @@ export class OperatorDetailReadModel {
           unrealizedPnl: performanceRow.unrealized_pnl,
         },
         recentDecisions,
+        publishedResearchProvenance,
         hostEvidencePresence,
         currentStates: currentStates.map<OperatorLifecycleState>(row => ({
           strategyId: row.strategy_id,
@@ -876,6 +899,66 @@ export class OperatorDetailReadModel {
       realizedPnl: row.ea_status ? row.pe_realized_pnl : null,
       provenance: this._provenance('historical', 'strategy_decisions+execution_attempts+position_events'),
     }));
+  }
+
+  private _getStrategyPublicationProvenance(
+    strategyId: string,
+    strategyVersion: string,
+    diagnostics: string[],
+  ): OperatorStrategyDetail['publishedResearchProvenance'] {
+    const row = this._db.prepare(`
+      SELECT rp.id AS publication_id,
+             rp.status AS publication_status,
+             rp.strategy_id,
+             rp.strategy_version,
+             rp.market_id,
+             rp.rationale,
+             rp.evidence_json,
+             sls.phase AS lifecycle_phase,
+             gd.verdict AS governance_verdict,
+             rp.published_at,
+             rp.created_at,
+             hg.id AS hypothesis_graph_id,
+             hg.canonical_hash,
+             he.id AS hypothesis_evaluation_id,
+             he.status AS evaluation_status,
+             he.walk_forward_run_id,
+             he.winner_id
+      FROM research_publications rp
+      INNER JOIN hypothesis_evaluations he ON he.id = rp.hypothesis_evaluation_id
+      INNER JOIN hypothesis_graphs hg ON hg.id = he.hypothesis_graph_id
+      LEFT JOIN strategy_lifecycle_state sls ON sls.id = rp.lifecycle_state_id
+      LEFT JOIN governance_decisions gd ON gd.id = rp.governance_decision_id
+      WHERE rp.strategy_id = ?
+        AND rp.strategy_version = ?
+      ORDER BY COALESCE(rp.published_at, rp.created_at) DESC, rp.id DESC
+      LIMIT 1
+    `).get(strategyId, strategyVersion) as StrategyPublicationRow | undefined;
+
+    if (!row) return null;
+
+    return {
+      publicationId: row.publication_id,
+      publicationStatus: row.publication_status,
+      hypothesisGraphId: row.hypothesis_graph_id,
+      canonicalHash: row.canonical_hash,
+      hypothesisEvaluationId: row.hypothesis_evaluation_id,
+      evaluationStatus: row.evaluation_status,
+      walkForwardRunId: row.walk_forward_run_id,
+      winnerId: row.winner_id,
+      marketId: row.market_id,
+      lifecyclePhase: row.lifecycle_phase,
+      governanceVerdict: row.governance_verdict,
+      rationale: row.rationale,
+      evidence: this._safeParseJson<Record<string, unknown>>(
+        row.evidence_json,
+        `research_publications.id=${row.publication_id}.evidence_json`,
+        diagnostics,
+      ),
+      publishedAt: this._isoNullable(row.published_at),
+      createdAt: this._iso(row.created_at),
+      provenance: this._provenance('historical', 'research_publications+hypothesis_evaluations+hypothesis_graphs+strategy_lifecycle_state+governance_decisions'),
+    };
   }
 
   private _countRows(sql: string, ...params: Array<string | number>): number {

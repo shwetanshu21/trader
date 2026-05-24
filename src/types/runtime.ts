@@ -3778,12 +3778,48 @@ export interface OperatorStrategyDetail {
   };
   /** Recent per-decision execution outcomes for this strategy version. */
   recentDecisions: OperatorDecisionPerformance[];
+  /** Published-research provenance for this strategy, or null when no publication exists. */
+  publishedResearchProvenance: {
+    /** Publication row ID. */
+    publicationId: number;
+    /** Publication status. */
+    publicationStatus: string;
+    /** Originating hypothesis row ID. */
+    hypothesisGraphId: number;
+    /** Canonical hypothesis hash. */
+    canonicalHash: string;
+    /** Linked evaluation row ID. */
+    hypothesisEvaluationId: number;
+    /** Evaluation status. */
+    evaluationStatus: string;
+    /** Linked walk-forward run row ID, or null. */
+    walkForwardRunId: number | null;
+    /** Linked winner row ID, or null. */
+    winnerId: number | null;
+    /** Published market profile ID. */
+    marketId: string;
+    /** Linked lifecycle phase, or null when absent. */
+    lifecyclePhase: string | null;
+    /** Linked governance verdict, or null when absent. */
+    governanceVerdict: string | null;
+    /** Human-readable publication rationale. */
+    rationale: string;
+    /** Parsed publication evidence JSON, or null when malformed/absent. */
+    evidence: Record<string, unknown> | null;
+    /** ISO-8601 publication timestamp, or null when not finalized. */
+    publishedAt: string | null;
+    /** ISO-8601 row creation timestamp. */
+    createdAt: string;
+    /** Provenance metadata for this publication block. */
+    provenance: OperatorProvenance;
+  } | null;
   /** Host-wide evidence presence flags used to explain empty states truthfully. */
   hostEvidencePresence: {
     lifecycleStates: boolean;
     governanceHistory: boolean;
     promotionHistory: boolean;
     walkForwardRuns: boolean;
+    researchPublications: boolean;
   };
   /** Current lifecycle states across all matching markets. */
   currentStates: OperatorLifecycleState[];

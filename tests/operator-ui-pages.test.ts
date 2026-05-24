@@ -265,11 +265,30 @@ function sampleStrategyDetail(): OperatorStrategyDetail {
     strategyVersion: '1.0.0',
     performance: { totalReturnPct: 12.5, sharpeRatio: 1.8, maxDrawdownPct: 15, tradeCount: 24, winRate: 0.62, profitFactor: 2.1, realizedPnl: 15420.5, unrealizedPnl: 3200 },
     recentDecisions: sampleDecisionPerformance(),
+    publishedResearchProvenance: {
+      publicationId: 5,
+      publicationStatus: 'published',
+      hypothesisGraphId: 2,
+      canonicalHash: 'abc123<script>',
+      hypothesisEvaluationId: 3,
+      evaluationStatus: 'completed',
+      walkForwardRunId: 42,
+      winnerId: 4,
+      marketId: 'INDIA_NSE_EQ',
+      lifecyclePhase: 'paper',
+      governanceVerdict: 'promote',
+      rationale: 'Published after review <b>approved</b>.',
+      evidence: { actualMergedScore: 0.88 },
+      publishedAt: '2025-01-11T09:30:00.000Z',
+      createdAt: '2025-01-11T09:30:00.000Z',
+      provenance: testProvenance,
+    },
     hostEvidencePresence: {
       lifecycleStates: true,
       governanceHistory: true,
       promotionHistory: true,
       walkForwardRuns: true,
+      researchPublications: true,
     },
     currentStates: sampleLifecycleStates(),
     governanceHistory: [{ id: 8, marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Escaped <b>safe</b>.', winnerId: null, evidence: { why: 'thresholds' }, recordedAt: '2025-01-11T09:20:00.000Z' }],
@@ -438,6 +457,9 @@ describe('Strategy detail page', () => {
     const html = renderStrategyDetailPage(sampleStrategyDetail());
     expect(html).toContain('/decision?id=7');
     expect(html).toContain('/backtest?runId=42');
+    expect(html).toContain('Published Research Provenance');
+    expect(html).toContain('abc123&lt;script&gt;');
+    expect(html).toContain('Published after review &lt;b&gt;approved&lt;/b&gt;.');
     expect(html).toContain('No candidate cleared thresholds.');
     expect(html).toContain('No winner recorded');
     expect(html).toContain('Escaped &lt;b&gt;safe&lt;/b&gt;.');
@@ -449,11 +471,13 @@ describe('Strategy detail page', () => {
     detail.governanceHistory = [];
     detail.promotionHistory = [];
     detail.walkForwardRuns = [];
+    detail.publishedResearchProvenance = null;
     detail.hostEvidencePresence = {
       lifecycleStates: false,
       governanceHistory: true,
       promotionHistory: false,
       walkForwardRuns: true,
+      researchPublications: true,
     };
 
     const html = renderStrategyDetailPage(detail);
@@ -461,6 +485,7 @@ describe('Strategy detail page', () => {
     expect(html).toContain('Governance evidence exists on this host, but none has been persisted for this strategy version.');
     expect(html).toContain('No promotion history has been produced on this host yet.');
     expect(html).toContain('Walk-forward evidence exists on this host, but no persisted run is linked to this strategy version.');
+    expect(html).toContain('Research publication evidence exists on this host, but no published-research provenance is linked to this strategy version.');
   });
 });
 

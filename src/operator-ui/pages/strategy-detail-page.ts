@@ -46,6 +46,9 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
   const walkForwardEmptyMessage = detail.hostEvidencePresence.walkForwardRuns
     ? 'Walk-forward evidence exists on this host, but no persisted run is linked to this strategy version.'
     : 'No walk-forward runs have been produced on this host yet.';
+  const publicationEmptyMessage = detail.hostEvidencePresence.researchPublications
+    ? 'Research publication evidence exists on this host, but no published-research provenance is linked to this strategy version.'
+    : 'No research publication evidence has been produced on this host yet.';
 
   const body = [
     renderSection('Strategy Summary', renderSummaryGrid([
@@ -64,6 +67,15 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
       { label: 'Win Rate', value: escapeHtml(formatPercent(detail.performance.winRate)) },
       { label: 'Profit Factor', value: escapeHtml(detail.performance.profitFactor === null ? '—' : formatNumber(detail.performance.profitFactor, 2)) },
     ]), 'ok', null, null, 'Historical strategy-quality metrics scoped to walk-forward and governance evidence'),
+
+    renderSection(
+      'Published Research Provenance',
+      renderPublishedResearchProvenance(detail, publicationEmptyMessage),
+      detail.publishedResearchProvenance ? 'ok' : 'stale',
+      null,
+      null,
+      'Research origin and publication linkage',
+    ),
 
     renderSection(
       'Current Lifecycle',
@@ -166,6 +178,44 @@ function renderDecisionTable(rows: OperatorDecisionPerformance[]): string {
       <td>${escapeHtml(formatTimestamp(row.decidedAt))}</td>
     </tr>`).join('')}</tbody>
   </table>`;
+}
+
+function renderPublishedResearchProvenance(detail: OperatorStrategyDetail, emptyMessage: string): string {
+  const provenance = detail.publishedResearchProvenance;
+  if (!provenance) {
+    return renderEmptyState(emptyMessage);
+  }
+
+  return `${renderSummaryGrid([
+    { label: 'Publication', value: `<code>#${provenance.publicationId}</code>` },
+    { label: 'Status', value: `<span class="${statusClass(provenance.publicationStatus)}">${escapeHtml(provenance.publicationStatus)}</span>` },
+    { label: 'Canonical Hash', value: `<code>${escapeHtml(provenance.canonicalHash)}</code>` },
+    { label: 'Hypothesis', value: `<code>HG#${provenance.hypothesisGraphId}</code>` },
+    { label: 'Evaluation', value: `<code>HE#${provenance.hypothesisEvaluationId}</code> · <span class="${statusClass(provenance.evaluationStatus)}">${escapeHtml(provenance.evaluationStatus)}</span>` },
+    { label: 'Walk-Forward Run', value: provenance.walkForwardRunId === null ? '—' : renderLink(backtestDetailHref(provenance.walkForwardRunId), `WF#${provenance.walkForwardRunId}`) },
+    { label: 'Winner', value: provenance.winnerId === null ? '—' : `<code>W#${provenance.winnerId}</code>` },
+    { label: 'Market', value: `<code>${escapeHtml(provenance.marketId)}</code>` },
+    { label: 'Lifecycle Phase', value: provenance.lifecyclePhase === null ? '—' : `<span class="${statusClass(provenance.lifecyclePhase)}">${escapeHtml(provenance.lifecyclePhase)}</span>` },
+    { label: 'Governance Verdict', value: provenance.governanceVerdict === null ? '—' : `<span class="${statusClass(provenance.governanceVerdict)}">${escapeHtml(provenance.governanceVerdict)}</span>` },
+    { label: 'Published At', value: escapeHtml(formatTimestamp(provenance.publishedAt)) },
+    { label: 'Linked Strategy', value: renderLink(strategyDetailHref(detail.strategyId, detail.strategyVersion), `${escapeHtml(detail.strategyId)}@${escapeHtml(detail.strategyVersion)}`) },
+  ])}
+  <div style="margin-top:0.9rem;">
+    <h3>Publication Rationale</h3>
+    <p>${escapeHtml(provenance.rationale || 'No publication rationale was persisted.')}</p>
+  </div>
+  <div style="margin-top:0.9rem;">
+    <h3>Publication Evidence</h3>
+    ${provenance.evidence ? `<pre>${formatJson(provenance.evidence)}</pre>` : renderEmptyState('No publication evidence JSON was persisted for this strategy publication.')}
+  </div>
+  <div style="margin-top:0.9rem;">
+    <h3>Provenance</h3>
+    ${renderKeyValueGrid([
+      { key: 'Source', value: renderProvenanceBadge(provenance.provenance) || '—' },
+      { key: 'Source Label', value: escapeHtml(provenance.provenance.sourceLabel ?? '—') },
+      { key: 'Created At', value: escapeHtml(formatTimestamp(provenance.createdAt)) },
+    ])}
+  </div>`;
 }
 
 function renderGovernanceTable(rows: OperatorGovernanceDecisionDetail[], emptyMessage: string): string {

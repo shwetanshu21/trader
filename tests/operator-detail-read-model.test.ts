@@ -566,7 +566,7 @@ describe('OperatorDetailReadModel', () => {
       metricsJson: null,
       createdAt: NOW + 102,
     });
-    ctx.walkForward.insertWinner({
+    const winnerEq = ctx.walkForward.insertWinner({
       runId: runEq.id,
       result: WalkForwardSelectionResult.Selected,
       selectedTrialId: eqTrial.id,
@@ -601,6 +601,22 @@ describe('OperatorDetailReadModel', () => {
       selectedAt: NOW + 141,
     });
 
+    ctx.db.prepare(`
+      INSERT INTO hypothesis_graphs
+        (id, canonical_hash, canonical_json, status, schema_version, signals_json, filters_json, entry_rules_json, exit_rules_json, risk_rules_json, metadata_json, created_at, updated_at)
+      VALUES (11, 'hash-momentum-core', '{}', 'validated', '1', '[]', '[]', '[]', '[]', '[]', null, ?, ?)
+    `).run(NOW + 150, NOW + 150);
+    ctx.db.prepare(`
+      INSERT INTO hypothesis_evaluations
+        (id, hypothesis_graph_id, walk_forward_run_id, status, winner_id, rationale, outcome_detail, created_at, updated_at)
+      VALUES (12, 11, ?, 'completed', ?, 'Promotion-ready result.', 'Winner selected.', ?, ?)
+    `).run(runEq.id, winnerEq.id, NOW + 151, NOW + 151);
+    ctx.db.prepare(`
+      INSERT INTO research_publications
+        (id, hypothesis_evaluation_id, hypothesis_graph_id, status, strategy_id, strategy_version, market_id, rationale, evidence_json, lifecycle_state_id, governance_decision_id, published_at, created_at)
+      VALUES (13, 12, 11, 'published', 'momentum-core', '2.1.0', 'INDIA_NSE_EQ', 'Published from research pipeline.', '{"actualMergedScore":0.88}', 1, 1, ?, ?)
+    `).run(NOW + 152, NOW + 152);
+
     const detail = ctx.readModel.getStrategyDetail('momentum-core', '2.1.0');
     expect(detail).not.toBeNull();
     expect(detail!.currentStates.map(state => state.marketId)).toEqual(['INDIA_NSE_EQ', 'INDIA_NSE_FO']);
@@ -610,6 +626,14 @@ describe('OperatorDetailReadModel', () => {
     expect(detail!.walkForwardRuns.some(run => run.marketId === 'INDIA_NSE_EQ' && run.result === WalkForwardSelectionResult.Selected)).toBe(true);
     expect(detail!.walkForwardRuns.some(run => run.marketId === 'INDIA_NSE_FO' && run.result === WalkForwardSelectionResult.NoWinner)).toBe(true);
     expect(detail!.recentDecisions.map(row => row.decisionId)).toEqual([decisionB.id, decisionA.id]);
+    expect(detail!.publishedResearchProvenance).not.toBeNull();
+    expect(detail!.publishedResearchProvenance?.publicationId).toBe(13);
+    expect(detail!.publishedResearchProvenance?.canonicalHash).toBe('hash-momentum-core');
+    expect(detail!.publishedResearchProvenance?.walkForwardRunId).toBe(runEq.id);
+    expect(detail!.publishedResearchProvenance?.winnerId).toBe(winnerEq.id);
+    expect(detail!.publishedResearchProvenance?.governanceVerdict).toBe('promote');
+    expect(detail!.publishedResearchProvenance?.evidence).toEqual({ actualMergedScore: 0.88 });
+    expect(detail!.hostEvidencePresence.researchPublications).toBe(true);
     expect(detail!.diagnostics.some(item => item.includes('Malformed JSON ignored'))).toBe(true);
   });
 
