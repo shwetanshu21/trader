@@ -28,6 +28,17 @@ export interface TryStartResult {
   resumed: boolean;
 }
 
+export interface TriggerWindowResult {
+  run: OvernightRunRow;
+  accepted: boolean;
+  refusalReason: string | null;
+  marketPhase: MarketPhase;
+  marketPhaseName: string;
+  resumed: boolean;
+  duplicate: boolean;
+  duplicateReason: string | null;
+}
+
 export class OvernightOrchestrator {
   private readonly _repo: OvernightRunRepo;
   private readonly _clock: MarketClock;
@@ -39,6 +50,55 @@ export class OvernightOrchestrator {
 
   tryStart(label: string, workspacePath: string, now?: Date, researchDbPath?: string): TryStartResult {
     return this.tryStartOrResume({ label, workspacePath, now, researchDbPath });
+  }
+
+  tryTriggerWindow(options: {
+    label: string;
+    workspacePath: string;
+    now?: Date;
+    researchDbPath?: string;
+    resumeRunId?: number;
+  }): TriggerWindowResult {
+    const nowDate = options.now ?? new Date();
+    const marketPhase = this._clock.getPhase(nowDate);
+    const marketPhaseName = this._summarizePhase(marketPhase);
+
+    if (!this._clock.isClosed(nowDate)) {
+      const refused = this.tryStartOrResume({ ...options, now: nowDate });
+      return {
+        ...refused,
+        duplicate: false,
+        duplicateReason: null,
+      };
+    }
+
+    const latest = this._repo.getLatestRun();
+    if (
+      latest
+      && latest.workspacePath === options.workspacePath
+      && (options.researchDbPath == null || latest.researchDbPath === (options.researchDbPath ?? ''))
+      && (latest.status === OvernightRunStatus.Running || latest.status === OvernightRunStatus.Completed)
+    ) {
+      return {
+        run: latest,
+        accepted: true,
+        refusalReason: null,
+        marketPhase,
+        marketPhaseName,
+        resumed: false,
+        duplicate: true,
+        duplicateReason: latest.status === OvernightRunStatus.Completed
+          ? 'Autonomous overnight trigger already completed for this workspace window.'
+          : 'Autonomous overnight trigger already running for this workspace window.',
+      };
+    }
+
+    const startResult = this.tryStartOrResume({ ...options, now: nowDate });
+    return {
+      ...startResult,
+      duplicate: false,
+      duplicateReason: null,
+    };
   }
 
   tryStartOrResume(options: {

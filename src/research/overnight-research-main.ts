@@ -145,7 +145,7 @@ function simulateEvaluatePhase(
 function findCompletedEvaluationIds(dbm: DatabaseManager): number[] {
   const repo = new HypothesisRepository(dbm.db);
   return repo
-    .listEvaluations(200)
+    .getRecentEvaluations(200)
     .filter(evaluation => evaluation.status === HypothesisEvaluationStatus.Completed)
     .map(evaluation => evaluation.id);
 }
@@ -158,7 +158,7 @@ function findLatestCompletedEvaluationId(dbm: DatabaseManager): number | null {
 function findEvaluatedHypothesisIds(dbm: DatabaseManager): number[] {
   const repo = new HypothesisRepository(dbm.db);
   return repo
-    .listEvaluations(200)
+    .getRecentEvaluations(200)
     .filter(evaluation => evaluation.status === HypothesisEvaluationStatus.Completed)
     .map(evaluation => evaluation.hypothesisGraphId);
 }

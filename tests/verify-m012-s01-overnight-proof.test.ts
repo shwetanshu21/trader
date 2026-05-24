@@ -426,9 +426,9 @@ describe('M012/S01 Overnight Proof — Repo queries', () => {
   });
 
   it('lists runs newest first', () => {
-    fx.orchestrator.tryStart('first', fx.workspacePath, CLOSED_AFTER);
-    fx.orchestrator.tryStart('second', fx.workspacePath, CLOSED_AFTER);
-    fx.orchestrator.tryStart('third', fx.workspacePath, CLOSED_AFTER);
+    fx.orchestrator.tryStart('first', `${fx.workspacePath}/first`, CLOSED_AFTER);
+    fx.orchestrator.tryStart('second', `${fx.workspacePath}/second`, CLOSED_AFTER);
+    fx.orchestrator.tryStart('third', `${fx.workspacePath}/third`, CLOSED_AFTER);
 
     const runs = fx.repo.listRuns(5);
     expect(runs).toHaveLength(3);

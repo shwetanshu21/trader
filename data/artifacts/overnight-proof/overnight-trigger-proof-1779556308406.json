@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "artifactType": "overnight-trigger-proof",
+  "generatedAt": "2026-05-23T17:11:48.406Z",
+  "verdict": "PASS",
+  "dbPath": "/tmp/overnight-trigger-proof-uyRROp/runtime.db",
+  "researchDbPath": "/tmp/overnight-trigger-proof-uyRROp/research.db",
+  "workspaceRoot": "/tmp/overnight-trigger-proof-uyRROp/workspace",
+  "assertions": [
+    {
+      "name": "Open window does not launch work",
+      "pass": true,
+      "detail": "launchCount=0"
+    },
+    {
+      "name": "Open window persists refused run",
+      "pass": true,
+      "detail": "status=refused"
+    },
+    {
+      "name": "Open window refusal mentions market open",
+      "pass": true,
+      "detail": "reason=Market is open (phase: regular). Overnight research runs are only accepted during closed market windows."
+    },
+    {
+      "name": "Closed window launches work exactly once",
+      "pass": true,
+      "detail": "launchCount=1"
+    },
+    {
+      "name": "Closed window creates a run for the autonomous workspace",
+      "pass": true,
+      "detail": "runId=2"
+    },
+    {
+      "name": "Closed window writes overnight audit artifact",
+      "pass": true,
+      "detail": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/overnight-audit.json"
+    },
+    {
+      "name": "Closed window writes resume stub artifact",
+      "pass": true,
+      "detail": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/resume-stub.json"
+    },
+    {
+      "name": "Closed window writes trigger launch artifact",
+      "pass": true,
+      "detail": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/trigger-launch.json"
+    },
+    {
+      "name": "Closed window audit artifact is accepted",
+      "pass": true,
+      "detail": "accepted=true"
+    },
+    {
+      "name": "Closed window audit artifact has overnight-audit type",
+      "pass": true,
+      "detail": "type=overnight-audit"
+    }
+  ],
+  "branches": {
+    "refusedOpenWindow": {
+      "decisionAt": "2025-01-06T06:00:00.000Z",
+      "marketPhaseName": "regular",
+      "accepted": false,
+      "runId": 1,
+      "runStatus": "refused",
+      "refusalReason": "Market is open (phase: regular). Overnight research runs are only accepted during closed market windows.",
+      "workspacePath": "/tmp/overnight-trigger-proof-uyRROp/workspace/open-window",
+      "launcherInvoked": false,
+      "triggerLaunchArtifactPath": null,
+      "launcherStdoutPath": null,
+      "launcherStderrPath": null,
+      "overnightAuditPath": null,
+      "resumeStubPath": null,
+      "diagnostics": {
+        "label": "overnight-trigger",
+        "inFlight": false,
+        "lastDecisionAt": 1736143200000,
+        "lastLaunchedRunId": null,
+        "duplicateSkipCount": 0,
+        "overlapSkipCount": 0,
+        "launchErrorCount": 0
+      }
+    },
+    "acceptedClosedWindow": {
+      "decisionAt": "2025-01-06T11:00:00.000Z",
+      "marketPhaseName": "closed",
+      "accepted": true,
+      "runId": 2,
+      "runStatus": "running",
+      "refusalReason": null,
+      "workspacePath": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window",
+      "launcherInvoked": true,
+      "triggerLaunchArtifactPath": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/trigger-launch.json",
+      "launcherStdoutPath": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/launcher.stdout",
+      "launcherStderrPath": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/launcher.stderr",
+      "overnightAuditPath": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/overnight-audit.json",
+      "resumeStubPath": "/tmp/overnight-trigger-proof-uyRROp/workspace/closed-window/resume-stub.json",
+      "diagnostics": {
+        "label": "overnight-trigger",
+        "inFlight": false,
+        "lastDecisionAt": 1736161200000,
+        "lastLaunchedRunId": 2,
+        "duplicateSkipCount": 0,
+        "overlapSkipCount": 0,
+        "launchErrorCount": 0
+      },
+      "auditSummary": {
+        "artifactType": "overnight-audit",
+        "accepted": true,
+        "runStatus": "completed",
+        "checkpointPhase": "evaluate"
+      }
+    }
+  }
+}
