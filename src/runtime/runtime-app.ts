@@ -420,7 +420,7 @@ export class RuntimeApp {
         maxLlmCalls: this.config.overnight.maxLlmCalls,
       });
 
-      const workspacePath = this.config.overnight.workspacePath;
+      const baseWorkspacePath = this.config.overnight.workspacePath;
       overnightTrigger = new OvernightTriggerSupervisor({
         orchestrator: overnightOrchestrator,
         researchDbPath: this.config.overnight.researchDbPath,
@@ -429,7 +429,7 @@ export class RuntimeApp {
           return {
             key: dateKey,
             label: `overnight-auto-${dateKey}`,
-            workspacePath: path.join(workspacePath, `run-${Date.now()}`),
+            workspacePath: path.join(baseWorkspacePath, `run-${dateKey}`),
           };
         },
         launcher: overnightLauncher,
