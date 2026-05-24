@@ -1,4 +1,4 @@
-import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig, StrategyFrameworkConfig, GovernanceThresholdConfig, DemotionThresholdConfig } from '../types/runtime.js';
+import type { RuntimeConfig, ConfigValidationError, BrokerConfig, ProposalEngineConfig, ExecutionConfig, StrategyFrameworkConfig, GovernanceThresholdConfig, DemotionThresholdConfig, OvernightConfig } from '../types/runtime.js';
 import { ExecutionMode, DEFAULT_GOVERNANCE_THRESHOLDS, DEFAULT_DEMOTION_THRESHOLDS } from '../types/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -119,6 +119,9 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
   // ── STRATEGY FRAMEWORK ────────────────────────────────────────────────
   const strategy = parseStrategyFrameworkConfig(env, errors);
 
+  // ── OVERNIGHT RESEARCH ────────────────────────────────────────────────
+  const overnight = parseOvernightConfig(env, errors);
+
   // ── Fail on hard errors ─────────────────────────────────────────────────
   if (errors.length > 0) {
     const summary = errors.map(e => `  — ${e.field}: ${e.message}`).join('\n');
@@ -147,6 +150,7 @@ export function loadConfig(env: Record<string, string | undefined>): RuntimeConf
     proposalEngine,
     execution,
     strategy,
+    overnight,
   };
 }
 
@@ -776,6 +780,99 @@ function parseDemotionThresholds(
   }
 
   return thresholds;
+}
+
+/**
+ * Parse overnight research trigger configuration.
+ * Returns null when TRADER_OVERNIGHT_ENABLED is not set or not "true".
+ */
+function parseOvernightConfig(
+  env: Record<string, string | undefined>,
+  errors: ConfigValidationError[],
+): OvernightConfig | null {
+  const enabledRaw = env.TRADER_OVERNIGHT_ENABLED?.trim().toLowerCase();
+  if (!enabledRaw || enabledRaw === 'false' || enabledRaw === '0') {
+    return null;
+  }
+  if (enabledRaw !== 'true' && enabledRaw !== '1') {
+    errors.push({
+      field: 'TRADER_OVERNIGHT_ENABLED',
+      message: `Must be one of true, false, 1, 0, or unset. Got "${enabledRaw}".`,
+      provided: enabledRaw,
+    });
+    return null;
+  }
+
+  const workspacePath = env.TRADER_OVERNIGHT_WORKSPACE_PATH?.trim() ?? './data/artifacts/overnight';
+  const researchDbPath = env.TRADER_OVERNIGHT_RESEARCH_DB_PATH?.trim() || undefined;
+
+  const simulateRaw = env.TRADER_OVERNIGHT_SIMULATE_PHASES?.trim().toLowerCase() ?? 'true';
+  const simulatePhases = simulateRaw !== 'false' && simulateRaw !== '0';
+
+  const genCountRaw = env.TRADER_OVERNIGHT_SIMULATE_GEN_COUNT ?? '3';
+  const simulateGenCount = Number(genCountRaw);
+  if (!Number.isFinite(simulateGenCount) || simulateGenCount < 1 || simulateGenCount > 100) {
+    errors.push({
+      field: 'TRADER_OVERNIGHT_SIMULATE_GEN_COUNT',
+      message: `Must be between 1 and 100, got "${genCountRaw}". Defaulting to 3.`,
+      provided: genCountRaw,
+    });
+  }
+
+  const evalCountRaw = env.TRADER_OVERNIGHT_SIMULATE_EVAL_COUNT ?? '5';
+  const simulateEvalCount = Number(evalCountRaw);
+  if (!Number.isFinite(simulateEvalCount) || simulateEvalCount < 1 || simulateEvalCount > 100) {
+    errors.push({
+      field: 'TRADER_OVERNIGHT_SIMULATE_EVAL_COUNT',
+      message: `Must be between 1 and 100, got "${evalCountRaw}". Defaulting to 5.`,
+      provided: evalCountRaw,
+    });
+  }
+
+  const maxCandidatesRaw = env.TRADER_OVERNIGHT_MAX_ACCEPTED_CANDIDATES;
+  let maxAcceptedCandidates: number | undefined;
+  if (maxCandidatesRaw !== undefined) {
+    const val = Number(maxCandidatesRaw);
+    if (!Number.isFinite(val) || val < 1 || val > 100) {
+      errors.push({
+        field: 'TRADER_OVERNIGHT_MAX_ACCEPTED_CANDIDATES',
+        message: `Must be between 1 and 100, got "${maxCandidatesRaw}".`,
+        provided: maxCandidatesRaw,
+      });
+    } else {
+      maxAcceptedCandidates = val;
+    }
+  }
+
+  const maxLlmCallsRaw = env.TRADER_OVERNIGHT_MAX_LLM_CALLS;
+  let maxLlmCalls: number | undefined;
+  if (maxLlmCallsRaw !== undefined) {
+    const val = Number(maxLlmCallsRaw);
+    if (!Number.isFinite(val) || val < 1 || val > 1000) {
+      errors.push({
+        field: 'TRADER_OVERNIGHT_MAX_LLM_CALLS',
+        message: `Must be between 1 and 1000, got "${maxLlmCallsRaw}".`,
+        provided: maxLlmCallsRaw,
+      });
+    } else {
+      maxLlmCalls = val;
+    }
+  }
+
+  return {
+    enabled: true,
+    workspacePath,
+    researchDbPath,
+    simulatePhases,
+    simulateGenCount: Number.isFinite(simulateGenCount) && simulateGenCount >= 1 && simulateGenCount <= 100
+      ? simulateGenCount
+      : 3,
+    simulateEvalCount: Number.isFinite(simulateEvalCount) && simulateEvalCount >= 1 && simulateEvalCount <= 100
+      ? simulateEvalCount
+      : 5,
+    maxAcceptedCandidates,
+    maxLlmCalls,
+  };
 }
 
 export class ConfigValidationErrorImpl extends Error {

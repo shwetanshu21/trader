@@ -58,6 +58,10 @@ import { UniverseService } from '../universe/universe-service.js';
 import { UniverseSupervisor } from '../universe/universe-supervisor.js';
 import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
 import { ExecutionMode, SchedulerStatus, type RuntimeConfig } from '../types/runtime.js';
+import { OvernightRunRepo } from '../research/overnight-run-repo.js';
+import { OvernightOrchestrator } from '../research/overnight-orchestrator.js';
+import { OvernightTriggerSupervisor } from '../research/overnight-trigger.js';
+import { OvernightProcessLauncher } from '../research/overnight-launcher.js';
 
 // ---------------------------------------------------------------------------
 // RuntimeAppHandles — typed references to all composed subsystems
@@ -400,8 +404,42 @@ export class RuntimeApp {
       logBoot('Proposal engine: not configured (proposal generation disabled)');
     }
 
+    // ── Phase 6b: initialise overnight research trigger ──────────────────
+    let overnightTrigger: OvernightTriggerSupervisor | null = null;
+    if (this.config.overnight?.enabled) {
+      const overnightRepo = new OvernightRunRepo(dbManager.db);
+      const overnightOrchestrator = new OvernightOrchestrator(overnightRepo, clock);
+      const overnightLauncher = new OvernightProcessLauncher({
+        scriptPath: 'src/research/overnight-research-main.ts',
+        dbPath: this.config.dbPath,
+        researchDbPath: this.config.overnight.researchDbPath,
+        simulatePhases: this.config.overnight.simulatePhases,
+        simulateGenCount: this.config.overnight.simulateGenCount,
+        simulateEvalCount: this.config.overnight.simulateEvalCount,
+        maxAcceptedCandidates: this.config.overnight.maxAcceptedCandidates,
+        maxLlmCalls: this.config.overnight.maxLlmCalls,
+      });
+
+      const workspacePath = this.config.overnight.workspacePath;
+      overnightTrigger = new OvernightTriggerSupervisor({
+        orchestrator: overnightOrchestrator,
+        researchDbPath: this.config.overnight.researchDbPath,
+        resolveWindow: (now: Date) => {
+          const dateKey = now.toISOString().slice(0, 10);
+          return {
+            key: dateKey,
+            label: `overnight-auto-${dateKey}`,
+            workspacePath: path.join(workspacePath, `run-${Date.now()}`),
+          };
+        },
+        launcher: overnightLauncher,
+      });
+
+      logBoot('Overnight research trigger initialised');
+    }
+
     // ── Phase 7: build scheduler with ordered tick work ────────────────── ──────────────────
-    // Order: broker -> universe -> proposal -> strategy-risk -> execution gate
+    // Order: broker -> universe -> proposal -> strategy-risk -> execution gate -> overnight
     const tickWork = [
       ...(brokerSupervisor ? [brokerSupervisor] : []),
       universeSupervisor,
@@ -409,6 +447,7 @@ export class RuntimeApp {
       ...(strategyRiskSupervisor ? [strategyRiskSupervisor] : []),
       ...(executionGateSupervisor ? [executionGateSupervisor] : []),
       ...(paperPositionManager ? [paperPositionManager] : []),
+      ...(overnightTrigger ? [overnightTrigger] : []),
     ];
 
     const scheduler = new Scheduler({

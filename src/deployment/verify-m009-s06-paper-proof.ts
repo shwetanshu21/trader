@@ -171,6 +171,7 @@ function paperConfig(dbPath: string): RuntimeConfig {
         riskEventLookbackMs: 60 * 60 * 1000,
       },
     },
+    overnight: null,
   };
 }
 

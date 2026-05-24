@@ -244,6 +244,29 @@ export interface IngestionEvent {
 // ---------------------------------------------------------------------------
 
 /** Runtime configuration loaded from environment at startup. */
+// ---------------------------------------------------------------------------
+// Overnight research config
+// ---------------------------------------------------------------------------
+
+export interface OvernightConfig {
+  /** Enable the autonomous overnight research trigger in the scheduler. */
+  enabled: boolean;
+  /** Workspace path for overnight research artifacts. */
+  workspacePath: string;
+  /** Separate research DB path (defaults to main dbPath if omitted). */
+  researchDbPath?: string;
+  /** Run simulated phases (no LLM calls) — safe default for testing. */
+  simulatePhases: boolean;
+  /** Simulated generation count when simulatePhases=true. */
+  simulateGenCount: number;
+  /** Simulated evaluation count when simulatePhases=true. */
+  simulateEvalCount: number;
+  /** Max accepted candidates budget cap. */
+  maxAcceptedCandidates?: number;
+  /** Max LLM call budget cap. */
+  maxLlmCalls?: number;
+}
+
 export interface RuntimeConfig {
   /** HTTP health server port. Default: 3000. */
   port: number;
@@ -267,6 +290,8 @@ export interface RuntimeConfig {
   execution: ExecutionConfig;
   /** Strategy framework config. */
   strategy: StrategyFrameworkConfig;
+  /** Overnight research trigger config. Null when disabled. */
+  overnight: OvernightConfig | null;
 }
 
 // ---------------------------------------------------------------------------
