@@ -602,6 +602,7 @@ export class HypothesisGenerationService {
     const models = [
       this._config.providerModel ?? 'default',
       this._config.fallbackProviderModel,
+      ...(this._config.fallbackProviderModels ?? []),
     ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 
     const errors: string[] = [];

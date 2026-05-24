@@ -309,8 +309,10 @@ export interface ProposalEngineConfig {
   providerUrl: string;
   /** Model identifier for OpenAI-compatible providers. */
   providerModel?: string;
-  /** Optional fallback model identifier for OpenAI-compatible providers. */
+  /** Optional first fallback model identifier for OpenAI-compatible providers. */
   fallbackProviderModel?: string;
+  /** Optional ordered fallback model chain for OpenAI-compatible providers. */
+  fallbackProviderModels?: string[];
   /** Request timeout in ms. */
   timeoutMs: number;
   /** Maximum proposals to generate per tick. */

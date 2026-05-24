@@ -288,12 +288,13 @@ describe('HypothesisGenerationService', () => {
       }
     });
 
-    it('should fall back to the configured OpenAI-compatible fallback model after primary failure', async () => {
+    it('should fall back through the configured OpenAI-compatible model chain in order', async () => {
       const ctx = createContext({
         config: {
           ...TEST_OPENAI_CONFIG,
           providerModel: 'glm-5.1',
           fallbackProviderModel: 'mimo-v2.5-pro',
+          fallbackProviderModels: ['glm-5', 'glm-4.7'],
         },
       });
 
@@ -303,6 +304,18 @@ describe('HypothesisGenerationService', () => {
           status: 500,
           statusText: 'Internal Server Error',
           text: vi.fn().mockResolvedValue('{"error":{"message":"primary failed"}}'),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 524,
+          statusText: '',
+          text: vi.fn().mockResolvedValue('timeout'),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          text: vi.fn().mockResolvedValue('{"error":{"message":"third failed"}}'),
         } as unknown as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -325,11 +338,14 @@ describe('HypothesisGenerationService', () => {
       });
 
       expect(result.kind).toBe('accepted');
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      const firstPayload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}')) as { model?: string };
-      const secondPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body ?? '{}')) as { model?: string };
-      expect(firstPayload.model).toBe('glm-5.1');
-      expect(secondPayload.model).toBe('mimo-v2.5-pro');
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      const payloads = fetchMock.mock.calls.map(call => JSON.parse(String(call?.[1]?.body ?? '{}')) as { model?: string });
+      expect(payloads.map(payload => payload.model)).toEqual([
+        'glm-5.1',
+        'mimo-v2.5-pro',
+        'glm-5',
+        'glm-4.7',
+      ]);
     });
 
     // ── Valid JSON but not HypothesisGraph shape ──

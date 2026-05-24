@@ -347,6 +347,10 @@ function parseProposalEngineConfig(
 
   const providerModel = env.TRADER_PROPOSAL_PROVIDER_MODEL?.trim() || undefined;
   const fallbackProviderModel = env.TRADER_PROPOSAL_FALLBACK_PROVIDER_MODEL?.trim() || undefined;
+  const fallbackProviderModels = (env.TRADER_PROPOSAL_FALLBACK_PROVIDER_MODELS ?? '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
   if (providerModeRaw === 'openai-compatible' && !providerModel) {
     errors.push({
       field: 'TRADER_PROPOSAL_PROVIDER_MODEL',
@@ -388,6 +392,7 @@ function parseProposalEngineConfig(
     providerUrl,
     providerModel,
     fallbackProviderModel,
+    fallbackProviderModels: fallbackProviderModels.length > 0 ? fallbackProviderModels : undefined,
     timeoutMs,
     maxProposalsPerTick,
     apiKey,
