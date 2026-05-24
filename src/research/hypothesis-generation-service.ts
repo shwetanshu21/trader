@@ -198,6 +198,10 @@ export class HypothesisGenerationService {
     const payload = this._buildPrompt(config.instruction, context);
     const rawOutput = await this._callProvider(payload, config, now);
     const rawOutputStr = rawOutput.text;
+    const resolvedContextProvenance: GenerationContextProvenance = {
+      ...contextProvenance,
+      providerModel: rawOutput.providerModel ?? contextProvenance.providerModel,
+    };
 
     // ── Cap raw output for durable storage — compute SHA-256 hash on     ──
     //     the full body BEFORE truncating, then cap and derive preview.    ──
@@ -210,11 +214,17 @@ export class HypothesisGenerationService {
           reasonCode: GenerationReasonCode.ProviderError,
           reasonMessage: `Provider transport error: ${rawOutput.error}`,
         },
+        ...rawOutput.modelAttempts
+          .filter(attempt => attempt.status === 'failed')
+          .map((attempt) => ({
+            reasonCode: GenerationReasonCode.ProviderError,
+            reasonMessage: `Model attempt ${attempt.model} failed: ${attempt.detail}`,
+          })),
       ];
 
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
-        contextProvenance,
+        contextProvenance: resolvedContextProvenance,
         rawProviderOutput: outputCapping.rawProviderOutput,
         rawOutputContentHash: outputCapping.rawOutputContentHash,
         rawOutputPreview: outputCapping.rawOutputPreview,
@@ -242,7 +252,7 @@ export class HypothesisGenerationService {
 
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
-        contextProvenance,
+        contextProvenance: resolvedContextProvenance,
         rawProviderOutput: null,
         rawOutputContentHash: null,
         rawOutputPreview: null,
@@ -273,7 +283,7 @@ export class HypothesisGenerationService {
 
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
-        contextProvenance,
+        contextProvenance: resolvedContextProvenance,
         rawProviderOutput: outputCapping.rawProviderOutput,
         rawOutputContentHash: outputCapping.rawOutputContentHash,
         rawOutputPreview: outputCapping.rawOutputPreview,
@@ -302,7 +312,7 @@ export class HypothesisGenerationService {
 
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
-        contextProvenance,
+        contextProvenance: resolvedContextProvenance,
         rawProviderOutput: outputCapping.rawProviderOutput,
         rawOutputContentHash: outputCapping.rawOutputContentHash,
         rawOutputPreview: outputCapping.rawOutputPreview,
@@ -339,7 +349,7 @@ export class HypothesisGenerationService {
 
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Rejected,
-        contextProvenance,
+        contextProvenance: resolvedContextProvenance,
         rawProviderOutput: outputCapping.rawProviderOutput,
         rawOutputContentHash: outputCapping.rawOutputContentHash,
         rawOutputPreview: outputCapping.rawOutputPreview,
@@ -367,7 +377,7 @@ export class HypothesisGenerationService {
 
       const attempt = this._persistAttempt({
         verdict: GenerationVerdict.Skipped,
-        contextProvenance,
+        contextProvenance: resolvedContextProvenance,
         rawProviderOutput: outputCapping.rawProviderOutput,
         rawOutputContentHash: outputCapping.rawOutputContentHash,
         rawOutputPreview: outputCapping.rawOutputPreview,
@@ -398,7 +408,7 @@ export class HypothesisGenerationService {
 
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Rejected,
-          contextProvenance,
+          contextProvenance: resolvedContextProvenance,
           rawProviderOutput: outputCapping.rawProviderOutput,
           rawOutputContentHash: outputCapping.rawOutputContentHash,
           rawOutputPreview: outputCapping.rawOutputPreview,
@@ -424,7 +434,7 @@ export class HypothesisGenerationService {
 
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Skipped,
-          contextProvenance,
+          contextProvenance: resolvedContextProvenance,
           rawProviderOutput: outputCapping.rawProviderOutput,
           rawOutputContentHash: outputCapping.rawOutputContentHash,
           rawOutputPreview: outputCapping.rawOutputPreview,
@@ -448,7 +458,7 @@ export class HypothesisGenerationService {
 
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Accepted,
-          contextProvenance,
+          contextProvenance: resolvedContextProvenance,
           rawProviderOutput: outputCapping.rawProviderOutput,
           rawOutputContentHash: outputCapping.rawOutputContentHash,
           rawOutputPreview: outputCapping.rawOutputPreview,
@@ -534,27 +544,52 @@ export class HypothesisGenerationService {
    * Call the configured LLM provider and return the raw response text.
    *
    * Supports both 'custom' and 'openai-compatible' provider modes.
-   * Returns { text: string | null, error: string | null } so the caller
-   * always has the raw output (or failure reason) regardless of outcome.
+   * Returns provider model/attempt metadata so persisted evidence can reflect
+   * the actual fallback winner or the full failure chain.
    */
   private async _callProvider(
     promptPayload: Record<string, unknown>,
     _config: HypothesisGenerationConfig,
     _now: number,
-  ): Promise<{ text: string | null; error: string | null }> {
+  ): Promise<{
+    text: string | null;
+    error: string | null;
+    providerModel: string | null;
+    modelAttempts: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }>;
+  }> {
     try {
-      let responseText: string;
-
       if (this._config.providerMode === 'openai-compatible') {
-        responseText = await this._sendOpenAiRequest(promptPayload);
-      } else {
-        responseText = await this._sendCustomRequest(promptPayload);
+        const response = await this._sendOpenAiRequest(promptPayload);
+        return {
+          text: response.text,
+          error: null,
+          providerModel: response.providerModel,
+          modelAttempts: response.modelAttempts,
+        };
       }
 
-      return { text: responseText, error: null };
+      const responseText = await this._sendCustomRequest(promptPayload);
+      return {
+        text: responseText,
+        error: null,
+        providerModel: this._config.providerModel ?? null,
+        modelAttempts: this._config.providerModel
+          ? [{ model: this._config.providerModel, status: 'succeeded', detail: 'Provider request succeeded.' }]
+          : [],
+      };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      return { text: null, error: errorMessage };
+      const modelAttempts = typeof err === 'object' && err !== null && 'modelAttempts' in err
+        ? ((err as {
+            modelAttempts?: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }>;
+          }).modelAttempts ?? [])
+        : [];
+      return {
+        text: null,
+        error: errorMessage,
+        providerModel: null,
+        modelAttempts,
+      };
     }
   }
 
@@ -598,26 +633,41 @@ export class HypothesisGenerationService {
    * Send an OpenAI-compatible chat completions request.
    * Extracts the assistant content text from the response.
    */
-  private async _sendOpenAiRequest(payload: Record<string, unknown>): Promise<string> {
+  private async _sendOpenAiRequest(payload: Record<string, unknown>): Promise<{
+    text: string;
+    providerModel: string;
+    modelAttempts: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }>;
+  }> {
     const models = [
       this._config.providerModel ?? 'default',
       this._config.fallbackProviderModel,
       ...(this._config.fallbackProviderModels ?? []),
     ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 
-    const errors: string[] = [];
+    const modelAttempts: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }> = [];
     for (const model of models) {
       try {
-        return await this._sendOpenAiRequestWithModel(payload, model);
+        const text = await this._sendOpenAiRequestWithModel(payload, model);
+        modelAttempts.push({ model, status: 'succeeded', detail: 'Provider request succeeded.' });
+        return { text, providerModel: model, modelAttempts };
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        errors.push(`${model}: ${errorMessage}`);
+        modelAttempts.push({ model, status: 'failed', detail: errorMessage });
       }
     }
 
-    throw new Error(errors.length > 0
+    const errors = modelAttempts
+      .filter(attempt => attempt.status === 'failed')
+      .map(attempt => `${attempt.model}: ${attempt.detail}`);
+
+    const aggregateError = errors.length > 0
       ? `All configured OpenAI-compatible models failed. ${errors.join(' | ')}`
-      : 'No OpenAI-compatible model configured.');
+      : 'No OpenAI-compatible model configured.';
+    const error = new Error(aggregateError) as Error & {
+      modelAttempts?: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }>;
+    };
+    error.modelAttempts = modelAttempts;
+    throw error;
   }
 
   private async _sendOpenAiRequestWithModel(payload: Record<string, unknown>, model: string): Promise<string> {

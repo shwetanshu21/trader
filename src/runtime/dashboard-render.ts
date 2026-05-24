@@ -360,13 +360,18 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         </tr>`).join('');
     const recentAttemptRows = overnight.recentGenerationAttempts.length === 0
       ? '<tr><td colspan="5" class="muted">No generation attempts recorded</td></tr>'
-      : overnight.recentGenerationAttempts.map(attempt => `<tr>
+      : overnight.recentGenerationAttempts.map(attempt => {
+        const modelOutcomes = attempt.reasons.length > 0
+          ? `<div class="reasons">${attempt.reasons.map(reason => `<span class="reason">${escapeHtml(reason)}</span>`).join('')}</div>`
+          : '—';
+        return `<tr>
           <td>#${attempt.id}</td>
           <td>${escapeHtml(attempt.providerModel ?? attempt.providerLabel ?? 'unknown')}</td>
           <td class="status-${escapeHtml(attempt.verdict)}">${escapeHtml(attempt.verdict)}</td>
-          <td>${escapeHtml(attempt.reasons[0] ?? '—')}</td>
+          <td>${modelOutcomes}</td>
           <td>${escapeHtml(attempt.createdAt)}</td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
     return `
       <div class="section">
         <h2>Overnight Research</h2>
@@ -385,7 +390,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         </table>
         <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Recent Generation Attempts (${overnight.recentGenerationAttempts.length})</h3>
         <table style="margin-top:0.5rem;">
-          <thead><tr><td>Attempt</td><td>Model</td><td>Verdict</td><td>Primary Reason</td><td>Created At</td></tr></thead>
+          <thead><tr><td>Attempt</td><td>Model</td><td>Verdict</td><td>Model Outcome(s)</td><td>Created At</td></tr></thead>
           <tbody>${recentAttemptRows}</tbody>
         </table>
       </div>`;

@@ -346,6 +346,55 @@ describe('HypothesisGenerationService', () => {
         'glm-5',
         'glm-4.7',
       ]);
+      if (result.kind === 'accepted') {
+        expect(result.attempt.contextProvenance.providerModel).toBe('glm-4.7');
+      }
+    });
+
+    it('should persist one provider-error reason per failed model in the fallback chain', async () => {
+      const ctx = createContext({
+        config: {
+          ...TEST_OPENAI_CONFIG,
+          providerModel: 'glm-5.1',
+          fallbackProviderModel: 'mimo-v2.5-pro',
+          fallbackProviderModels: ['glm-5'],
+        },
+      });
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          text: vi.fn().mockResolvedValue('{"error":{"message":"primary failed"}}'),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 524,
+          statusText: '',
+          text: vi.fn().mockResolvedValue('fallback timeout'),
+        } as unknown as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          text: vi.fn().mockResolvedValue('{"error":{"message":"third failed"}}'),
+        } as unknown as Response);
+      globalThis.fetch = fetchMock;
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('provider_error');
+      if (result.kind === 'provider_error') {
+        expect(result.attempt.reasons.map(reason => reason.reasonMessage)).toEqual(expect.arrayContaining([
+          expect.stringContaining('Provider transport error: All configured OpenAI-compatible models failed.'),
+          expect.stringContaining('Model attempt glm-5.1 failed:'),
+          expect.stringContaining('Model attempt mimo-v2.5-pro failed:'),
+          expect.stringContaining('Model attempt glm-5 failed:'),
+        ]));
+      }
     });
 
     // ── Valid JSON but not HypothesisGraph shape ──

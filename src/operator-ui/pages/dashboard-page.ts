@@ -1159,14 +1159,19 @@ function renderOvernightResearchSection(
 
     const attemptRows = summary.recentGenerationAttempts.length > 0
       ? `<table style="margin-top:0.75rem;">
-          <thead><tr><th>Attempt</th><th>Model</th><th>Verdict</th><th>Primary Reason</th><th>When</th></tr></thead>
-          <tbody>${summary.recentGenerationAttempts.map(attempt => `<tr>
+          <thead><tr><th>Attempt</th><th>Model</th><th>Verdict</th><th>Model Outcome(s)</th><th>When</th></tr></thead>
+          <tbody>${summary.recentGenerationAttempts.map(attempt => {
+            const modelOutcomes = attempt.reasons.length > 0
+              ? `<div class="tag-list">${attempt.reasons.map(reason => `<span class="tag">${escapeHtml(reason)}</span>`).join('')}</div>`
+              : '—';
+            return `<tr>
             <td><code>#${formatInt(attempt.id)}</code></td>
             <td>${escapeHtml(attempt.providerModel ?? attempt.providerLabel ?? 'unknown')}</td>
             <td><span class="${statusClass(attempt.verdict)}">${escapeHtml(attempt.verdict)}</span></td>
-            <td>${escapeHtml(attempt.reasons[0] ?? '—')}</td>
+            <td>${modelOutcomes}</td>
             <td>${escapeHtml(formatTimestamp(attempt.createdAt))}</td>
-          </tr>`).join('')}</tbody>
+          </tr>`;
+          }).join('')}</tbody>
         </table>`
       : renderEmptyState('No hypothesis-generation attempts recorded yet.');
 
