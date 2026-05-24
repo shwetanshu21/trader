@@ -17,6 +17,7 @@ export function renderGovernancePage(payload: DashboardPayload): string {
       sectionHtml.governanceHistory,
       sectionHtml.promotionHistory,
       sectionHtml.walkForwardLeaderboard,
+      sectionHtml.researchLineage,
     ].join('\n'),
   });
 }

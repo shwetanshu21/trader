@@ -16,6 +16,7 @@ import type {
   OperatorLifecycleHistory,
   OperatorPromotionHistory,
   OperatorWalkForwardLeaderboard,
+  OperatorResearchLineageSummary,
 } from '../../types/runtime.js';
 import {
   escapeHtml,
@@ -45,6 +46,7 @@ const DASHBOARD_SECTION_ORDER = [
   'governanceHistory',
   'promotionHistory',
   'walkForwardLeaderboard',
+  'researchLineage',
 ] as const;
 
 type DashboardSectionKey = typeof DASHBOARD_SECTION_ORDER[number];
@@ -118,6 +120,7 @@ export function renderOverviewHero(payload: DashboardPayload): string {
     payload.governanceHistory,
     payload.promotionHistory,
     payload.walkForwardLeaderboard,
+    payload.researchLineage,
   ];
   const staleCount = sectionStates.filter(section => section.state === 'stale').length;
   const errorCount = sectionStates.filter(section => section.state === 'error' || section.state === 'unavailable').length;
@@ -497,6 +500,7 @@ export function renderDashboardSectionHtml(payload: DashboardPayload): Dashboard
     governanceHistory: renderGovernanceHistorySection(payload.governanceHistory),
     promotionHistory: renderPromotionHistorySection(payload.promotionHistory),
     walkForwardLeaderboard: renderWalkForwardLeaderboardSection(payload.walkForwardLeaderboard),
+    researchLineage: renderResearchLineageSection(payload.researchLineage),
   };
 }
 
@@ -1019,6 +1023,69 @@ function renderWalkForwardLeaderboardSection(
     'walkForwardLeaderboard',
     'Walk-Forward Leaderboard',
     'Historical backtest results',
+    section,
+    content,
+  );
+}
+
+
+function renderResearchLineageSection(
+  section: DashboardSection<OperatorResearchLineageSummary>,
+): string {
+  let content: string;
+
+  if ((section.state === 'ok' || section.state === 'stale')) {
+    const summary = section.data;
+    const totals = summary.totals;
+    const totalGrid = `<div class="summary-grid">
+      <div class="summary-card"><div class="label">Generation Attempts Total</div><div class="value">${formatInt(totals.generationAttempts)}</div></div>
+      <div class="summary-card"><div class="label">Hypotheses Total</div><div class="value">${formatInt(totals.hypotheses)}</div></div>
+      <div class="summary-card"><div class="label">Evaluations Total</div><div class="value">${formatInt(totals.evaluations)}</div></div>
+      <div class="summary-card"><div class="label">Duplicate Skip Total</div><div class="value">${formatInt(totals.duplicateSkips)}</div></div>
+      <div class="summary-card"><div class="label">Published Research Total</div><div class="value">${formatInt(totals.publications)}</div></div>
+    </div>`;
+
+    const provenanceList = summary.status.provenance.length > 0
+      ? `<ul>${summary.status.provenance.map(item => `<li><code>${escapeHtml(item.sourceLabel)}</code>${item.detail ? ` — ${escapeHtml(item.detail)}` : ''}</li>`).join('')}</ul>`
+      : '<p class="empty-state">No lineage source provenance was reported.</p>';
+
+    const diagnostics = summary.status.diagnostics.length > 0
+      ? `<div style="margin-top:0.75rem;"><strong>Diagnostics</strong><ul>${summary.status.diagnostics.map(item => `<li><code>${escapeHtml(item.code)}</code> — ${escapeHtml(item.message)}</li>`).join('')}</ul></div>`
+      : '';
+
+    const recentRows = summary.recent.length > 0
+      ? `<table>
+          <thead><tr><th>When</th><th>Type</th><th>Status</th><th>Canonical Hash</th><th>Generation</th><th>Evaluation</th><th>Publication</th><th>Notes</th></tr></thead>
+          <tbody>${summary.recent.map(row => `<tr>
+            <td>${escapeHtml(formatTimestamp(row.happenedAt))}</td>
+            <td><code>${escapeHtml(row.lineageType)}</code></td>
+            <td><span class="${statusClass(row.status)}">${escapeHtml(row.status)}</span></td>
+            <td>${row.canonicalHash ? `<code>${escapeHtml(row.canonicalHash)}</code>` : '<span class="status-skip">None</span>'}</td>
+            <td>${row.generationAttempt ? `#${formatInt(row.generationAttempt.id)} · ${escapeHtml(row.generationAttempt.providerLabel ?? 'unknown provider')}` : '<span class="status-skip">None</span>'}</td>
+            <td>${row.evaluation ? `#${formatInt(row.evaluation.id)}${row.evaluation.walkForwardRunId !== null ? ` · run ${formatInt(row.evaluation.walkForwardRunId)}` : ''}` : '<span class="status-skip">None</span>'}</td>
+            <td>${row.publication ? `${escapeHtml(row.publication.strategyId)}@${escapeHtml(row.publication.strategyVersion)}` : '<span class="status-skip">None</span>'}</td>
+            <td>${row.diagnostics.length > 0 ? escapeHtml(row.diagnostics.join('; ')) : '—'}</td>
+          </tr>`).join('')}</tbody>
+        </table>`
+      : renderEmptyState('No persisted research lineage has been produced on this host yet.');
+
+    content = `${totalGrid}
+      <div class="section-note">Repository-backed totals stay truthful even when recent lineage rows remain bounded for operator payloads.</div>
+      ${recentRows}
+      <div style="margin-top:0.75rem;"><strong>Lineage Sources</strong>${provenanceList}</div>
+      ${diagnostics}`;
+  } else if (section.state === 'unavailable') {
+    content = renderEmptyState('No database snapshot available.');
+  } else if (section.state === 'error') {
+    content = renderEmptyState(section.errorMessage ?? 'Failed to load research lineage.');
+  } else {
+    content = renderEmptyState('No persisted research lineage has been produced on this host yet.');
+  }
+
+  return renderDashboardSectionWrapper(
+    'researchLineage',
+    'Research Lineage',
+    'Repository-backed totals plus bounded recent lineage rows',
     section,
     content,
   );

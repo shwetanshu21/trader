@@ -16,6 +16,7 @@ import type {
   OperatorLifecycleHistory,
   OperatorPromotionHistory,
   OperatorWalkForwardLeaderboard,
+  OperatorResearchLineageSummary,
 } from '../types/runtime.js';
 
 export type SectionState = 'ok' | 'error' | 'stale' | 'unavailable';
@@ -39,6 +40,7 @@ export interface DashboardPayload {
   governanceHistory: DashboardSection<OperatorLifecycleHistory[]>;
   promotionHistory: DashboardSection<OperatorPromotionHistory[]>;
   walkForwardLeaderboard: DashboardSection<OperatorWalkForwardLeaderboard[]>;
+  researchLineage: DashboardSection<OperatorResearchLineageSummary>;
   dbAvailable: boolean;
   dbError: string | null;
 }
@@ -53,6 +55,7 @@ type DashboardSectionMap = Pick<
   | 'governanceHistory'
   | 'promotionHistory'
   | 'walkForwardLeaderboard'
+  | 'researchLineage'
 >;
 
 type SectionKey = keyof DashboardSectionMap;
@@ -103,6 +106,27 @@ function ensureArrayResult<T>(label: string, value: T[] | null | undefined): T[]
 function toIso(timestampMs: number): string {
   return new Date(timestampMs).toISOString();
 }
+
+const EMPTY_RESEARCH_LINEAGE: OperatorResearchLineageSummary = {
+  totals: {
+    generationAttempts: 0,
+    hypotheses: 0,
+    evaluations: 0,
+    duplicateSkips: 0,
+    publications: 0,
+  },
+  recent: [],
+  status: {
+    availability: 'empty',
+    diagnostics: [],
+    provenance: [],
+  },
+  provenance: {
+    source: 'historical',
+    asOf: 0,
+    sourceLabel: null,
+  },
+};
 
 function okSection<T>(data: T, fetchedAtMs: number): DashboardSection<T> {
   return {
@@ -199,6 +223,18 @@ const SECTION_DEFINITIONS: {
     empty: [],
     fetch: readModel => ensureArrayResult('walk-forward leaderboard', readModel.getWalkForwardLeaderboard()),
   },
+  researchLineage: {
+    key: 'researchLineage',
+    label: 'research lineage',
+    empty: EMPTY_RESEARCH_LINEAGE,
+    fetch: readModel => {
+      const summary = readModel.getResearchLineageSummary();
+      if (!summary || typeof summary !== 'object' || !summary.totals || !Array.isArray(summary.recent) || !summary.status || typeof summary.status !== 'object' || !Array.isArray(summary.status.diagnostics) || !Array.isArray(summary.status.provenance)) {
+        throw new Error('research lineage query returned malformed rows.');
+      }
+      return summary;
+    },
+  },
 };
 
 function buildUnavailablePayload(assembledAt: string, dbError: string | null): DashboardPayload {
@@ -215,6 +251,7 @@ function buildUnavailablePayload(assembledAt: string, dbError: string | null): D
     governanceHistory: unavailableSection(SECTION_DEFINITIONS.governanceHistory.empty, message),
     promotionHistory: unavailableSection(SECTION_DEFINITIONS.promotionHistory.empty, message),
     walkForwardLeaderboard: unavailableSection(SECTION_DEFINITIONS.walkForwardLeaderboard.empty, message),
+    researchLineage: unavailableSection(SECTION_DEFINITIONS.researchLineage.empty, message),
   };
 }
 
@@ -244,6 +281,7 @@ export class DashboardPayloadAssembler {
       governanceHistory: this.fetchSection(SECTION_DEFINITIONS.governanceHistory, readModel, nowMs),
       promotionHistory: this.fetchSection(SECTION_DEFINITIONS.promotionHistory, readModel, nowMs),
       walkForwardLeaderboard: this.fetchSection(SECTION_DEFINITIONS.walkForwardLeaderboard, readModel, nowMs),
+      researchLineage: this.fetchSection(SECTION_DEFINITIONS.researchLineage, readModel, nowMs),
     };
   }
 

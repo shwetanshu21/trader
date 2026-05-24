@@ -10,6 +10,7 @@ function createReadModel(options?: {
   governanceHistory?: () => unknown;
   promotionHistory?: () => unknown;
   walkForwardLeaderboard?: () => unknown;
+  researchLineage?: () => unknown;
 }) {
   return {
     getSummaryCards: () => options?.summaryCards ? options.summaryCards() : [{ key: 'current_pnl', label: 'Current P&L', value: 1234, unit: 'INR', change: null, display: null, provenance: null }],
@@ -20,6 +21,27 @@ function createReadModel(options?: {
     getLifecycleHistory: () => options?.governanceHistory ? options.governanceHistory() : [{ id: 1, strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', verdict: 'promote', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Passed gates.', recordedAt: '2025-01-10T10:00:00.000Z', provenance: null }],
     getPromotionHistory: () => options?.promotionHistory ? options.promotionHistory() : [{ id: 1, strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', previousPhase: 'backtest', newPhase: 'paper', rationale: 'Promoted.', winnerId: 3, promotedAt: '2025-01-10T10:00:00.000Z', provenance: null }],
     getWalkForwardLeaderboard: () => options?.walkForwardLeaderboard ? options.walkForwardLeaderboard() : [{ runId: 99, label: 'WF-99', strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', windowCount: 4, winnerId: 3, selectionStrategy: 'best_sharpe', mergedScore: 0.7, sharpeRatio: 1.5, totalReturnPct: 11.2, maxDrawdownPct: 5.5, winRate: 0.6, selectedAt: '2025-01-10T10:00:00.000Z', provenance: null }],
+    getResearchLineageSummary: () => options?.researchLineage ? options.researchLineage() : ({
+      totals: { generationAttempts: 4, hypotheses: 3, evaluations: 2, duplicateSkips: 1, publications: 1 },
+      recent: [{
+        canonicalHash: 'abc123',
+        lineageType: 'publication',
+        status: 'published',
+        happenedAt: '2025-01-10T10:05:00.000Z',
+        generationAttempt: { id: 8, verdict: 'accepted', reasonCodes: [], providerLabel: 'test-model' },
+        duplicateSkip: null,
+        hypothesis: { id: 2, status: 'validated', createdAt: '2025-01-10T10:01:00.000Z' },
+        evaluation: { id: 3, status: 'persisted', walkForwardRunId: 99, winnerId: 7 },
+        publication: { publicationId: 5, publicationStatus: 'published', strategyId: 'alpha', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', lifecyclePhase: 'paper', governanceVerdict: 'promote', publishedAt: '2025-01-10T10:05:00.000Z' },
+        diagnostics: [],
+      }],
+      status: {
+        availability: 'ready',
+        diagnostics: [],
+        provenance: [{ sourceLabel: 'research_publications', detail: 'publication provenance' }],
+      },
+      provenance: { source: 'historical', asOf: 1736503500000, sourceLabel: 'research_lineage' },
+    }),
   };
 }
 
@@ -36,6 +58,9 @@ describe('DashboardPayloadAssembler', () => {
     expect(payload.summaryCards.stalenessMs).toBe(0);
     expect(payload.summaryCards.isCachedData).toBe(false);
     expect(payload.summaryCards.errorMessage).toBeNull();
+    expect(payload.researchLineage.state).toBe('ok');
+    expect(payload.researchLineage.data.totals.publications).toBe(1);
+    expect(payload.researchLineage.data.recent).toHaveLength(1);
   });
 
   it('preserves last-known rows as stale when a later section refresh fails', () => {
@@ -107,4 +132,56 @@ describe('DashboardPayloadAssembler', () => {
     expect(payload.summaryCards.isCachedData).toBe(false);
     expect(payload.summaryCards.errorMessage).toBe('open failed');
   });
+});
+
+
+it('preserves last-known research lineage summary as stale when a later lineage refresh fails', () => {
+  const assembler = new DashboardPayloadAssembler();
+  let failLineage = false;
+  const readModel = createReadModel({
+    researchLineage: () => {
+      if (failLineage) {
+        throw new Error('authorization=Bearer super-secret timeout');
+      }
+      return {
+        totals: { generationAttempts: 4, hypotheses: 3, evaluations: 2, duplicateSkips: 1, publications: 1 },
+        recent: [],
+        status: { availability: 'empty', diagnostics: [], provenance: [{ sourceLabel: 'hypothesis_generation_attempts', detail: 'recent generation lineage rows' }] },
+        provenance: { source: 'historical', asOf: 1736503500000, sourceLabel: 'research_lineage' },
+      };
+    },
+  });
+
+  const first = assembler.fetchDashboardPayload(readModel as any, null, 1_000);
+  failLineage = true;
+  const second = assembler.fetchDashboardPayload(readModel as any, null, 9_000);
+
+  expect(first.researchLineage.state).toBe('ok');
+  expect(second.researchLineage.state).toBe('stale');
+  expect(second.researchLineage.data).toEqual(first.researchLineage.data);
+  expect(second.researchLineage.stalenessMs).toBe(8_000);
+  expect(second.researchLineage.errorMessage).toContain('Failed to refresh research lineage');
+  expect(second.researchLineage.errorMessage).toContain('authorization=[redacted]');
+});
+
+it('treats malformed research lineage summaries as errors', () => {
+  const assembler = new DashboardPayloadAssembler();
+  const payload = assembler.fetchDashboardPayload(createReadModel({
+    researchLineage: () => ({ totals: null, recent: 'bad', status: null }),
+  }) as any, null, 5_000);
+
+  expect(payload.researchLineage.state).toBe('error');
+  expect(payload.researchLineage.data.recent).toEqual([]);
+  expect(payload.researchLineage.data.totals.publications).toBe(0);
+  expect(payload.researchLineage.errorMessage).toContain('malformed rows');
+});
+
+it('returns unavailable research lineage when DB-open/read-model access is absent', () => {
+  const assembler = new DashboardPayloadAssembler();
+  const payload = assembler.fetchDashboardPayload(null, 'open failed', 9_000);
+
+  expect(payload.researchLineage.state).toBe('unavailable');
+  expect(payload.researchLineage.data.totals.generationAttempts).toBe(0);
+  expect(payload.researchLineage.data.recent).toEqual([]);
+  expect(payload.researchLineage.errorMessage).toBe('open failed');
 });

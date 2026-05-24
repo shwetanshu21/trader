@@ -23,6 +23,7 @@ import type {
   OperatorSummaryCard,
   OperatorTickerPerformance,
   OperatorWalkForwardLeaderboard,
+  OperatorResearchLineageSummary,
 } from '../src/types/runtime.js';
 
 const testProvenance: OperatorProvenance = {
@@ -162,6 +163,30 @@ function samplePromotionHistory(): OperatorPromotionHistory[] {
   ];
 }
 
+
+function sampleResearchLineage(): OperatorResearchLineageSummary {
+  return {
+    totals: { generationAttempts: 4, hypotheses: 3, evaluations: 2, duplicateSkips: 1, publications: 1 },
+    recent: [{
+      canonicalHash: 'abc123',
+      lineageType: 'publication',
+      status: 'published',
+      happenedAt: '2025-01-11T09:30:00.000Z',
+      generationAttempt: { id: 8, verdict: 'accepted', reasonCodes: [], providerLabel: 'test-model' },
+      duplicateSkip: null,
+      hypothesis: { id: 2, status: 'validated', createdAt: '2025-01-11T09:00:00.000Z' },
+      evaluation: { id: 3, status: 'persisted', walkForwardRunId: 42, winnerId: 4 },
+      publication: { publicationId: 5, publicationStatus: 'published', strategyId: 'india-nse-eq-v1', strategyVersion: '1.0.0', marketId: 'INDIA_NSE_EQ', lifecyclePhase: 'paper', governanceVerdict: 'promote', publishedAt: '2025-01-11T09:30:00.000Z' },
+      diagnostics: [],
+    }],
+    status: {
+      availability: 'ready',
+      diagnostics: [],
+      provenance: [{ sourceLabel: 'research_publications', detail: 'publication provenance' }],
+    },
+    provenance: testProvenance,
+  };
+}
 function sampleWalkForwardLeaderboard(): OperatorWalkForwardLeaderboard[] {
   return [
     {
@@ -187,6 +212,7 @@ function buildPayload(overrides?: Partial<DashboardPayload>): DashboardPayload {
     governanceHistory: ok(sampleLifecycleHistory()),
     promotionHistory: ok(samplePromotionHistory()),
     walkForwardLeaderboard: ok(sampleWalkForwardLeaderboard()),
+    researchLineage: ok(sampleResearchLineage()),
     ...overrides,
   };
 }
@@ -283,7 +309,10 @@ describe('Top-level operator pages', () => {
   it('renders dedicated decisions, governance, and system-health pages', () => {
     const payload = buildPayload();
     expect(renderDecisionsPage(payload)).toContain('Decision Ledger');
-    expect(renderGovernancePage(payload)).toContain('Governance &amp; Backtests');
+    const governanceHtml = renderGovernancePage(payload);
+    expect(governanceHtml).toContain('Governance &amp; Backtests');
+    expect(governanceHtml).toContain('Research Lineage');
+    expect(governanceHtml).toContain('Published Research Total');
 
     const healthHtml = renderSystemHealthPage({
       status: 'healthy',
@@ -293,6 +322,8 @@ describe('Top-level operator pages', () => {
       dbError: null,
       pollIntervalMs: 1000,
       authClients: [],
+      dbOpenBootstrap: { status: 'ready', lastError: null },
+      detailReadModelBootstrap: { status: 'ready', lastError: null },
       sections: { summaryCards: { status: 'ok', count: 3 } },
     });
     expect(healthHtml).toContain('System Health');
@@ -453,4 +484,39 @@ describe('Backtest detail page', () => {
     expect(html).toContain('No ranked candidates were persisted for this run.');
     expect(html).toContain('No selection config JSON was persisted for this run.');
   });
+});
+
+
+it('renders research-lineage degradation states and bounded repository totals on governance pages', () => {
+  const stalePayload = buildPayload({
+    researchLineage: {
+      state: 'stale',
+      data: sampleResearchLineage(),
+      errorMessage: 'Failed to refresh research lineage: timeout',
+      stalenessMs: 45_000,
+      lastFetchedAt: '2025-01-11T09:59:15.000Z',
+      isCachedData: true,
+    },
+  });
+  const staleHtml = renderGovernancePage(stalePayload);
+  expect(staleHtml).toContain('Research Lineage');
+  expect(staleHtml).toContain('Published Research Total');
+  expect(staleHtml).toContain('Failed to refresh research lineage: timeout');
+  expect(staleHtml).toContain('Showing last known data from 2025-01-11 09:59:15.');
+  expect(staleHtml).toContain('abc123');
+
+  const unavailableHtml = renderGovernancePage(buildPayload({
+    researchLineage: unavailableSection(),
+  }));
+  expect(unavailableHtml).toContain('No database snapshot available.');
+
+  const emptyHtml = renderGovernancePage(buildPayload({
+    researchLineage: ok({
+      totals: { generationAttempts: 0, hypotheses: 0, evaluations: 0, duplicateSkips: 0, publications: 0 },
+      recent: [],
+      status: { availability: 'empty', diagnostics: [], provenance: [{ sourceLabel: 'hypothesis_generation_attempts', detail: 'recent generation lineage rows' }] },
+      provenance: testProvenance,
+    }),
+  }));
+  expect(emptyHtml).toContain('No persisted research lineage has been produced on this host yet.');
 });
