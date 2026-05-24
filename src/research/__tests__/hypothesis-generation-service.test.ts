@@ -348,6 +348,11 @@ describe('HypothesisGenerationService', () => {
       ]);
       if (result.kind === 'accepted') {
         expect(result.attempt.contextProvenance.providerModel).toBe('glm-4.7');
+        expect(result.attempt.reasons.map(reason => reason.reasonMessage)).toEqual(expect.arrayContaining([
+          expect.stringContaining('Model attempt glm-5.1 failed:'),
+          expect.stringContaining('Model attempt mimo-v2.5-pro failed:'),
+          expect.stringContaining('Model attempt glm-5 failed:'),
+        ]));
       }
     });
 

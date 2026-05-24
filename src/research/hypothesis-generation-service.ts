@@ -202,6 +202,7 @@ export class HypothesisGenerationService {
       ...contextProvenance,
       providerModel: rawOutput.providerModel ?? contextProvenance.providerModel,
     };
+    const modelAttemptFailureReasons = this._buildModelAttemptFailureReasons(rawOutput.modelAttempts);
 
     // ── Cap raw output for durable storage — compute SHA-256 hash on     ──
     //     the full body BEFORE truncating, then cap and derive preview.    ──
@@ -248,6 +249,7 @@ export class HypothesisGenerationService {
           reasonCode: GenerationReasonCode.EmptyResponse,
           reasonMessage: 'Provider returned empty or null response.',
         },
+        ...modelAttemptFailureReasons,
       ];
 
       const attempt = this._persistAttempt({
@@ -279,6 +281,7 @@ export class HypothesisGenerationService {
           reasonCode: GenerationReasonCode.MalformedResponse,
           reasonMessage: 'Provider returned output that is not valid JSON.',
         },
+        ...modelAttemptFailureReasons,
       ];
 
       const attempt = this._persistAttempt({
@@ -308,6 +311,7 @@ export class HypothesisGenerationService {
           reasonMessage: 'Provider returned valid JSON that is not a valid hypothesis graph shape. '
             + 'Expected object with schemaVersion, signals, filters, entryRules, exitRules, riskRules arrays.',
         },
+        ...modelAttemptFailureReasons,
       ];
 
       const attempt = this._persistAttempt({
@@ -345,6 +349,7 @@ export class HypothesisGenerationService {
           reasonCode: GenerationReasonCode.NonGraphResponse,
           reasonMessage: 'Provider returned a hypothesis graph that could not be canonicalized.',
         },
+        ...modelAttemptFailureReasons,
       ];
 
       const attempt = this._persistAttempt({
@@ -385,7 +390,7 @@ export class HypothesisGenerationService {
         hypothesisGraphId: null,
         hypothesisEvaluationId: null,
         createdAt: now,
-      }, [reason]);
+      }, [...modelAttemptFailureReasons, reason]);
 
       return {
         kind: 'skipped',
@@ -401,10 +406,13 @@ export class HypothesisGenerationService {
     switch (validationResult.kind) {
       case 'rejected': {
         // Graph failed structural validation
-        const reasons: GenerationReason[] = validationResult.reasons.map(r => ({
-          reasonCode: GenerationReasonCode.NonGraphResponse,
-          reasonMessage: `Hypothesis validation failed: ${r.reasonMessage}`,
-        }));
+        const reasons: GenerationReason[] = [
+          ...validationResult.reasons.map(r => ({
+            reasonCode: GenerationReasonCode.NonGraphResponse,
+            reasonMessage: `Hypothesis validation failed: ${r.reasonMessage}`,
+          })),
+          ...modelAttemptFailureReasons,
+        ];
 
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Rejected,
@@ -427,10 +435,13 @@ export class HypothesisGenerationService {
 
       case 'skipped': {
         // Exact-failure match — duplicate of a prior failed/rejected hypothesis
-        const reasons: GenerationReason[] = validationResult.reasons.map(r => ({
-          reasonCode: GenerationReasonCode.DuplicateSkipped,
-          reasonMessage: `Exact failure match: ${r.reasonMessage}`,
-        }));
+        const reasons: GenerationReason[] = [
+          ...validationResult.reasons.map(r => ({
+            reasonCode: GenerationReasonCode.DuplicateSkipped,
+            reasonMessage: `Exact failure match: ${r.reasonMessage}`,
+          })),
+          ...modelAttemptFailureReasons,
+        ];
 
         const attempt = this._persistAttempt({
           verdict: GenerationVerdict.Skipped,
@@ -466,7 +477,7 @@ export class HypothesisGenerationService {
           hypothesisGraphId: persistResult ?? null,
           hypothesisEvaluationId: null,
           createdAt: now,
-        }, []);
+        }, modelAttemptFailureReasons);
 
         // Update linkage if we have a hypothesis graph id
         if (persistResult != null) {
@@ -865,6 +876,17 @@ export class HypothesisGenerationService {
         },
       },
     };
+  }
+
+  private _buildModelAttemptFailureReasons(
+    modelAttempts: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }>,
+  ): GenerationReason[] {
+    return modelAttempts
+      .filter((attempt) => attempt.status === 'failed')
+      .map((attempt) => ({
+        reasonCode: GenerationReasonCode.ProviderError,
+        reasonMessage: `Model attempt ${attempt.model} failed: ${attempt.detail}`,
+      }));
   }
 
   // -----------------------------------------------------------------------
