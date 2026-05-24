@@ -359,22 +359,30 @@ function runRealPublishPhase(
   dbManager: DatabaseManager,
   orchestrator: OvernightOrchestrator,
   runId: number,
-): { evaluationId: number | null; verdict: 'publish' | 'hold' } {
+): { evaluationId: number | null; verdict: 'publish' | 'hold'; rationale: string } {
   const db = dbManager.db;
   const hypothesisRepo = new HypothesisRepository(db);
+
+  orchestrator.markPhase(runId, 'publish');
 
   const completedEvaluations = hypothesisRepo
     .getRecentEvaluations(200)
     .filter(e => e.status === HypothesisEvaluationStatus.Completed);
 
   if (completedEvaluations.length === 0) {
-    return { evaluationId: null, verdict: 'hold' };
+    const rationale = 'No completed hypothesis evaluations found for publish-back. Generation accepted zero hypotheses or evaluation produced zero completed results.';
+    orchestrator.recordPhaseResult(runId, {
+      phase: 'publish',
+      recordedAt: Date.now(),
+      evaluationId: null,
+      evaluationStatus: null,
+      detail: rationale,
+    });
+    return { evaluationId: null, verdict: 'hold', rationale };
   }
 
   // Pick the most recent completed evaluation
   const bestEvaluation = completedEvaluations[0];
-
-  orchestrator.markPhase(runId, 'publish');
 
   const service = new ResearchPublishBackService({ db, hypothesisRepo });
   const result = service.publish(bestEvaluation.id, { dryRun: false });
@@ -396,7 +404,7 @@ function runRealPublishPhase(
   });
   orchestrator.markPhaseCompleted(runId, 'publish', result.rationale);
 
-  return { evaluationId: bestEvaluation.id, verdict: result.verdict };
+  return { evaluationId: bestEvaluation.id, verdict: result.verdict, rationale: result.rationale };
 }
 
 function simulatePublishPhase(dbm: DatabaseManager) {
@@ -655,7 +663,7 @@ async function main(): Promise<void> {
           orchestrator.markCompleted(run.id);
           run = orchestrator.getRun(run.id) ?? run;
         } else {
-          orchestrator.markFailed(run.id, 'Publish phase returned hold — no strategy promoted.');
+          orchestrator.markFailed(run.id, publication.rationale);
           run = orchestrator.getRun(run.id) ?? run;
         }
       }

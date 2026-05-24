@@ -262,7 +262,7 @@ export class HypothesisGenerationService {
     // ── 5. Parse JSON ─────────────────────────────────────────────────
     let parsed: unknown;
     try {
-      parsed = JSON.parse(rawOutputStr);
+      parsed = JSON.parse(normalizeJsonLikeText(rawOutputStr));
     } catch {
       const reasons: GenerationReason[] = [
         {
@@ -642,13 +642,18 @@ export class HypothesisGenerationService {
 
       const responseText = await response.text();
       const outer = JSON.parse(responseText) as {
-        choices?: Array<{ message?: { content?: unknown } }>;
+        choices?: Array<{
+          message?: {
+            content?: unknown;
+            reasoning_content?: unknown;
+            reasoning?: unknown;
+          };
+        }>;
       };
 
-      const content = outer.choices?.[0]?.message?.content;
-      const contentText = extractAssistantContent(content);
+      const contentText = extractAssistantMessageText(outer.choices?.[0]?.message);
       if (!contentText) {
-        throw new Error('OpenAI-compatible response missing choices[0].message.content');
+        throw new Error('OpenAI-compatible response missing assistant content in choices[0].message.content or reasoning fields');
       }
 
       return contentText;
@@ -935,4 +940,36 @@ function extractAssistantContent(content: unknown): string | null {
   }
 
   return null;
+}
+
+function extractAssistantMessageText(message: unknown): string | null {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  const contentText = extractAssistantContent((message as { content?: unknown }).content);
+  if (contentText) {
+    return contentText;
+  }
+
+  const reasoningText = extractAssistantContent((message as { reasoning_content?: unknown }).reasoning_content);
+  if (reasoningText) {
+    return reasoningText;
+  }
+
+  const alternateReasoningText = extractAssistantContent((message as { reasoning?: unknown }).reasoning);
+  if (alternateReasoningText) {
+    return alternateReasoningText;
+  }
+
+  return null;
+}
+
+function normalizeJsonLikeText(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1]) {
+    return fenced[1].trim();
+  }
+  return trimmed;
 }

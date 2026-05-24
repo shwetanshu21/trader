@@ -72,6 +72,12 @@ const TEST_CONFIG: ProposalEngineConfig = {
   maxProposalsPerTick: 5,
 };
 
+const TEST_OPENAI_CONFIG: ProposalEngineConfig = {
+  ...TEST_CONFIG,
+  providerMode: 'openai-compatible',
+  providerModel: 'glm-test',
+};
+
 /**
  * Create a test context with all repositories and the generation service.
  * Uses a mock fetch by default.
@@ -81,6 +87,7 @@ function createContext(options?: {
   evaluator?: any;
   strategyRunRepo?: StrategyRunRepository;
   validator?: HypothesisValidator;
+  config?: ProposalEngineConfig;
 }): {
   dbManager: DatabaseManager;
   hypothesisRepo: HypothesisRepository;
@@ -99,7 +106,7 @@ function createContext(options?: {
 
   const service = new HypothesisGenerationService({
     db: dbManager.db,
-    config: TEST_CONFIG,
+    config: options?.config ?? TEST_CONFIG,
     hypothesisRepo,
     generationRepo,
     memoryRepo,
@@ -234,6 +241,50 @@ describe('HypothesisGenerationService', () => {
           r => r.reasonCode === GenerationReasonCode.MalformedResponse,
         );
         expect(hasMalformedCode).toBe(true);
+      }
+    });
+
+    it('should accept OpenAI-compatible reasoning_content when message.content is missing', async () => {
+      const ctx = createContext({ config: TEST_OPENAI_CONFIG });
+      mockFetchResponse(JSON.stringify({
+        choices: [
+          {
+            message: {
+              reasoning_content: JSON.stringify(validGraph()),
+            },
+          },
+        ],
+      }));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(result.hypothesis).toBeTruthy();
+      }
+    });
+
+    it('should parse OpenAI-compatible fenced JSON assistant content', async () => {
+      const ctx = createContext({ config: TEST_OPENAI_CONFIG });
+      mockFetchResponse(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: "```json\n" + JSON.stringify(validGraph(), null, 2) + "\n```",
+            },
+          },
+        ],
+      }));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(result.hypothesis).toBeTruthy();
       }
     });
 
