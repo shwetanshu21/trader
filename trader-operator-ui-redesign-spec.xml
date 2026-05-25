@@ -1,0 +1,900 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<uiSpec id="trader-operator-console-redesign" version="1.0" date="2026-05-25">
+  <metadata>
+    <projectName>Trader</projectName>
+    <targetApp>Autonomous algorithmic trading operator console for Indian equity markets</targetApp>
+    <primaryAudience>
+      <audience>Human operator supervising paper/live trading</audience>
+      <audience>Developer reviewing autonomous decisions and governance evidence</audience>
+      <audience>Risk reviewer reconstructing what happened after a session</audience>
+    </primaryAudience>
+    <mission>
+      Redesign the existing server-rendered operator console into a professional, explainable trading control room.
+      The UI must answer three questions immediately: what is happening, why did the system do it, and what evidence supports it.
+    </mission>
+  </metadata>
+
+  <codexDirective priority="highest">
+    <instruction>Use this XML as the product and UX specification for implementing the new UI.</instruction>
+    <instruction>Preserve the current architecture: Node.js native http servers, TypeScript SSR HTML strings, no SPA, no client-side router, no React/Vue/Svelte, and no frontend bundler.</instruction>
+    <instruction>Work inside the existing src/operator-ui area unless a small read-model addition is required.</instruction>
+    <instruction>Use existing read models and database evidence wherever possible. Do not invent trade reasons, promotion reasons, PnL, confidence, or strategy outcomes.</instruction>
+    <instruction>When evidence is unavailable, render an explicit missing-evidence state with the exact field or table needed.</instruction>
+    <instruction>All dynamic HTML must still be server-rendered and delivered through existing routes or /api/refresh fragments.</instruction>
+    <instruction>Escape all user, model, broker, and database-provided text before rendering.</instruction>
+  </codexDirective>
+
+  <problemStatement>
+    <currentState>
+      <item>The operator console exists and has dashboard, positions, strategies, decisions, governance, health, and detail pages.</item>
+      <item>The UI is functional but not sufficiently explanatory for a high-stakes autonomous trading system.</item>
+      <item>Operators cannot quickly understand what trades were made, why they were made, why a strategy was promoted, why a strategy won, or why another strategy lost.</item>
+      <item>Evidence exists across strategy_decisions, execution_attempts, paper_orders, paper_fills, paper_positions, risk_events, strategy_lifecycle_state, governance_decisions, strategy_runs, walk_forward_runs, walk_forward_windows, walk_forward_trials, research_artifacts, and related tables.</item>
+    </currentState>
+    <desiredState>
+      <item>Every important trading and governance action has a plain-English narrative, a timeline, and supporting evidence.</item>
+      <item>The dashboard shows market mode, execution mode, broker status, risk posture, active positions, recent trades, promoted strategies, blocked actions, and open operator concerns.</item>
+      <item>Decision detail pages reconstruct the full chain from proposal to validation to risk gate to execution to fill to outcome.</item>
+      <item>Strategy pages explain the strategy thesis, current lifecycle state, performance evidence, promotion or demotion criteria, and competitor comparison.</item>
+      <item>Governance pages show why strategies moved between backtest, paper, and live phases.</item>
+      <item>The design looks professional, dense enough for operators, but not cryptic.</item>
+    </desiredState>
+  </problemStatement>
+
+  <nonGoals>
+    <nonGoal>Do not redesign the trading algorithms or broker integration.</nonGoal>
+    <nonGoal>Do not add live execution actions beyond existing safe actions.</nonGoal>
+    <nonGoal>Do not convert the app into an SPA.</nonGoal>
+    <nonGoal>Do not add a heavy CSS framework unless the repository already uses one.</nonGoal>
+    <nonGoal>Do not create promotional trading advice language. Use operational and evidentiary language.</nonGoal>
+  </nonGoals>
+
+  <architectureConstraints>
+    <constraint id="runtime">Node.js 22 or newer, TypeScript strict, ES2022, NodeNext.</constraint>
+    <constraint id="server">Native http.createServer only. No Express/Fastify unless already present and approved elsewhere.</constraint>
+    <constraint id="rendering">Server-rendered HTML string templates in src/operator-ui.</constraint>
+    <constraint id="styles">Use shared CSS in render-utils.ts or a small operator-ui style helper. Keep CSS variables and responsive breakpoints.</constraint>
+    <constraint id="interactivity">Use progressive enhancement only: server-side polling through /api/refresh and fragment replacement. No mandatory JS framework.</constraint>
+    <constraint id="auth">Respect existing HTTP Basic Auth, rate limiting, and lockout behavior.</constraint>
+    <constraint id="data">Prefer existing DashboardReadModel, OperatorReadModel, and detail read models. Add read-model fields only when required for explainability.</constraint>
+    <constraint id="safety">Show execution mode and risk guard state on every page.</constraint>
+  </architectureConstraints>
+
+  <userExperiencePrinciples>
+    <principle id="explainabilityFirst">Every trade, block, promotion, demotion, and winner selection must have a visible reason and evidence trail.</principle>
+    <principle id="operatorScanability">The top of each page must communicate current risk, market status, and whether the operator needs to act.</principle>
+    <principle id="auditBeforeAesthetics">Visual polish must never hide IDs, timestamps, rule names, or source evidence.</principle>
+    <principle id="confidenceNotCertainty">Use words like evidence, score, passed, failed, and threshold. Avoid claiming certainty.</principle>
+    <principle id="progressiveDisclosure">Show a concise summary first, then expandable evidence details, raw IDs, and source records.</principle>
+    <principle id="professionalTone">Use calm, concise, institutional language. Avoid hype, emojis, and informal phrasing.</principle>
+    <principle id="zeroAmbiguity">A blocked trade must look different from a paper trade and a live trade. A promoted strategy must look different from a candidate.</principle>
+  </userExperiencePrinciples>
+
+  <informationArchitecture>
+    <nav type="persistentSidebar">
+      <navItem id="overview" label="Overview" route="/" purpose="Command-center snapshot of current trading, risk, performance, research, and open issues." />
+      <navItem id="trades" label="Trades &amp; Decisions" route="/decisions" purpose="Decision inbox with explanation-first summaries and filters." />
+      <navItem id="positions" label="Positions" route="/positions" purpose="Open exposure, PnL, risk concentration, and why each position exists." />
+      <navItem id="strategies" label="Strategies" route="/strategies" purpose="Strategy leaderboard, lifecycle state, winner/loser reasoning, and performance evidence." />
+      <navItem id="governance" label="Governance" route="/governance" purpose="Promotion, demotion, threshold checks, and approval history." />
+      <navItem id="research" label="Research" route="/research" optional="true" purpose="Overnight hypotheses, artifacts, lineage, and candidate funnel. If no route exists, expose as a dashboard section first." />
+      <navItem id="systemHealth" label="System Health" route="/system-health" purpose="Broker, DB, auth, scheduler, token, and subsystem diagnostics." />
+    </nav>
+    <globalHeader>
+      <element>Product name: Trader Operator Console</element>
+      <element>Environment badge: blocked, paper, or live</element>
+      <element>Market phase badge: PreMarket, Regular, PostMarket, Closed</element>
+      <element>Broker connection status</element>
+      <element>Risk guard status and kill-switch state</element>
+      <element>Last scheduler tick timestamp</element>
+      <element>Last UI refresh timestamp</element>
+    </globalHeader>
+    <pageHierarchy>
+      <level name="L1">What is the system doing now?</level>
+      <level name="L2">Why did it decide that?</level>
+      <level name="L3">What evidence supports or contradicts it?</level>
+      <level name="L4">What changed since the previous decision or strategy run?</level>
+    </pageHierarchy>
+  </informationArchitecture>
+
+  <designSystem>
+    <visualDirection>
+      <style>Professional dark operations console</style>
+      <density>Medium-high information density with strong section hierarchy</density>
+      <mood>Calm, precise, trustworthy, audit-ready</mood>
+      <avoid>Neon gamer styling, oversized empty cards, hidden raw evidence, ambiguous colors</avoid>
+    </visualDirection>
+    <tokens>
+      <color name="canvas" value="#080B12" usage="Page background" />
+      <color name="panel" value="#101624" usage="Primary card and panel background" />
+      <color name="panelRaised" value="#151D2E" usage="Elevated cards and focused sections" />
+      <color name="border" value="#263246" usage="Subtle structural borders" />
+      <color name="textPrimary" value="#E7ECF5" usage="Primary text" />
+      <color name="textSecondary" value="#AAB6C8" usage="Secondary text" />
+      <color name="textMuted" value="#6F7E93" usage="Timestamps, IDs, helper text" />
+      <color name="positive" value="#3ED598" usage="Profitable, passed, healthy" />
+      <color name="warning" value="#F6C85F" usage="Degraded, waiting, manual review" />
+      <color name="danger" value="#FF6B6B" usage="Failed, blocked, risk breach, live danger" />
+      <color name="info" value="#6EA8FE" usage="Neutral explanation, selected item, links" />
+      <color name="purple" value="#A78BFA" usage="Research and LLM lineage" />
+      <color name="paper" value="#63E6BE" usage="Paper trading mode" />
+      <color name="live" value="#FF8787" usage="Live trading mode" />
+      <color name="blocked" value="#ADB5BD" usage="Blocked/audit-only mode" />
+      <space name="xs" value="4px" />
+      <space name="sm" value="8px" />
+      <space name="md" value="12px" />
+      <space name="lg" value="16px" />
+      <space name="xl" value="24px" />
+      <radius name="sm" value="8px" />
+      <radius name="md" value="12px" />
+      <radius name="lg" value="18px" />
+      <font name="ui" value="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" />
+      <font name="mono" value="JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, monospace" />
+    </tokens>
+    <cssContract>
+      <![CDATA[
+      :root {
+        --oc-bg: #080B12;
+        --oc-panel: #101624;
+        --oc-panel-raised: #151D2E;
+        --oc-border: #263246;
+        --oc-text: #E7ECF5;
+        --oc-text-2: #AAB6C8;
+        --oc-muted: #6F7E93;
+        --oc-positive: #3ED598;
+        --oc-warning: #F6C85F;
+        --oc-danger: #FF6B6B;
+        --oc-info: #6EA8FE;
+        --oc-purple: #A78BFA;
+        --oc-radius: 14px;
+        --oc-shadow: 0 18px 60px rgba(0,0,0,0.28);
+      }
+      .oc-shell { min-height: 100vh; background: radial-gradient(circle at top left, rgba(110,168,254,0.08), transparent 28rem), var(--oc-bg); color: var(--oc-text); }
+      .oc-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 100vh; }
+      .oc-sidebar { border-right: 1px solid var(--oc-border); background: rgba(16,22,36,0.88); position: sticky; top: 0; height: 100vh; overflow: auto; }
+      .oc-main { min-width: 0; padding: 20px 24px 40px; }
+      .oc-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+      .oc-status-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+      .oc-card { background: linear-gradient(180deg, rgba(21,29,46,0.96), rgba(16,22,36,0.96)); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); box-shadow: var(--oc-shadow); }
+      .oc-card-header { padding: 16px 18px 0; display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+      .oc-card-body { padding: 16px 18px 18px; }
+      .oc-grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+      .oc-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+      .oc-grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+      .oc-kpi { padding: 14px; border: 1px solid var(--oc-border); border-radius: 12px; background: rgba(255,255,255,0.025); }
+      .oc-kpi-label { color: var(--oc-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+      .oc-kpi-value { font-size: 24px; font-weight: 720; margin-top: 6px; }
+      .oc-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; border: 1px solid var(--oc-border); padding: 4px 9px; font-size: 12px; font-weight: 650; white-space: nowrap; }
+      .oc-badge.ok { color: var(--oc-positive); border-color: rgba(62,213,152,0.38); background: rgba(62,213,152,0.08); }
+      .oc-badge.warn { color: var(--oc-warning); border-color: rgba(246,200,95,0.38); background: rgba(246,200,95,0.08); }
+      .oc-badge.danger { color: var(--oc-danger); border-color: rgba(255,107,107,0.38); background: rgba(255,107,107,0.08); }
+      .oc-badge.info { color: var(--oc-info); border-color: rgba(110,168,254,0.38); background: rgba(110,168,254,0.08); }
+      .oc-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+      .oc-table th { color: var(--oc-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--oc-border); }
+      .oc-table td { padding: 12px; border-bottom: 1px solid rgba(38,50,70,0.72); vertical-align: top; }
+      .oc-link { color: var(--oc-info); text-decoration: none; }
+      .oc-link:hover { text-decoration: underline; }
+      .oc-timeline { position: relative; display: grid; gap: 12px; }
+      .oc-timeline-item { display: grid; grid-template-columns: 120px minmax(0,1fr); gap: 14px; padding: 12px; border: 1px solid var(--oc-border); border-radius: 12px; background: rgba(255,255,255,0.022); }
+      .oc-evidence-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+      .oc-evidence-item { display: grid; grid-template-columns: 160px minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.024); border: 1px solid rgba(38,50,70,0.65); }
+      .oc-reason { line-height: 1.55; color: var(--oc-text-2); }
+      .oc-reason strong { color: var(--oc-text); }
+      .oc-empty { padding: 18px; border: 1px dashed rgba(170,182,200,0.3); border-radius: 12px; color: var(--oc-muted); }
+      .oc-code { font-family: var(--oc-mono, monospace); color: var(--oc-text-2); font-size: 12px; }
+      @media (max-width: 1100px) { .oc-layout { grid-template-columns: 1fr; } .oc-sidebar { position: static; height: auto; } .oc-status-strip, .oc-grid-3, .oc-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 720px) { .oc-main { padding: 14px; } .oc-status-strip, .oc-grid-2, .oc-grid-3, .oc-grid-4 { grid-template-columns: 1fr; } .oc-timeline-item { grid-template-columns: 1fr; } .oc-evidence-item { grid-template-columns: 1fr; } }
+      ]]>
+    </cssContract>
+  </designSystem>
+
+  <globalComponents>
+    <component id="OperatorStatusStrip" priority="must">
+      <purpose>Always-visible operational truth bar.</purpose>
+      <fields>
+        <field name="marketPhase" source="scheduler_state or dashboard payload" render="badge" />
+        <field name="executionMode" source="execution config" render="badge: blocked/paper/live" />
+        <field name="riskGuard" source="execution_risk_state" render="ok/warn/danger" />
+        <field name="broker" source="broker health" render="connected/degraded/disconnected" />
+        <field name="openPositions" source="paper_positions or live position read model" render="count and exposure" />
+        <field name="lastTick" source="scheduler_state" render="relative time plus exact timestamp" />
+      </fields>
+      <emptyState>Show Unknown and a missing-evidence note. Do not hide the strip.</emptyState>
+    </component>
+
+    <component id="WhyNarrativeCard" priority="must">
+      <purpose>Plain-English explanation for a trade, block, promotion, demotion, or winner selection.</purpose>
+      <structure>
+        <element name="title" example="Why this BUY order was placed" />
+        <element name="summarySentence" example="The system placed a paper BUY for RELIANCE because Strategy v3 generated a validated long proposal, exposure stayed below the configured cap, and no duplicate order was detected." />
+        <element name="reasonBullets" min="2" max="6" />
+        <element name="evidencePills" examples="Validator passed, Risk allowed, Paper fill recorded, Stop-loss attached" />
+        <element name="sourceLinks" examples="Decision ID, execution attempt ID, paper order ID, fill ID, strategy run ID" />
+      </structure>
+      <rules>
+        <rule>Use because language only when source evidence exists.</rule>
+        <rule>If source evidence is missing, say Evidence not captured yet rather than guessing.</rule>
+        <rule>For failed or blocked decisions, title must start with Why this was blocked or Why this was not executed.</rule>
+      </rules>
+    </component>
+
+    <component id="EvidenceChecklist" priority="must">
+      <purpose>Show pass/fail/warn status for validation, risk, governance, and promotion criteria.</purpose>
+      <fields>
+        <field name="criterion" />
+        <field name="result" values="pass, fail, warn, missing" />
+        <field name="observedValue" />
+        <field name="threshold" />
+        <field name="source" />
+      </fields>
+      <rendering>
+        <item>Pass rows use green badge and should not dominate the page.</item>
+        <item>Fail rows use red badge and appear first in failure contexts.</item>
+        <item>Missing rows use muted warning styling with implementation hint.</item>
+      </rendering>
+    </component>
+
+    <component id="DecisionTimeline" priority="must">
+      <purpose>Reconstruct proposal to outcome in chronological order.</purpose>
+      <steps>
+        <step id="proposal" label="Proposal generated" source="proposal_attempts" />
+        <step id="validation" label="Domain validation" source="proposal validation payload or blocked_order_attempts" />
+        <step id="strategyRisk" label="Strategy risk review" source="strategy_decisions and risk events" />
+        <step id="executionGate" label="Execution gate" source="execution_attempts and execution_risk_state" />
+        <step id="order" label="Order created" source="paper_orders or broker order id" />
+        <step id="fill" label="Fill recorded" source="paper_fills or broker fill id" />
+        <step id="position" label="Position updated" source="paper_positions and position_events" />
+        <step id="outcome" label="Outcome observed" source="realized/unrealized PnL and latest quote" />
+      </steps>
+      <emptyState>Render missing steps as Not reached or Evidence not captured.</emptyState>
+    </component>
+
+    <component id="StrategyScorecard" priority="must">
+      <purpose>Explain why a strategy is winning, losing, promoted, demoted, or held.</purpose>
+      <fields>
+        <field name="strategyId" />
+        <field name="strategyVersion" />
+        <field name="lifecycleState" />
+        <field name="thesis" source="research artifacts or strategy metadata" />
+        <field name="performance" examples="Sharpe, drawdown, win rate, total return, window count, replay fidelity" />
+        <field name="risk" examples="max drawdown, exposure, concentration, blocked orders, loss-limit proximity" />
+        <field name="governanceReason" source="governance_decisions" />
+        <field name="nextRequiredEvidence" />
+      </fields>
+    </component>
+
+    <component id="WinnerLoserComparison" priority="must">
+      <purpose>Show why a strategy won versus other candidates and why losing strategies lost.</purpose>
+      <columns>
+        <column name="strategy" />
+        <column name="rank" />
+        <column name="decision" values="winner, runner-up, rejected, demoted, held" />
+        <column name="primaryReason" />
+        <column name="sharpe" />
+        <column name="drawdown" />
+        <column name="windowConsistency" />
+        <column name="replayFidelity" />
+        <column name="failureReason" />
+        <column name="detailLink" />
+      </columns>
+      <rules>
+        <rule>Sort winners first, then active candidates, then rejected candidates.</rule>
+        <rule>For losers, show the first decisive failing criterion and at least one supporting metric.</rule>
+        <rule>Do not label a strategy loser only because it ranked lower; explain the exact metric or gate that caused rejection.</rule>
+      </rules>
+    </component>
+
+    <component id="RiskPosturePanel" priority="must">
+      <purpose>Make safety state visible before performance.</purpose>
+      <fields>
+        <field name="killSwitch" />
+        <field name="dailyPnL" />
+        <field name="dailyLossLimit" />
+        <field name="openExposure" />
+        <field name="maxExposure" />
+        <field name="openPositions" />
+        <field name="maxOpenPositions" />
+        <field name="duplicateOrderGuard" />
+        <field name="recentRiskEvents" />
+      </fields>
+    </component>
+
+    <component id="MissingEvidenceCallout" priority="must">
+      <purpose>Prevent false confidence when a reason cannot be reconstructed.</purpose>
+      <copy>
+        Evidence not captured for this step. Add this field to the read model or link the relevant source record before rendering a narrative.
+      </copy>
+      <fields>
+        <field name="missingField" />
+        <field name="suggestedSourceTable" />
+        <field name="recordId" />
+      </fields>
+    </component>
+  </globalComponents>
+
+  <pages>
+    <page id="overview" route="/" title="Overview" priority="must">
+      <goal>Give the operator a complete answer to what is happening now and what needs attention.</goal>
+      <layout>
+        <section id="hero">
+          <title>Trading Control Room</title>
+          <content>Show current environment, market phase, execution mode, risk posture, broker status, and last tick.</content>
+          <components>OperatorStatusStrip,RiskPosturePanel</components>
+        </section>
+        <section id="todaySummary">
+          <title>Today at a glance</title>
+          <kpis>
+            <kpi>Trades placed</kpi>
+            <kpi>Trades blocked</kpi>
+            <kpi>Open positions</kpi>
+            <kpi>Realized PnL</kpi>
+            <kpi>Unrealized PnL</kpi>
+            <kpi>Strategies promoted or demoted</kpi>
+          </kpis>
+        </section>
+        <section id="recentTradeNarratives">
+          <title>Recent trade decisions</title>
+          <description>Show the last 5 to 10 decisions as explanation cards, not just rows.</description>
+          <cardFields>symbol, side, quantity, mode, status, primary reason, strategy, risk result, execution result, time, detail link</cardFields>
+          <component>WhyNarrativeCard</component>
+        </section>
+        <section id="strategyMovement">
+          <title>Strategy movement</title>
+          <description>Show strategies promoted, demoted, held, or rejected in the latest governance cycle.</description>
+          <component>WinnerLoserComparison</component>
+        </section>
+        <section id="blockedActions">
+          <title>Blocked or degraded actions</title>
+          <description>Surface blocked orders, failed token refresh, risk breaches, stale data, or missing evidence.</description>
+          <priority>High visibility when non-empty. Collapse when empty.</priority>
+        </section>
+        <section id="researchFunnel">
+          <title>Overnight research funnel</title>
+          <description>Hypotheses generated, deduplicated, rejected, evaluated, selected, and published.</description>
+          <fields>hypothesesGenerated, duplicatesRejected, validationFailures, walkForwardRuns, selectedWinner, publicationStatus</fields>
+        </section>
+      </layout>
+      <acceptance>
+        <criterion>Operator can identify execution mode and risk state without scrolling.</criterion>
+        <criterion>At least the latest 5 decisions include plain-English why summaries or missing-evidence callouts.</criterion>
+        <criterion>Promotions and demotions include threshold evidence.</criterion>
+      </acceptance>
+    </page>
+
+    <page id="decisions" route="/decisions" title="Trades &amp; Decisions" priority="must">
+      <goal>Turn the existing recent decisions table into a decision inbox with filters and explanations.</goal>
+      <filters>
+        <filter name="dateRange" default="today" />
+        <filter name="symbol" />
+        <filter name="side" values="BUY,SELL" />
+        <filter name="status" values="proposed,validated,blocked,paper_filled,live_sent,failed" />
+        <filter name="strategy" />
+        <filter name="executionMode" values="blocked,paper,live" />
+        <filter name="riskResult" values="allowed,blocked,warn,missing" />
+      </filters>
+      <listItem>
+        <primaryLine>{time} {side} {symbol} by {strategyId}:{version}</primaryLine>
+        <secondaryLine>{plainEnglishReason}</secondaryLine>
+        <badges>mode,status,risk,validator,fill</badges>
+        <metrics>quantity,estimatedNotional,fillPrice,realizedPnL,unrealizedPnL</metrics>
+        <links>decision detail, strategy detail, backtest run</links>
+      </listItem>
+      <emptyState>No decisions match the current filters.</emptyState>
+      <acceptance>
+        <criterion>Blocked decisions are visually distinct from executed decisions.</criterion>
+        <criterion>Rows include reasons without opening the detail page.</criterion>
+        <criterion>Each row links to /decision?id={id}.</criterion>
+      </acceptance>
+    </page>
+
+    <page id="decisionDetail" route="/decision?id={id}" title="Decision Detail" priority="must">
+      <goal>Provide forensic reconstruction of one autonomous trade decision.</goal>
+      <sections>
+        <section id="summary" component="WhyNarrativeCard">
+          <title>Why this decision happened</title>
+          <requiredData>decision id, symbol, side, strategy id, strategy version, validator result, risk result, execution result, order or blocked reason</requiredData>
+        </section>
+        <section id="timeline" component="DecisionTimeline">
+          <title>Decision timeline</title>
+          <requiredData>timestamps and source record ids for proposal, validation, risk, execution, fill, position, outcome</requiredData>
+        </section>
+        <section id="strategyContext">
+          <title>Strategy context</title>
+          <fields>strategy thesis, lifecycle state, current rank, latest walk-forward evidence, governance state, link to strategy page</fields>
+        </section>
+        <section id="marketContext">
+          <title>Market context at decision time</title>
+          <fields>quote, spread if available, price movement, market phase, instrument, liquidity proxy, data freshness</fields>
+          <fallback>If not available, show missing evidence and suggested source zerodha_latest_quotes or broker quote snapshot.</fallback>
+        </section>
+        <section id="validationEvidence" component="EvidenceChecklist">
+          <title>Validation and risk checks</title>
+          <requiredChecks>IndiaProposalValidator result, duplicate order guard, exposure cap, max open positions, daily loss limit, kill switch, mode gate</requiredChecks>
+        </section>
+        <section id="executionEvidence">
+          <title>Execution evidence</title>
+          <fields>mode, order id, broker order id if live, paper order id, fill id, fill price, slippage estimate, stop-loss, trailing-stop, error message</fields>
+        </section>
+        <section id="outcome">
+          <title>Outcome so far</title>
+          <fields>position status, realized PnL, unrealized PnL, latest quote, stop-loss state, position events</fields>
+        </section>
+        <section id="rawEvidence">
+          <title>Raw evidence</title>
+          <fields>source table names, record IDs, JSON payload excerpts with safe escaping, created_at timestamps</fields>
+          <rendering>Use collapsed details blocks by default.</rendering>
+        </section>
+      </sections>
+      <copyTemplates>
+        <template id="executedPaperBuy">Paper BUY executed because {strategy} generated a validated long proposal for {symbol}, risk checks passed, and the paper execution gate accepted the order.</template>
+        <template id="blockedRisk">Order was blocked because {riskRule} failed: observed {observedValue}, allowed {threshold}.</template>
+        <template id="blockedMode">Order was not sent to market because execution mode is blocked. The decision was recorded for audit only.</template>
+        <template id="failedValidation">Proposal failed validation because {validatorReason}. No execution attempt should be made.</template>
+        <template id="missingReason">The system recorded the decision, but the reason cannot be reconstructed from the current read model.</template>
+      </copyTemplates>
+    </page>
+
+    <page id="positions" route="/positions" title="Positions" priority="must">
+      <goal>Explain current exposure and why each position exists.</goal>
+      <sections>
+        <section id="exposureSummary" component="RiskPosturePanel" />
+        <section id="openPositions">
+          <title>Open positions</title>
+          <columns>symbol, quantity, avg cost, latest price, unrealized PnL, exposure, stop-loss, trailing-stop, age, strategy, why open, risk state, detail links</columns>
+          <rowNarrative>{symbol} remains open because {strategy} opened it on {date}; current PnL is {pnl}; stop-loss is {stop}; latest risk event is {riskEvent}.</rowNarrative>
+        </section>
+        <section id="positionTimeline">
+          <title>Position event timeline</title>
+          <description>For selected or recent positions, show fills, stop updates, partial exits, and risk events.</description>
+        </section>
+        <section id="concentration">
+          <title>Concentration and limits</title>
+          <fields>top symbol exposure, sector if available, strategy exposure, max exposure, daily PnL limit utilization</fields>
+        </section>
+      </sections>
+      <acceptance>
+        <criterion>Every open position links back to the decision that created or modified it.</criterion>
+        <criterion>Positions with missing origin decision show a MissingEvidenceCallout.</criterion>
+      </acceptance>
+    </page>
+
+    <page id="strategies" route="/strategies" title="Strategies" priority="must">
+      <goal>Make strategy quality and lifecycle state understandable without reading raw metrics.</goal>
+      <sections>
+        <section id="strategyOverview">
+          <title>Strategy leaderboard</title>
+          <description>Rank active and candidate strategies by latest governance score or walk-forward result.</description>
+          <component>WinnerLoserComparison</component>
+        </section>
+        <section id="activeStrategies">
+          <title>Active strategies</title>
+          <cardFields>strategy id, version, lifecycle state, thesis, promoted because, last decision, paper/live PnL, risk notes, detail link</cardFields>
+        </section>
+        <section id="candidateStrategies">
+          <title>Candidate strategies</title>
+          <cardFields>rank, candidate thesis, backtest score, walk-forward status, failed criteria, next required evidence</cardFields>
+        </section>
+        <section id="losersAndRejected">
+          <title>Why strategies lost</title>
+          <description>List rejected/demoted strategies with decisive failure criteria and comparison to the winner.</description>
+          <fields>strategy, failed threshold, observed value, winner value, governance reason, run id</fields>
+        </section>
+      </sections>
+      <acceptance>
+        <criterion>The winning strategy has an explicit primary reason and threshold evidence.</criterion>
+        <criterion>Each losing strategy has a specific failure reason.</criterion>
+      </acceptance>
+    </page>
+
+    <page id="strategyDetail" route="/strategy?strategyId={id}&amp;strategyVersion={v}" title="Strategy Detail" priority="must">
+      <goal>Explain one strategy like an investment committee memo, backed by audit evidence.</goal>
+      <sections>
+        <section id="strategyHeader" component="StrategyScorecard">
+          <title>{strategyId} v{strategyVersion}</title>
+          <fields>lifecycle state, thesis, current rank, latest governance action, promoted/demoted/held reason</fields>
+        </section>
+        <section id="promotionReason" component="EvidenceChecklist">
+          <title>Promotion criteria</title>
+          <checks>Sharpe threshold, drawdown threshold, window count threshold, replay fidelity threshold, validation status, paper performance if applicable, risk event count</checks>
+          <copy>Promoted because all required criteria passed. Held because at least one criterion is missing or below threshold. Demoted because a hard safety or performance criterion failed.</copy>
+        </section>
+        <section id="performanceTrend">
+          <title>Performance over time</title>
+          <description>Use compact server-rendered tables or SVG sparklines if existing data supports it.</description>
+          <fields>returns by window, drawdown by window, rank by run, PnL by period</fields>
+        </section>
+        <section id="tradeAttribution">
+          <title>Trades made by this strategy</title>
+          <fields>decision, symbol, side, reason, execution status, PnL, link</fields>
+        </section>
+        <section id="researchLineage">
+          <title>Research lineage</title>
+          <fields>hypothesis id, generation attempt, artifact links, publication status, dedupe status, failure memory if rejected</fields>
+        </section>
+        <section id="rawRuns">
+          <title>Backtests and walk-forward runs</title>
+          <fields>run id, trial id, window count, metrics, selected winner flag, link to /backtest</fields>
+        </section>
+      </sections>
+    </page>
+
+    <page id="governance" route="/governance" title="Governance" priority="must">
+      <goal>Show why strategies moved through backtest, paper, and live lifecycle states.</goal>
+      <sections>
+        <section id="latestGovernanceCycle">
+          <title>Latest governance cycle</title>
+          <fields>cycle time, selected winner, promoted strategies, demoted strategies, held strategies, rejected strategies, operator-impact summary</fields>
+        </section>
+        <section id="promotionBoard" component="WinnerLoserComparison">
+          <title>Promotion board</title>
+          <description>Compare candidates side by side with pass/fail evidence.</description>
+        </section>
+        <section id="lifecycleTimeline">
+          <title>Lifecycle timeline</title>
+          <fields>strategy, previous state, new state, reason, triggering run, metrics, timestamp</fields>
+        </section>
+        <section id="thresholdMatrix" component="EvidenceChecklist">
+          <title>Governance thresholds</title>
+          <description>Show required thresholds and observed values for selected cycle.</description>
+        </section>
+      </sections>
+      <copyTemplates>
+        <template id="promoted">Promoted from {fromState} to {toState} because {passedCount} of {totalCount} required criteria passed, including Sharpe {sharpe} versus threshold {sharpeThreshold} and max drawdown {drawdown} versus limit {drawdownLimit}.</template>
+        <template id="held">Held in {state} because {failedCriterion} did not meet the threshold: observed {observedValue}, required {threshold}.</template>
+        <template id="demoted">Demoted from {fromState} to {toState} because {reason}. This should reduce execution exposure until new evidence is available.</template>
+      </copyTemplates>
+    </page>
+
+    <page id="research" route="/research" title="Research" priority="should">
+      <goal>Make overnight LLM research auditable and understandable.</goal>
+      <implementationNote>If adding a new route is too large, implement these sections on the dashboard first and create the route later.</implementationNote>
+      <sections>
+        <section id="researchFunnel">
+          <title>Hypothesis funnel</title>
+          <steps>generated, validated, duplicate rejected, backtested, walk-forward evaluated, selected, published, promoted</steps>
+        </section>
+        <section id="hypothesisCards">
+          <title>Hypotheses</title>
+          <fields>hypothesis id, thesis, source prompt/run, validation status, duplicate status, exact failure memory match, evaluation status, strategy created</fields>
+        </section>
+        <section id="publishedArtifacts">
+          <title>Research artifacts</title>
+          <fields>artifact id, title, strategy link, publication time, evaluation summary, failure notes</fields>
+        </section>
+      </sections>
+    </page>
+
+    <page id="backtestDetail" route="/backtest?runId={id}" title="Backtest Detail" priority="must">
+      <goal>Explain why a backtest or walk-forward run did or did not support promotion.</goal>
+      <sections>
+        <section id="runSummary">
+          <title>Run summary</title>
+          <fields>run id, strategy, date range, windows, trials, selected winner, score, errors</fields>
+        </section>
+        <section id="windowResults">
+          <title>Walk-forward windows</title>
+          <fields>window, train period, test period, return, Sharpe, drawdown, trade count, pass/fail</fields>
+        </section>
+        <section id="trialComparison" component="WinnerLoserComparison">
+          <title>Trial comparison</title>
+        </section>
+        <section id="promotionImpact">
+          <title>Governance impact</title>
+          <description>Show whether this run caused a promotion, demotion, hold, or no lifecycle change.</description>
+        </section>
+      </sections>
+    </page>
+
+    <page id="systemHealth" route="/system-health" title="System Health" priority="must">
+      <goal>Make runtime health operationally useful, not just technical.</goal>
+      <sections>
+        <section id="healthSummary">
+          <title>Health summary</title>
+          <fields>overall readiness, liveness, scheduler, broker, database, UI auth, Upstox token, MCP, last errors</fields>
+        </section>
+        <section id="brokerToken">
+          <title>Broker token and market data</title>
+          <fields>token status, expiry if available, last refresh, manual refresh action, quote staleness, instrument sync age</fields>
+        </section>
+        <section id="subsystemEvidence">
+          <title>Subsystem evidence</title>
+          <fields>broker supervisor, proposal supervisor, execution supervisor, strategy risk supervisor, universe supervisor, overnight supervisor</fields>
+        </section>
+        <section id="operatorAuth">
+          <title>Operator auth</title>
+          <fields>rate limiting status, lockout threshold, recent auth failures without exposing secrets</fields>
+        </section>
+      </sections>
+      <safety>
+        <rule>Never render tokens, secrets, TOTP seeds, API keys, passwords, or authorization headers.</rule>
+      </safety>
+    </page>
+  </pages>
+
+  <dataContracts>
+    <contract id="TradeDecisionExplanation" priority="must">
+      <description>Canonical shape for rendering trade decision explanation cards and detail pages.</description>
+      <fields>
+        <field name="decisionId" required="true" type="string" />
+        <field name="createdAt" required="true" type="ISO timestamp" />
+        <field name="symbol" required="true" type="string" />
+        <field name="side" required="true" type="BUY|SELL" />
+        <field name="quantity" required="false" type="number" />
+        <field name="strategyId" required="true" type="string" />
+        <field name="strategyVersion" required="false" type="string|number" />
+        <field name="executionMode" required="true" type="blocked|paper|live" />
+        <field name="status" required="true" type="proposed|validated|blocked|paper_filled|live_sent|failed|unknown" />
+        <field name="primaryReason" required="false" type="string" rule="Must be evidence-backed." />
+        <field name="validatorResult" required="false" type="pass|fail|missing" />
+        <field name="validatorReasons" required="false" type="string[]" />
+        <field name="riskResult" required="false" type="allowed|blocked|warn|missing" />
+        <field name="riskReasons" required="false" type="string[]" />
+        <field name="executionResult" required="false" type="sent|paper_filled|blocked|failed|not_reached|missing" />
+        <field name="orderId" required="false" type="string" />
+        <field name="fillId" required="false" type="string" />
+        <field name="fillPrice" required="false" type="number" />
+        <field name="notional" required="false" type="number" />
+        <field name="realizedPnl" required="false" type="number" />
+        <field name="unrealizedPnl" required="false" type="number" />
+        <field name="sourceRecords" required="true" type="SourceRecord[]" />
+        <field name="missingEvidence" required="false" type="MissingEvidence[]" />
+      </fields>
+      <sourceHints>
+        <source table="strategy_decisions" purpose="decision intent and strategy association" />
+        <source table="proposal_attempts" purpose="proposal payload and LLM validation lineage" />
+        <source table="blocked_order_attempts" purpose="blocked proposal/order evidence" />
+        <source table="execution_attempts" purpose="execution gate and broker/paper result" />
+        <source table="paper_orders" purpose="paper order metadata" />
+        <source table="paper_fills" purpose="fill price and quantity" />
+        <source table="paper_positions" purpose="position and PnL state" />
+        <source table="risk_events" purpose="risk guard reason" />
+      </sourceHints>
+    </contract>
+
+    <contract id="StrategyGovernanceExplanation" priority="must">
+      <description>Canonical shape for explaining strategy promotion, demotion, winning, and losing.</description>
+      <fields>
+        <field name="strategyId" required="true" />
+        <field name="strategyVersion" required="true" />
+        <field name="lifecycleState" required="true" />
+        <field name="previousLifecycleState" required="false" />
+        <field name="governanceDecision" required="false" type="promoted|demoted|held|rejected|selected_winner|none" />
+        <field name="primaryReason" required="false" rule="Must come from governance_decisions or derived threshold checklist." />
+        <field name="criteria" required="true" type="CriterionResult[]" />
+        <field name="metrics" required="true" type="StrategyMetrics" />
+        <field name="winnerComparison" required="false" type="ComparisonRow[]" />
+        <field name="researchLineage" required="false" type="ResearchLineage" />
+        <field name="sourceRecords" required="true" type="SourceRecord[]" />
+        <field name="missingEvidence" required="false" type="MissingEvidence[]" />
+      </fields>
+      <criteriaExamples>
+        <criterion name="Sharpe ratio" passText="Sharpe met threshold" failText="Sharpe below promotion threshold" />
+        <criterion name="Max drawdown" passText="Drawdown stayed within limit" failText="Drawdown exceeded allowed limit" />
+        <criterion name="Window count" passText="Enough walk-forward windows evaluated" failText="Insufficient walk-forward evidence" />
+        <criterion name="Replay fidelity" passText="Replay fidelity acceptable" failText="Replay fidelity below threshold" />
+        <criterion name="Risk events" passText="No disqualifying risk events" failText="Disqualifying risk event observed" />
+      </criteriaExamples>
+      <sourceHints>
+        <source table="strategy_lifecycle_state" purpose="current lifecycle state" />
+        <source table="governance_decisions" purpose="promotion/demotion reason and timestamp" />
+        <source table="hybrid_score_summary" purpose="rank and score summary" />
+        <source table="strategy_runs" purpose="backtest and strategy metrics" />
+        <source table="walk_forward_runs" purpose="walk-forward run metrics" />
+        <source table="walk_forward_windows" purpose="window consistency" />
+        <source table="walk_forward_trials" purpose="candidate comparison" />
+        <source table="research_artifacts" purpose="strategy thesis and research lineage" />
+      </sourceHints>
+    </contract>
+
+    <contract id="SourceRecord" priority="must">
+      <fields>
+        <field name="table" required="true" />
+        <field name="id" required="true" />
+        <field name="timestamp" required="false" />
+        <field name="label" required="false" />
+        <field name="detailUrl" required="false" />
+      </fields>
+    </contract>
+
+    <contract id="MissingEvidence" priority="must">
+      <fields>
+        <field name="field" required="true" />
+        <field name="suggestedSource" required="true" />
+        <field name="reason" required="true" />
+      </fields>
+    </contract>
+  </dataContracts>
+
+  <interactionModel>
+    <pattern id="pollingRefresh" priority="must">
+      <description>Continue using /api/refresh to return JSON plus HTML fragments.</description>
+      <requirements>
+        <requirement>Each refreshable section must have a stable data-fragment-id.</requirement>
+        <requirement>When a fragment update fails, show stale data with a stale badge rather than blanking the section.</requirement>
+        <requirement>Show last refreshed time per page and per critical fragment when available.</requirement>
+      </requirements>
+    </pattern>
+    <pattern id="detailsDisclosure" priority="must">
+      <description>Use native details/summary blocks for raw evidence and long JSON payloads.</description>
+      <requirements>
+        <requirement>Default collapsed for raw JSON.</requirement>
+        <requirement>Default expanded for failed checks and blocked reasons.</requirement>
+      </requirements>
+    </pattern>
+    <pattern id="filters" priority="should">
+      <description>Use server-rendered query-parameter filters on decisions, strategies, and governance pages.</description>
+      <requirements>
+        <requirement>Filters must work without client-side JS.</requirement>
+        <requirement>Preserve selected filters in query params.</requirement>
+      </requirements>
+    </pattern>
+  </interactionModel>
+
+  <contentGuidelines>
+    <tone>Clear, factual, restrained, audit-oriented.</tone>
+    <rules>
+      <rule>Prefer short explanatory sentences over raw labels.</rule>
+      <rule>Use exact timestamps with timezone where possible.</rule>
+      <rule>Use IDs in muted monospace near human labels.</rule>
+      <rule>Use INR formatting consistently for notional, PnL, and exposure.</rule>
+      <rule>Negative PnL must be visually distinguishable and include sign.</rule>
+      <rule>Never say guaranteed, safe, certain, or best unless it is part of a stored source quote and clearly labeled.</rule>
+      <rule>For live mode, show a persistent red live badge and risk warning.</rule>
+    </rules>
+    <preferredLabels>
+      <label old="Decisions" new="Trades &amp; Decisions" />
+      <label old="Governance history" new="Lifecycle decisions" />
+      <label old="Leaderboard" new="Strategy promotion board" />
+      <label old="Execution outcome" new="Execution result" />
+      <label old="Error" new="Needs attention" context="operator-facing summary" />
+    </preferredLabels>
+  </contentGuidelines>
+
+  <accessibility>
+    <requirement>All status badges must include text, not color only.</requirement>
+    <requirement>Use semantic headings in order: h1, h2, h3.</requirement>
+    <requirement>Tables must include th elements and meaningful captions or section titles.</requirement>
+    <requirement>Keyboard focus must be visible for links, buttons, and details summaries.</requirement>
+    <requirement>Use aria-live="polite" only for refresh status text, not entire tables.</requirement>
+    <requirement>Respect reduced motion; avoid animated flashing in risk states.</requirement>
+  </accessibility>
+
+  <securityAndSafety>
+    <requirement>Escape all dynamic text with existing escapeHtml utility.</requirement>
+    <requirement>Do not render broker tokens, API secrets, passwords, TOTP codes, bearer tokens, cookies, or auth headers.</requirement>
+    <requirement>Manual token refresh buttons must preserve existing POST routes and authentication behavior.</requirement>
+    <requirement>For any future destructive or live-trading control, require explicit confirmation and server-side authorization. Do not add such controls in this redesign unless already implemented.</requirement>
+    <requirement>When executionMode is live, the UI must show a persistent live trading indicator above page content.</requirement>
+  </securityAndSafety>
+
+  <implementationPlan>
+    <phase id="1" name="Design foundation">
+      <task>Refactor or extend render-utils.ts with the new layout shell, status strip, cards, badges, evidence checklist, timeline, and missing evidence components.</task>
+      <task>Keep existing formatter utilities for INR, numbers, dates, and escaping. Add small helpers only where needed.</task>
+      <task>Add CSS variables and responsive grid classes from this spec.</task>
+    </phase>
+    <phase id="2" name="Explanation data mapping">
+      <task>Create adapter functions that transform existing dashboard/detail read-model payloads into TradeDecisionExplanation and StrategyGovernanceExplanation shapes.</task>
+      <task>Do not change database schema in the UI pass unless necessary. Prefer read-model joins and graceful missing evidence callouts.</task>
+      <task>Document every missing source field in code comments near the adapter.</task>
+    </phase>
+    <phase id="3" name="Page upgrades">
+      <task>Upgrade / with status strip, risk posture, recent trade narratives, strategy movement, blocked actions, and research funnel.</task>
+      <task>Upgrade /decisions with filters, explanation rows, badges, and links.</task>
+      <task>Upgrade /decision detail with WhyNarrativeCard, DecisionTimeline, validation/risk checklist, market context, execution evidence, outcome, and raw evidence.</task>
+      <task>Upgrade /strategies and /strategy detail with StrategyScorecard, WinnerLoserComparison, and promotion criteria.</task>
+      <task>Upgrade /governance with promotion board, lifecycle timeline, and threshold matrix.</task>
+      <task>Upgrade /positions with origin decision links and why-open narratives.</task>
+      <task>Upgrade /system-health with grouped health and safe token status display.</task>
+    </phase>
+    <phase id="4" name="Refresh fragments">
+      <task>Update /api/refresh payloads to return fragments for new dashboard sections where the old dashboard had dynamic updates.</task>
+      <task>Keep old fragment IDs compatible where tests or clients depend on them. Add aliases rather than breaking existing IDs.</task>
+    </phase>
+    <phase id="5" name="Tests and proof">
+      <task>Add or update Vitest tests for HTML rendering of explanation cards, missing evidence states, live-mode badge, and escaping.</task>
+      <task>Add tests for blocked decision copy, promoted strategy copy, loser failure reason copy, and no-secret rendering.</task>
+      <task>Run the existing operator UI proof/witness tests if present.</task>
+    </phase>
+  </implementationPlan>
+
+  <fileGuidance>
+    <likelyFiles>
+      <file>src/operator-ui/render-utils.ts</file>
+      <file>src/operator-ui/pages/dashboard.ts or equivalent dashboard page file</file>
+      <file>src/operator-ui/pages/decisions.ts or equivalent decisions page file</file>
+      <file>src/operator-ui/pages/decision-detail.ts or equivalent decision detail page file</file>
+      <file>src/operator-ui/pages/positions.ts or equivalent positions page file</file>
+      <file>src/operator-ui/pages/strategies.ts or equivalent strategies page file</file>
+      <file>src/operator-ui/pages/strategy-detail.ts or equivalent strategy detail page file</file>
+      <file>src/operator-ui/pages/governance.ts or equivalent governance page file</file>
+      <file>src/operator-ui/pages/backtest-detail.ts or equivalent backtest detail page file</file>
+      <file>src/operator-ui/pages/system-health.ts or equivalent system health page file</file>
+      <file>src/operator-ui/dashboard-payload-assembler.ts or equivalent assembler</file>
+      <file>src/operator-ui/read-models or equivalent detail read models</file>
+    </likelyFiles>
+    <newFilesAllowed>
+      <file>src/operator-ui/components/explainability.ts</file>
+      <file>src/operator-ui/components/status-strip.ts</file>
+      <file>src/operator-ui/components/evidence.ts</file>
+      <file>src/operator-ui/components/strategy-scorecard.ts</file>
+    </newFilesAllowed>
+    <rule>If current filenames differ, locate equivalent files by route and exported render function.</rule>
+  </fileGuidance>
+
+  <acceptanceCriteria>
+    <criterion id="A1">The UI stays server-rendered and runs without a frontend build step.</criterion>
+    <criterion id="A2">The dashboard immediately shows execution mode, market phase, broker state, risk guard state, last tick, and last refresh.</criterion>
+    <criterion id="A3">The latest trade decisions show what trade was made or blocked and why.</criterion>
+    <criterion id="A4">The decision detail page reconstructs proposal, validation, risk, execution, fill, position, and outcome with timestamps or missing-evidence callouts.</criterion>
+    <criterion id="A5">The strategy pages explain why a strategy is active, promoted, held, rejected, demoted, winning, or losing.</criterion>
+    <criterion id="A6">The governance page shows threshold pass/fail evidence for lifecycle changes.</criterion>
+    <criterion id="A7">No secrets are rendered anywhere in the UI.</criterion>
+    <criterion id="A8">All dynamic data is HTML-escaped.</criterion>
+    <criterion id="A9">The UI is responsive at desktop, tablet, and mobile widths.</criterion>
+    <criterion id="A10">Tests cover rendering of key explanation states and security-sensitive output.</criterion>
+  </acceptanceCriteria>
+
+  <sampleRenderedCopy>
+    <copy id="paperTradeSuccess">
+      Paper BUY for {symbol} was recorded because {strategyId} v{strategyVersion} generated a validated proposal, the risk guard allowed the notional exposure, and the paper ledger recorded a fill at {fillPrice}.
+    </copy>
+    <copy id="blockedDuplicate">
+      This order was blocked because the duplicate-order guard found an existing open order for {symbol}. No broker order was sent.
+    </copy>
+    <copy id="strategyPromoted">
+      {strategyId} v{strategyVersion} was promoted to {newState} because it passed {passedCount}/{totalCount} governance checks, including Sharpe {sharpe} and max drawdown {drawdown}.
+    </copy>
+    <copy id="strategyRejected">
+      {strategyId} v{strategyVersion} was not promoted because {failedCriterion} failed. Observed {observedValue}; required {threshold}.
+    </copy>
+    <copy id="missingEvidence">
+      Evidence is not available for {field}. Add {suggestedSource} to the read model before showing this explanation.
+    </copy>
+  </sampleRenderedCopy>
+
+  <codexPrompt>
+    <![CDATA[
+    You are updating the Trader operator console UI/UX. Follow the XML spec exactly.
+
+    Preserve the existing Node.js native http, TypeScript, server-rendered HTML architecture. Do not introduce React, Vue, Angular, Svelte, a client-side router, or a frontend bundler.
+
+    First inspect src/operator-ui and identify the current route renderers and shared render utilities. Implement reusable SSR components for:
+    - OperatorStatusStrip
+    - WhyNarrativeCard
+    - EvidenceChecklist
+    - DecisionTimeline
+    - StrategyScorecard
+    - WinnerLoserComparison
+    - RiskPosturePanel
+    - MissingEvidenceCallout
+
+    Upgrade the existing routes:
+    - / overview dashboard
+    - /decisions decision inbox
+    - /decision?id=... decision detail
+    - /positions positions with why-open narratives
+    - /strategies strategy leaderboard with winner/loser reasoning
+    - /strategy?strategyId=...&strategyVersion=... strategy memo
+    - /governance promotion/demotion board
+    - /backtest?runId=... backtest explanation
+    - /system-health grouped operational health
+
+    Use existing read models first. Build adapter functions that map available data into TradeDecisionExplanation and StrategyGovernanceExplanation shapes. If a reason cannot be reconstructed from existing data, render a MissingEvidenceCallout. Never invent reasons.
+
+    Keep /api/refresh working. Add stable fragment IDs for new dashboard sections. Preserve compatibility for existing fragments where possible.
+
+    Add tests for:
+    - HTML escaping in all explanation components
+    - live mode badge visibility
+    - blocked decision explanation
+    - paper fill explanation
+    - promoted strategy threshold checklist
+    - rejected strategy failure reason
+    - missing evidence state
+    - no tokens/secrets rendered in system health
+
+    Run the existing test suite relevant to operator UI and fix failures.
+    ]]>
+  </codexPrompt>
+</uiSpec>
