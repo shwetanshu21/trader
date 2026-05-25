@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseManager } from '../persistence/sqlite.js';
 import { MarketClock } from '../runtime/market-clock.js';
-import { INDIA_NSE_EQ_MARKET } from '../market/india-profile.js';
+import { INDIA_NSE_EQ_MARKET, resolveIndiaMarketConfigPath } from '../market/india-profile.js';
 import {
   OvernightRunRepo,
   type OvernightRunRow,
@@ -29,10 +29,11 @@ import { HypothesisResearchEvaluator } from './hypothesis-evaluator.js';
 import { ResearchArtifactWriter } from './artifact-writer.js';
 import { WinnerSelector } from '../replay/winner-selection.js';
 import { WalkForwardEvaluator } from '../replay/walk-forward-evaluator.js';
-import { FixtureHistoricalDataProvider } from '../replay/historical-data-provider.js';
+import { UpstoxHistoricalDataProvider } from '../replay/upstox-historical-data-provider.js';
 import { IndiaResearchBuilder } from '../strategy/india-research.js';
 import { StrategyRunRepository } from '../persistence/strategy-run-repo.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
+import { UpstoxRestClient } from '../upstox/upstox-rest-client.js';
 import { loadConfig } from '../config/env.js';
 
 const RESEARCH_ARTIFACTS_ROOT = path.join('data', 'artifacts', 'overnight');
@@ -192,6 +193,28 @@ function buildProposalConfig(): ProposalEngineConfig | null {
   }
 }
 
+function buildDefaultResearchRange(now: number = Date.now()): { rangeStart: number; rangeEnd: number } {
+  return {
+    rangeStart: now - 30 * 86_400_000,
+    rangeEnd: now,
+  };
+}
+
+function createRealHistoricalDataProvider(rangeStart: number, rangeEnd: number): UpstoxHistoricalDataProvider {
+  const restClient = new UpstoxRestClient();
+  return new UpstoxHistoricalDataProvider({
+    restClient,
+    configPath: resolveIndiaMarketConfigPath('INDIA_NSE_EQ'),
+    rangeStart,
+    rangeEnd,
+    cacheDir: './data/cache/upstox-candles',
+    options: {
+      screeningCadenceMinutes: 5,
+      executionResolutionMinutes: null,
+    },
+  });
+}
+
 async function runRealGenerationPhase(
   dbManager: DatabaseManager,
   orchestrator: OvernightOrchestrator,
@@ -212,11 +235,11 @@ async function runRealGenerationPhase(
 
   let evaluator: HypothesisResearchEvaluator | undefined;
   {
-    const dataProvider = new FixtureHistoricalDataProvider({
-      candidates: [],
-      rangeStart: Date.now() - 30 * 86_400_000,
-      rangeEnd: Date.now(),
-    });
+    const researchRange = buildDefaultResearchRange();
+    const dataProvider = createRealHistoricalDataProvider(
+      researchRange.rangeStart,
+      researchRange.rangeEnd,
+    );
     const walkForwardEval = new WalkForwardEvaluator({
       db,
       marketProfile: INDIA_NSE_EQ_MARKET,
@@ -301,11 +324,12 @@ async function runRealEvaluatePhase(
   const hypothesisRepo = new HypothesisRepository(db);
   const walkForwardRepo = new WalkForwardRepository(db);
 
-  const dataProvider = new FixtureHistoricalDataProvider({
-    candidates: [],
-    rangeStart: Date.now() - 30 * 86_400_000,
-    rangeEnd: Date.now(),
-  });
+  const evaluationNow = Date.now();
+  const researchRange = buildDefaultResearchRange(evaluationNow);
+  const dataProvider = createRealHistoricalDataProvider(
+    researchRange.rangeStart,
+    researchRange.rangeEnd,
+  );
   const walkForwardEval = new WalkForwardEvaluator({
     db,
     marketProfile: INDIA_NSE_EQ_MARKET,
@@ -332,7 +356,10 @@ async function runRealEvaluatePhase(
     const hypothesis = hypothesisRepo.getHypothesisById(hypothesisId);
     if (!hypothesis) continue;
 
-    const evalResult = await evaluator.evaluate(hypothesis.id);
+    const evalResult = await evaluator.evaluate(hypothesis.id, {
+      rangeStart: researchRange.rangeStart,
+      rangeEnd: researchRange.rangeEnd,
+    });
     if (evalResult.evaluation?.status === HypothesisEvaluationStatus.Completed) {
       completedEvaluationIds.push(evalResult.evaluation.id);
     }
@@ -359,14 +386,16 @@ function runRealPublishPhase(
   dbManager: DatabaseManager,
   orchestrator: OvernightOrchestrator,
   runId: number,
+  evaluationIds: number[],
 ): { evaluationId: number | null; verdict: 'publish' | 'hold'; rationale: string } {
   const db = dbManager.db;
   const hypothesisRepo = new HypothesisRepository(db);
 
   orchestrator.markPhase(runId, 'publish');
 
-  const completedEvaluations = hypothesisRepo
-    .getRecentEvaluations(200)
+  const completedEvaluations = evaluationIds
+    .map(id => hypothesisRepo.getEvaluationById(id))
+    .filter((evaluation): evaluation is NonNullable<typeof evaluation> => evaluation != null)
     .filter(e => e.status === HypothesisEvaluationStatus.Completed);
 
   if (completedEvaluations.length === 0) {
@@ -627,12 +656,14 @@ async function main(): Promise<void> {
       // Real overnight research pipeline: generate → evaluate → publish
       run = orchestrator.getRun(run.id) ?? run;
       let phase = orchestrator.getNextPhase(run);
+      let generatedIdsForRun: number[] | null = null;
+      let evaluatedIdsForRun: number[] | null = null;
 
       if (phase === 'generate') {
-        const generatedIds = await runRealGenerationPhase(dbManager, orchestrator, run.id, resolvedBudget);
+        generatedIdsForRun = await runRealGenerationPhase(dbManager, orchestrator, run.id, resolvedBudget);
         if (shouldStopAfter('generate', options.stopAfterPhase)) {
           run = orchestrator.getRun(run.id) ?? run;
-          orchestrator.markFailed(run.id, `Intentional interruption after generate phase (${generatedIds.length} hypotheses generated).`);
+          orchestrator.markFailed(run.id, `Intentional interruption after generate phase (${generatedIdsForRun.length} hypotheses generated).`);
           run = orchestrator.getRun(run.id) ?? run;
         } else {
           run = orchestrator.getRun(run.id) ?? run;
@@ -641,11 +672,11 @@ async function main(): Promise<void> {
       }
 
       if (run.status === 'running' && phase === 'evaluate') {
-        const generatedIds = findGeneratedHypothesisIds(dbManager);
-        const evaluatedIds = await runRealEvaluatePhase(dbManager, orchestrator, run.id, generatedIds);
+        const generatedIds = generatedIdsForRun ?? findGeneratedHypothesisIds(dbManager);
+        evaluatedIdsForRun = await runRealEvaluatePhase(dbManager, orchestrator, run.id, generatedIds);
         if (shouldStopAfter('evaluate', options.stopAfterPhase)) {
           run = orchestrator.getRun(run.id) ?? run;
-          orchestrator.markFailed(run.id, `Intentional interruption after evaluate phase (${evaluatedIds.length} evaluations completed).`);
+          orchestrator.markFailed(run.id, `Intentional interruption after evaluate phase (${evaluatedIdsForRun.length} evaluations completed).`);
           run = orchestrator.getRun(run.id) ?? run;
         } else {
           run = orchestrator.getRun(run.id) ?? run;
@@ -654,7 +685,8 @@ async function main(): Promise<void> {
       }
 
       if (run.status === 'running' && phase === 'publish') {
-        const publication = runRealPublishPhase(dbManager, orchestrator, run.id);
+        const evaluationIds = evaluatedIdsForRun ?? findCompletedEvaluationIds(dbManager);
+        const publication = runRealPublishPhase(dbManager, orchestrator, run.id, evaluationIds);
         if (shouldStopAfter('publish', options.stopAfterPhase)) {
           run = orchestrator.getRun(run.id) ?? run;
           orchestrator.markFailed(run.id, 'Intentional interruption after publish phase for resume verification.');

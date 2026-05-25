@@ -156,13 +156,13 @@ describe('M012/S01 Overnight Proof — Market-window gate', () => {
     expect(result.run.status).toBe(OvernightRunStatus.Refused);
   });
 
-  it('refuses execution during PostMarket phase', () => {
+  it('accepts execution during PostMarket phase', () => {
     const result = fx.orchestrator.tryStart('post-test', fx.workspacePath, POST_MARKET_TIME);
 
-    expect(result.accepted).toBe(false);
+    expect(result.accepted).toBe(true);
     expect(result.marketPhaseName).toBe('post_market');
-    expect(result.refusalReason).toContain('Market is open');
-    expect(result.run.status).toBe(OvernightRunStatus.Refused);
+    expect(result.refusalReason).toBeNull();
+    expect(result.run.status).toBe(OvernightRunStatus.Running);
   });
 
   it('accepts execution when market is closed (after-hours)', () => {

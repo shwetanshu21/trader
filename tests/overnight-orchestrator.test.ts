@@ -76,15 +76,15 @@ describe('OvernightOrchestrator tryStart — market-window gate', () => {
     dbm.close();
   });
 
-  it('refuses execution during PostMarket phase', () => {
+  it('accepts execution during PostMarket phase', () => {
     const { orchestrator, dbm } = createOrchestrator();
     const result = orchestrator.tryStart('test-run', '/tmp/research', POST_MARKET_TIME);
 
-    expect(result.accepted).toBe(false);
+    expect(result.accepted).toBe(true);
     expect(result.marketPhase).toBe(MarketPhase.PostMarket);
     expect(result.marketPhaseName).toBe('post_market');
-    expect(result.refusalReason).toContain('Market is open');
-    expect(result.run.status).toBe(OvernightRunStatus.Refused);
+    expect(result.refusalReason).toBeNull();
+    expect(result.run.status).toBe(OvernightRunStatus.Running);
 
     dbm.close();
   });
@@ -132,6 +132,65 @@ describe('OvernightOrchestrator tryStart — market-window gate', () => {
     expect(result.accepted).toBe(true);
     expect(result.marketPhase).toBe(MarketPhase.Closed);
     expect(result.run.status).toBe(OvernightRunStatus.Running);
+
+    dbm.close();
+  });
+  it('skips duplicate window launches even when a newer refused row exists for the same workspace', () => {
+    const { orchestrator, repo, dbm } = createOrchestrator();
+
+    const completed = orchestrator.tryTriggerWindow({
+      label: 'overnight-auto-2025-01-06',
+      workspacePath: '/tmp/research/window-1',
+      researchDbPath: '/tmp/research.db',
+      now: CLOSED_AFTER,
+    });
+    orchestrator.markCompleted(completed.run.id);
+
+    // A later open-window tick persists a refused row, which used to mask the
+    // already-completed workspace run during duplicate detection.
+    orchestrator.tryStart('open-refusal', '/tmp/research/window-1', REGULAR_TIME, '/tmp/research.db');
+
+    const duplicate = orchestrator.tryTriggerWindow({
+      label: 'overnight-auto-2025-01-06',
+      workspacePath: '/tmp/research/window-1',
+      researchDbPath: '/tmp/research.db',
+      now: CLOSED_AFTER,
+    });
+
+    expect(duplicate.accepted).toBe(true);
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.duplicateReason).toContain('already completed');
+    expect(duplicate.run.id).toBe(completed.run.id);
+    expect(repo.countRuns()).toBe(2);
+
+    dbm.close();
+  });
+  it('resumes evaluate when an evaluate checkpoint is incomplete even if stale metadata says publish', () => {
+    const { orchestrator, repo, dbm } = createOrchestrator();
+
+    const started = orchestrator.tryStart('resume-evaluate-run', '/tmp/ws', CLOSED_AFTER);
+    orchestrator.markPhase(started.run.id, 'generate');
+    orchestrator.saveCheckpoint(started.run.id, {
+      phase: 'generate',
+      completedItems: 3,
+      totalItems: 3,
+      lastProcessedId: 'hyp-3',
+    });
+    orchestrator.markPhaseCompleted(started.run.id, 'generate');
+
+    orchestrator.markPhase(started.run.id, 'evaluate');
+    orchestrator.saveCheckpoint(started.run.id, {
+      phase: 'evaluate',
+      completedItems: 0,
+      totalItems: 4,
+      lastProcessedId: '1',
+    });
+    orchestrator.markPhaseCompleted(started.run.id, 'evaluate');
+    orchestrator.markPhase(started.run.id, 'publish');
+    orchestrator.markFailed(started.run.id, 'No completed hypothesis evaluations found for publish-back.');
+
+    const persisted = repo.getRun(started.run.id)!;
+    expect(orchestrator.getNextPhase(persisted)).toBe('evaluate');
 
     dbm.close();
   });

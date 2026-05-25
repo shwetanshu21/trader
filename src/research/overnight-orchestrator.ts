@@ -48,6 +48,11 @@ export class OvernightOrchestrator {
     this._clock = clock;
   }
 
+  private _isOvernightWindow(now: Date): boolean {
+    const phase = this._clock.getPhase(now);
+    return phase === MarketPhase.Closed || phase === MarketPhase.PostMarket;
+  }
+
   tryStart(label: string, workspacePath: string, now?: Date, researchDbPath?: string): TryStartResult {
     return this.tryStartOrResume({ label, workspacePath, now, researchDbPath });
   }
@@ -63,7 +68,7 @@ export class OvernightOrchestrator {
     const marketPhase = this._clock.getPhase(nowDate);
     const marketPhaseName = this._summarizePhase(marketPhase);
 
-    if (!this._clock.isClosed(nowDate)) {
+    if (!this._isOvernightWindow(nowDate)) {
       const refused = this.tryStartOrResume({ ...options, now: nowDate });
       return {
         ...refused,
@@ -72,7 +77,11 @@ export class OvernightOrchestrator {
       };
     }
 
-    const latest = this._repo.getLatestRun();
+    const latest = this._repo.listRuns(50).find(run => (
+      run.workspacePath === options.workspacePath
+      && (options.researchDbPath == null || run.researchDbPath === (options.researchDbPath ?? ''))
+      && (run.status === OvernightRunStatus.Running || run.status === OvernightRunStatus.Completed)
+    )) ?? null;
     if (
       latest
       && latest.workspacePath === options.workspacePath
@@ -113,8 +122,8 @@ export class OvernightOrchestrator {
     const marketPhaseName = this._summarizePhase(marketPhase);
     const createdAt = nowDate.getTime();
 
-    if (!this._clock.isClosed(nowDate)) {
-      const refusalReason = `Market is open (phase: ${marketPhaseName}). Overnight research runs are only accepted during closed market windows.`;
+    if (!this._isOvernightWindow(nowDate)) {
+      const refusalReason = `Market is open (phase: ${marketPhaseName}). Overnight research runs are only accepted during post-market or closed market windows.`;
       const refusedRun: NewOvernightRun = {
         label: options.label,
         status: OvernightRunStatus.Refused,
@@ -333,11 +342,13 @@ export class OvernightOrchestrator {
 
   getNextPhase(run: OvernightRunRow): OvernightPhase {
     const metadata = this._repo.readMetadata(run);
+    const checkpoint = this.readCheckpoint(run);
+    if (checkpoint?.phase === 'evaluate' && checkpoint.completedItems < checkpoint.totalItems) return 'evaluate';
+    if (checkpoint?.phase === 'generate' && checkpoint.completedItems < checkpoint.totalItems) return 'generate';
     if (metadata.lastSuccessfulPhase === 'publish') return 'completed';
     if (metadata.lastSuccessfulPhase === 'evaluate') return 'publish';
     if (metadata.lastSuccessfulPhase === 'generate') return 'evaluate';
 
-    const checkpoint = this.readCheckpoint(run);
     if (checkpoint?.phase === 'evaluate' && checkpoint.completedItems >= checkpoint.totalItems) return 'publish';
     if (checkpoint?.phase === 'generate' && checkpoint.completedItems >= checkpoint.totalItems) return 'evaluate';
     if (run.currentPhase === 'publish') return 'publish';
