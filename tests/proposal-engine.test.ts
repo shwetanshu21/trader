@@ -501,6 +501,91 @@ describe('ProposalEngine', () => {
       expect(capturedBody!['response_format']).toEqual({ type: 'json_object' });
     });
 
+    it('parses reasoning-only fenced JSON OpenAI-compatible responses', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                reasoning_content: '```json\n' + JSON.stringify({
+                  proposals: [
+                    {
+                      exchange: 'NSE',
+                      tradingsymbol: 'INFY',
+                      side: 'buy',
+                      product: 'MIS',
+                      quantity: 1,
+                      price: null,
+                      triggerPrice: null,
+                      orderType: 'MARKET',
+                    },
+                  ],
+                }) + '\n```',
+              },
+            },
+          ],
+        }),
+      );
+
+      const engine = new ProposalEngine(makeConfig({
+        providerMode: 'openai-compatible',
+        providerUrl: 'https://crof.ai/v1/chat/completions',
+        providerModel: 'glm-4.7',
+      }));
+      const result = await engine.generateProposals(makeContext());
+
+      expect(result.refusal).toBeNull();
+      expect(result.proposals).toHaveLength(1);
+      expect(result.proposals[0].attempt.tradingsymbol).toBe('INFY');
+    });
+
+    it('falls back to the next configured model when the primary model fails', async () => {
+      const capturedModels: string[] = [];
+      globalThis.fetch = vi.fn().mockImplementation((_url: string, options?: RequestInit) => {
+        const body = JSON.parse(String(options?.body ?? '{}')) as Record<string, unknown>;
+        const model = String(body.model ?? '');
+        capturedModels.push(model);
+        if (model === 'glm-5.1') {
+          return Promise.resolve(jsonResponse({ error: { message: 'slow model failed' } }, 500));
+        }
+        return Promise.resolve(jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  proposals: [
+                    {
+                      exchange: 'NSE',
+                      tradingsymbol: 'TCS',
+                      side: 'buy',
+                      product: 'MIS',
+                      quantity: 1,
+                      price: null,
+                      triggerPrice: null,
+                      orderType: 'MARKET',
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }));
+      });
+
+      const engine = new ProposalEngine(makeConfig({
+        providerMode: 'openai-compatible',
+        providerUrl: 'https://crof.ai/v1/chat/completions',
+        providerModel: 'glm-5.1',
+        fallbackProviderModel: 'glm-4.7',
+      }));
+      const result = await engine.generateProposals(makeContext());
+
+      expect(result.refusal).toBeNull();
+      expect(result.proposals).toHaveLength(1);
+      expect(result.proposals[0].attempt.tradingsymbol).toBe('TCS');
+      expect(capturedModels).toEqual(['glm-5.1', 'glm-4.7']);
+    });
+
     it('returns refusal when OpenAI-compatible response is missing assistant content', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse({ choices: [] }));
 
@@ -512,7 +597,7 @@ describe('ProposalEngine', () => {
       const result = await engine.generateProposals(makeContext());
 
       expect(result.refusal).not.toBeNull();
-      expect(result.refusal!.reasonMessage).toContain('missing choices[0].message.content');
+      expect(result.refusal!.reasonMessage).toContain('missing assistant content');
       expect(result.proposals).toHaveLength(0);
     });
 

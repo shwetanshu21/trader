@@ -233,8 +233,7 @@ export class ProposalEngine {
       response_format: { type: 'json_object' },
       messages,
     };
-    const response = await this._postJson(payload);
-    return this._parseOpenAiCompatibleResponseFromResponse(response);
+    return this._sendOpenAiCompatiblePayload(payload);
   }
 
   /**
@@ -253,7 +252,7 @@ export class ProposalEngine {
    * Public for strategy plugin use.
    */
   extractAssistantContent(content: unknown): string | null {
-    return this._extractAssistantContent(content);
+    return extractAssistantMessageText({ content });
   }
 
   /** Accessor for engine config (read-only via copy). */
@@ -279,8 +278,7 @@ export class ProposalEngine {
    */
   private async _fetchOpenAiCompatibleResponse(context: EngineContext): Promise<ProviderProposalResponse> {
     const payload = this._buildOpenAiCompatiblePayload(context);
-    const response = await this._postJson(payload);
-    return this._parseOpenAiCompatibleResponse(response);
+    return this._sendOpenAiCompatiblePayload(payload);
   }
 
   /**
@@ -310,6 +308,30 @@ export class ProposalEngine {
     }
   }
 
+  private async _sendOpenAiCompatiblePayload(payload: Record<string, unknown>): Promise<ProviderProposalResponse> {
+    const models = [
+      this._config.providerModel,
+      this._config.fallbackProviderModel,
+      ...(this._config.fallbackProviderModels ?? []),
+    ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+
+    if (models.length === 0) {
+      return this._parseOpenAiCompatibleResponseFromResponse(await this._postJson(payload));
+    }
+
+    const failures: string[] = [];
+    for (const model of models) {
+      try {
+        const response = await this._postJson({ ...payload, model });
+        return await this._parseOpenAiCompatibleResponseFromResponse(response);
+      } catch (err) {
+        failures.push(err instanceof Error ? `${model}: ${err.message}` : `${model}: ${String(err)}`);
+      }
+    }
+
+    throw new Error(`All configured OpenAI-compatible models failed. ${failures.join(' | ')}`);
+  }
+
   private async _parseDirectProviderResponse(response: Response): Promise<ProviderProposalResponse> {
     if (!response.ok) {
       throw new Error(await this._formatHttpError(response));
@@ -328,22 +350,21 @@ export class ProposalEngine {
       throw new Error(await this._formatHttpError(response));
     }
 
-    let outer: { choices?: Array<{ message?: { content?: unknown } }> };
+    let outer: { choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown } }> };
     try {
       const text = await response.text();
-      outer = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown } }> };
+      outer = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown } }> };
     } catch (err) {
       throw new Error(`Malformed OpenAI-compatible response: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    const content = outer.choices?.[0]?.message?.content;
-    const contentText = this._extractAssistantContent(content);
+    const contentText = extractAssistantMessageText(outer.choices?.[0]?.message);
     if (!contentText) {
-      throw new Error('OpenAI-compatible response missing choices[0].message.content');
+      throw new Error('OpenAI-compatible response missing assistant content in choices[0].message.content or reasoning fields');
     }
 
     try {
-      return JSON.parse(contentText) as ProviderProposalResponse;
+      return JSON.parse(normalizeJsonLikeText(contentText)) as ProviderProposalResponse;
     } catch (err) {
       throw new Error(`OpenAI-compatible assistant content is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -358,22 +379,21 @@ export class ProposalEngine {
       throw new Error(await this._formatHttpError(response));
     }
 
-    let outer: { choices?: Array<{ message?: { content?: unknown } }> };
+    let outer: { choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown } }> };
     try {
       const text = await response.text();
-      outer = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown } }> };
+      outer = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown } }> };
     } catch (err) {
       throw new Error(`Malformed OpenAI-compatible response: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    const content = outer.choices?.[0]?.message?.content;
-    const contentText = this._extractAssistantContent(content);
+    const contentText = extractAssistantMessageText(outer.choices?.[0]?.message);
     if (!contentText) {
-      throw new Error('OpenAI-compatible response missing choices[0].message.content');
+      throw new Error('OpenAI-compatible response missing assistant content in choices[0].message.content or reasoning fields');
     }
 
     try {
-      return JSON.parse(contentText) as ProviderProposalResponse;
+      return JSON.parse(normalizeJsonLikeText(contentText)) as ProviderProposalResponse;
     } catch (err) {
       throw new Error(`OpenAI-compatible assistant content is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -437,40 +457,12 @@ export class ProposalEngine {
 
   // ── Parse helpers ───────────────────────────────────────────────────────
 
-  private _extractAssistantContent(content: unknown): string | null {
-    if (typeof content === 'string') {
-      return content;
-    }
-
-    if (Array.isArray(content)) {
-      const text = content
-        .map(part => {
-          if (typeof part === 'string') return part;
-          if (
-            part
-            && typeof part === 'object'
-            && 'type' in part
-            && (part as { type?: unknown }).type === 'text'
-            && 'text' in part
-          ) {
-            const value = (part as { text?: unknown }).text;
-            return typeof value === 'string' ? value : '';
-          }
-          return '';
-        })
-        .join('')
-        .trim();
-      return text || null;
-    }
-
-    return null;
-  }
-
-  private async _formatHttpError(response: Response): Promise<string> {
+  private async _formatHttpError(response: Response, model?: string): Promise<string> {
     const statusText = `${response.status} ${response.statusText}`;
     let body = '';
     try { body = await response.text(); } catch { /* ignore */ }
-    return `Proposal-engine returned HTTP ${statusText}${body ? ': ' + body.slice(0, 200) : ''}`;
+    const prefix = model ? `Proposal-engine model ${model}` : 'Proposal-engine';
+    return `${prefix} returned HTTP ${statusText}${body ? ': ' + body.slice(0, 200) : ''}`;
   }
 
   // ── Normalization ───────────────────────────────────────────────────────
@@ -523,4 +515,59 @@ export class ProposalEngine {
       createdAt: Date.now(),
     };
   }
+}
+
+function extractAssistantMessageText(message: unknown): string | null {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  const content = (message as { content?: unknown }).content;
+  const direct = extractAssistantContent(content);
+  if (direct) return direct;
+
+  const reasoningContent = (message as { reasoning_content?: unknown }).reasoning_content;
+  const reasoning = (message as { reasoning?: unknown }).reasoning;
+  return extractAssistantContent(reasoningContent) ?? extractAssistantContent(reasoning);
+}
+
+function extractAssistantContent(content: unknown): string | null {
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (Array.isArray(content)) {
+    const text = content
+      .map(part => {
+        if (typeof part === 'string') return part;
+        if (
+          part
+          && typeof part === 'object'
+          && 'type' in part
+          && (part as { type?: unknown }).type === 'text'
+          && 'text' in part
+        ) {
+          const value = (part as { text?: unknown }).text;
+          return typeof value === 'string' ? value : '';
+        }
+        return '';
+      })
+      .join('')
+      .trim();
+    return text || null;
+  }
+
+  return null;
+}
+
+function normalizeJsonLikeText(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('```')) {
+    const lines = trimmed.split(/\r?\n/);
+    if (lines.length >= 3 && lines[lines.length - 1].trim() === '```') {
+      return lines.slice(1, -1).join('\n').trim();
+    }
+  }
+  return trimmed;
 }
