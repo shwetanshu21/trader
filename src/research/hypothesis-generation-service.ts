@@ -1075,24 +1075,14 @@ function repairHypothesisPayload(value: unknown): unknown {
   }
 
   const root = value as Record<string, unknown>;
-  const candidate = isWrappedHypothesisEnvelope(root)
-    ? (root.hypothesis as Record<string, unknown>)
-    : root;
-
+  const candidate = unwrapHypothesisEnvelope(root);
   const repaired: Record<string, unknown> = { ...candidate };
   if (typeof repaired.schemaVersion === 'number') {
     repaired.schemaVersion = String(repaired.schemaVersion);
   }
 
   for (const group of ['signals', 'filters', 'entryRules', 'exitRules', 'riskRules'] as const) {
-    const current = repaired[group];
-    if (Array.isArray(current)) {
-      repaired[group] = current.filter(isRuleNodeLike);
-      continue;
-    }
-    if (isRuleNodeLike(current)) {
-      repaired[group] = [current];
-    }
+    repaired[group] = repairRuleGroup(repaired[group]);
   }
 
   if (repaired.metadata != null && (typeof repaired.metadata !== 'object' || Array.isArray(repaired.metadata))) {
@@ -1102,15 +1092,89 @@ function repairHypothesisPayload(value: unknown): unknown {
   return repaired;
 }
 
-function isWrappedHypothesisEnvelope(value: Record<string, unknown>): boolean {
-  if (!value.hypothesis || typeof value.hypothesis !== 'object' || Array.isArray(value.hypothesis)) {
-    return false;
+function unwrapHypothesisEnvelope(root: Record<string, unknown>): Record<string, unknown> {
+  const envelopeKeys = ['hypothesis', 'hypothesisGraph', 'graph', 'payload'];
+
+  for (const key of envelopeKeys) {
+    const nested = root[key];
+    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
+      continue;
+    }
+
+    const nestedRecord = nested as Record<string, unknown>;
+    if (looksLikeHypothesisGraphRecord(nestedRecord)
+      && !looksLikeHypothesisGraphRecord(root)) {
+      return nestedRecord;
+    }
   }
 
-  const nested = value.hypothesis as Record<string, unknown>;
+  return root;
+}
+
+function repairRuleGroup(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map(repairRuleNode)
+      .filter((node): node is Record<string, unknown> => node != null);
+  }
+
+  const repaired = repairRuleNode(value);
+  return repaired ? [repaired] : value;
+}
+
+function repairRuleNode(value: unknown): Record<string, unknown> | null {
+  if (!isRuleNodeLike(value)) {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  const nestedRule = isRuleNodeLike(source.rule) ? source.rule as Record<string, unknown> : null;
+  const candidate = nestedRule ?? source;
+
+  const typeCandidate = candidate.type
+    ?? candidate.ruleType
+    ?? candidate.kind
+    ?? candidate.name
+    ?? candidate.rule_name;
+
+  const repaired: Record<string, unknown> = {};
+  if (typeof typeCandidate === 'string' && typeCandidate.trim().length > 0) {
+    repaired.type = typeCandidate.trim();
+  }
+
+  const paramsCandidate = isRuleNodeLike(candidate.params)
+    ? candidate.params as Record<string, unknown>
+    : isRuleNodeLike(candidate.parameters)
+      ? candidate.parameters as Record<string, unknown>
+      : null;
+
+  if (paramsCandidate) {
+    repaired.params = { ...paramsCandidate };
+  } else {
+    const derivedParams = Object.fromEntries(
+      Object.entries(candidate).filter(([key]) => ![
+        'type',
+        'ruleType',
+        'kind',
+        'name',
+        'rule_name',
+        'params',
+        'parameters',
+        'rule',
+      ].includes(key)),
+    );
+
+    if (Object.keys(derivedParams).length > 0) {
+      repaired.params = derivedParams;
+    }
+  }
+
+  return repaired;
+}
+
+function looksLikeHypothesisGraphRecord(value: Record<string, unknown>): boolean {
   return ['schemaVersion', 'signals', 'filters', 'entryRules', 'exitRules', 'riskRules']
-    .every((key) => key in nested)
-    && !('signals' in value && 'filters' in value && 'entryRules' in value && 'exitRules' in value && 'riskRules' in value);
+    .every((key) => key in value);
 }
 
 function isRuleNodeLike(value: unknown): value is Record<string, unknown> {

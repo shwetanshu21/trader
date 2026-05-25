@@ -22,7 +22,7 @@ import { StrategyLifecycleRepository } from '../persistence/strategy-lifecycle-r
 import { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
 import { ResearchPublishBackService } from './publish-back-service.js';
 import { ResearchAuditService } from './research-audit-service.js';
-import { HypothesisEvaluationStatus, type ResearchLineageSnapshot, type HypothesisGenerationConfig, type ProposalEngineConfig } from '../types/runtime.js';
+import { HypothesisEvaluationStatus, GenerationReasonCode, type ResearchLineageSnapshot, type HypothesisGenerationConfig, type ProposalEngineConfig } from '../types/runtime.js';
 import { HypothesisGenerationService } from './hypothesis-generation-service.js';
 import { HypothesisValidator } from './hypothesis-validator.js';
 import { HypothesisResearchEvaluator } from './hypothesis-evaluator.js';
@@ -37,6 +37,9 @@ import { UpstoxRestClient } from '../upstox/upstox-rest-client.js';
 import { loadConfig } from '../config/env.js';
 
 const RESEARCH_ARTIFACTS_ROOT = path.join('data', 'artifacts', 'overnight');
+const OVERNIGHT_RESEARCH_MAX_INSTRUMENTS = 20;
+const DEFAULT_OVERNIGHT_ACCEPTED_CANDIDATES = 1;
+const DEFAULT_OVERNIGHT_MAX_ATTEMPTS = 6;
 
 type PhaseStop = 'generate' | 'evaluate' | 'publish' | null;
 
@@ -208,6 +211,7 @@ function createRealHistoricalDataProvider(rangeStart: number, rangeEnd: number):
     rangeStart,
     rangeEnd,
     cacheDir: './data/cache/upstox-candles',
+    maxInstruments: OVERNIGHT_RESEARCH_MAX_INSTRUMENTS,
     options: {
       screeningCadenceMinutes: 5,
       executionResolutionMinutes: null,
@@ -282,32 +286,67 @@ async function runRealGenerationPhase(
   };
 
   const generatedIds: number[] = [];
-  const maxGen = Number.isFinite(budget.maxAcceptedCandidates) ? budget.maxAcceptedCandidates : 5;
+  const acceptedTarget = Number.isFinite(budget.maxAcceptedCandidates)
+    ? budget.maxAcceptedCandidates
+    : DEFAULT_OVERNIGHT_ACCEPTED_CANDIDATES;
+  const maxAttempts = Number.isFinite(budget.maxLlmCalls)
+    ? budget.maxLlmCalls
+    : Math.max(acceptedTarget * 3, DEFAULT_OVERNIGHT_MAX_ATTEMPTS);
+  const budgetPolicy = {
+    maxAcceptedCandidates: Number.isFinite(budget.maxAcceptedCandidates) ? budget.maxAcceptedCandidates : undefined,
+    maxLlmCalls: Number.isFinite(budget.maxLlmCalls) ? budget.maxLlmCalls : undefined,
+  };
+  let rejectedCount = 0;
+  let skippedCount = 0;
+  let providerErrorCount = 0;
 
   orchestrator.markPhase(runId, 'generate');
 
-  for (let i = 0; i < maxGen; i++) {
-    const result = await generationService.generate(genConfig);
+  for (let attemptNumber = 1; attemptNumber <= maxAttempts && generatedIds.length < acceptedTarget; attemptNumber++) {
+    const result = await generationService.generateWithBudget(genConfig, budgetPolicy);
     if (result.kind === 'accepted') {
       generatedIds.push(result.hypothesis.id);
       orchestrator.saveCheckpoint(runId, {
         phase: 'generate',
         completedItems: generatedIds.length,
-        totalItems: maxGen,
+        totalItems: acceptedTarget,
         lastProcessedId: String(result.hypothesis.id),
+        metadata: {
+          attemptNumber,
+          rejectedCount,
+          skippedCount,
+          providerErrorCount,
+        },
       });
-    } else if (result.kind === 'rejected' || result.kind === 'skipped') {
-      // Budget exhausted or duplicate — stop generation
-      break;
-    } else if (result.kind === 'provider_error') {
-      throw new Error(`Provider error during generation: ${result.error}`);
+      continue;
+    }
+
+    if (result.kind === 'provider_error') {
+      providerErrorCount += 1;
+      continue;
+    }
+
+    if (result.kind === 'rejected') {
+      rejectedCount += 1;
+      continue;
+    }
+
+    if (result.kind === 'skipped') {
+      skippedCount += 1;
+      const exhausted = result.attempt.reasons.some(
+        reason => reason.reasonCode === GenerationReasonCode.ProviderDisallowed,
+      );
+      if (exhausted) {
+        break;
+      }
+      continue;
     }
   }
 
   orchestrator.recordPhaseResult(runId, {
     phase: 'generate',
     recordedAt: Date.now(),
-    detail: `Real overnight generation completed. ${generatedIds.length} hypotheses accepted.`,
+    detail: `Real overnight generation completed. ${generatedIds.length} hypotheses accepted after ${rejectedCount + skippedCount + providerErrorCount + generatedIds.length} attempts (rejected=${rejectedCount}, skipped=${skippedCount}, providerErrors=${providerErrorCount}).`,
   });
   orchestrator.markPhaseCompleted(runId, 'generate');
 

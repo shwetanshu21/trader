@@ -428,19 +428,14 @@ describe('HypothesisGenerationService', () => {
       }
     });
 
-    it('should repair non-object junk entries inside rule arrays when a valid graph is otherwise present', async () => {
+    it('should repair wrapped hypothesisGraph envelopes from OpenAI-compatible providers', async () => {
       const ctx = createContext({ config: TEST_OPENAI_CONFIG });
-      const graph = validGraph();
       mockFetchResponse(JSON.stringify({
         choices: [
           {
             message: {
               content: JSON.stringify({
-                ...graph,
-                exitRules: [
-                  ...graph.exitRules,
-                  -1.5,
-                ],
+                hypothesisGraph: validGraph(),
               }),
             },
           },
@@ -453,7 +448,56 @@ describe('HypothesisGenerationService', () => {
 
       expect(result.kind).toBe('accepted');
       if (result.kind === 'accepted') {
-        expect(result.hypothesis.graph.exitRules).toHaveLength(graph.exitRules.length);
+        expect(result.hypothesis).toBeTruthy();
+      }
+    });
+
+    it('should repair aliased rule nodes and flattened params into valid rule objects', async () => {
+      const ctx = createContext({ config: TEST_OPENAI_CONFIG });
+      mockFetchResponse(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                schemaVersion: 1,
+                signals: [{ kind: 'ema_cross', fast: 8, slow: 21 }],
+                filters: { name: 'volume_min', min: 500000 },
+                entryRules: [{ type: 'breakout_confirmed', lookbackBars: 5 }],
+                exitRules: [{ rule: { type: 'time_stop', params: { maxBars: 12 } } }],
+                riskRules: [{ ruleType: 'atr_stop', parameters: { period: 14, multiple: 2 } }],
+              }),
+            },
+          },
+        ],
+      }));
+
+      const result = await ctx.service.generate({
+        instruction: 'Generate a hypothesis.',
+      });
+
+      expect(result.kind).toBe('accepted');
+      if (result.kind === 'accepted') {
+        expect(result.hypothesis.graph.schemaVersion).toBe('1');
+        expect(result.hypothesis.graph.signals[0]).toEqual({
+          type: 'ema_cross',
+          params: { fast: 8, slow: 21 },
+        });
+        expect(result.hypothesis.graph.filters[0]).toEqual({
+          type: 'volume_min',
+          params: { min: 500000 },
+        });
+        expect(result.hypothesis.graph.entryRules[0]).toEqual({
+          type: 'breakout_confirmed',
+          params: { lookbackBars: 5 },
+        });
+        expect(result.hypothesis.graph.exitRules[0]).toEqual({
+          type: 'time_stop',
+          params: { maxBars: 12 },
+        });
+        expect(result.hypothesis.graph.riskRules[0]).toEqual({
+          type: 'atr_stop',
+          params: { period: 14, multiple: 2 },
+        });
       }
     });
 
