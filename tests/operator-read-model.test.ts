@@ -551,6 +551,9 @@ describe('M010 S01 — OperatorReadModel', () => {
       const cardMap = new Map(cards.map(c => [c.key, c]));
       // realized_pnl from paper_positions: RELIANCE=0, TCS=1000 => total=1000
       expect(cardMap.get('current_pnl')!.value).toBe(1000);
+      expect(cardMap.get('invested_capital')!.value).toBe(25_000);
+      expect(cardMap.get('current_value')!.value).toBe(26_000);
+      expect(cardMap.get('net_pnl')!.value).toBe(2_000);
     });
 
     it('getTickerPerformance returns both open and flat tickers', () => {
@@ -569,7 +572,7 @@ describe('M010 S01 — OperatorReadModel', () => {
       const tcs = results.find(r => r.tradingsymbol === 'TCS');
       expect(tcs).toBeDefined();
       expect(tcs!.netQuantity).toBe(0);
-      expect(tcs!.realizedPnl).toBeGreaterThan(0);
+      expect(tcs!.realizedPnl).toBe(1000);
     });
 
     it('getDecisionPerformance returns decisions with execution links', () => {
@@ -817,11 +820,14 @@ describe('M010 S01 — OperatorReadModel', () => {
       expect(stratA).toBeDefined();
       expect(stratA!.strategyVersion).toBe('1.0.0');
       expect(stratA!.tradeCount).toBe(1); // 1 fill for RELIANCE
+      expect(stratA!.realizedPnl).toBe(0);
+      expect(stratA!.unrealizedPnl).toBe(1_000);
 
       const stratB = results.find(r => r.strategyId === 'strategy-b');
       expect(stratB).toBeDefined();
       expect(stratB!.strategyVersion).toBe('2.0.0');
       expect(stratB!.tradeCount).toBe(2); // 2 fills: HDFC + INFY
+      expect(stratB!.realizedPnl).toBe(0);
     });
 
     it('getStrategyExposure attributes uniquely linked open positions to a strategy', () => {

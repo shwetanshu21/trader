@@ -11,6 +11,20 @@ import {
   renderSection,
 } from '../render-utils.js';
 
+function findSummaryValue(payload: DashboardPayload, key: string): string {
+  const card = payload.summaryCards.data.find(row => row.key === key);
+  if (!card) {
+    return '—';
+  }
+  if (card.display !== null) {
+    return card.display;
+  }
+  if (card.unit === 'INR') {
+    return formatCurrency(card.value);
+  }
+  return formatInt(card.value);
+}
+
 function renderStrategyExposureSection(payload: DashboardPayload, exposure: OperatorStrategyExposure[]): string {
   const state = payload.strategyPerformance.state;
   const strategyRows = exposure.filter(row => row.bucketType === 'strategy');
@@ -82,8 +96,11 @@ function renderStrategySummarySection(payload: DashboardPayload, exposure: Opera
 
   const cards = [
     { label: 'Active Strategy Rows', value: formatInt(strategyRows.length), meta: 'Persisted strategy performance rows' },
-    { label: 'Realized P&L', value: formatCurrency(realizedPnl), meta: 'From linked paper fills' },
+    { label: 'Realized P&L', value: formatCurrency(realizedPnl), meta: 'From linked realized position events' },
     { label: 'Unrealized P&L', value: formatCurrency(unrealizedPnl), meta: 'From current open positions' },
+    { label: 'Invested Capital', value: findSummaryValue(payload, 'invested_capital'), meta: 'Whole-book open cost basis from paper positions' },
+    { label: 'Current Value', value: findSummaryValue(payload, 'current_value'), meta: 'Whole-book open mark value from paper positions' },
+    { label: 'Net P&L', value: findSummaryValue(payload, 'net_pnl'), meta: 'Whole-book realized plus unrealized paper P&L' },
     { label: 'Attributed Open Market Value', value: attributedMarketValue > 0 ? formatCurrency(attributedMarketValue) : '—', meta: 'Unique strategy attribution only' },
     { label: 'Unattributed Open Market Value', value: unattributedMarketValue > 0 ? formatCurrency(unattributedMarketValue) : '—', meta: 'Ambiguous or unlinked positions' },
   ];

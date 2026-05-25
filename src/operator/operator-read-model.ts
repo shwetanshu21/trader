@@ -253,6 +253,67 @@ export class OperatorReadModel {
     return { source, asOf: Date.now(), sourceLabel };
   }
 
+  private _getPaperPositionAggregates(): {
+    currentPnl: number;
+    unrealizedPnl: number;
+    openPositions: number;
+    investedCapital: number;
+    currentValue: number;
+    netPnl: number;
+  } {
+    try {
+      const row = this._db.prepare(`
+        SELECT
+          COALESCE(SUM(realized_pnl), 0) AS current_pnl,
+          COALESCE(
+            SUM(
+              CASE WHEN quantity != 0 AND mark_price IS NOT NULL AND avg_cost_price != 0
+                THEN (mark_price - avg_cost_price) * ABS(quantity)
+                ELSE 0
+              END
+            ), 0
+          ) AS unrealized_pnl,
+          COUNT(CASE WHEN quantity != 0 THEN 1 END) AS open_positions,
+          COALESCE(SUM(CASE WHEN quantity != 0 THEN ABS(quantity) * avg_cost_price ELSE 0 END), 0) AS invested_capital,
+          COALESCE(
+            SUM(
+              CASE WHEN quantity != 0 AND mark_price IS NOT NULL
+                THEN ABS(quantity) * mark_price
+                WHEN quantity != 0
+                THEN ABS(quantity) * avg_cost_price
+                ELSE 0
+              END
+            ), 0
+          ) AS current_value
+        FROM paper_positions
+      `).get() as {
+        current_pnl: number;
+        unrealized_pnl: number;
+        open_positions: number;
+        invested_capital: number;
+        current_value: number;
+      };
+
+      return {
+        currentPnl: row.current_pnl,
+        unrealizedPnl: row.unrealized_pnl,
+        openPositions: row.open_positions,
+        investedCapital: row.invested_capital,
+        currentValue: row.current_value,
+        netPnl: row.current_pnl + row.unrealized_pnl,
+      };
+    } catch {
+      return {
+        currentPnl: 0,
+        unrealizedPnl: 0,
+        openPositions: 0,
+        investedCapital: 0,
+        currentValue: 0,
+        netPnl: 0,
+      };
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Summary cards — aggregate totals from persisted COUNT/SUM queries
   //
@@ -277,92 +338,69 @@ export class OperatorReadModel {
     const now = Date.now();
     const cards: OperatorSummaryCard[] = [];
 
+    const paperPositionAgg = this._getPaperPositionAggregates();
+
     // ── Runtime: paper positions (current P&L) ──────────────────────────
-    try {
-      const realizedRow = this._db.prepare(
-        'SELECT COALESCE(SUM(realized_pnl), 0) AS total FROM paper_positions',
-      ).get() as PnlSumRow;
-      cards.push({
-        key: 'current_pnl',
-        label: 'Current P&L',
-        value: realizedRow.total,
-        unit: 'INR',
-        change: null,
-        display: null,
-        provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
-      });
-    } catch {
-      cards.push({
-        key: 'current_pnl',
-        label: 'Current P&L',
-        value: 0,
-        unit: 'INR',
-        change: null,
-        display: null,
-        provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
-      });
-    }
+    cards.push({
+      key: 'current_pnl',
+      label: 'Current P&L',
+      value: paperPositionAgg.currentPnl,
+      unit: 'INR',
+      change: null,
+      display: null,
+      provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
+    });
 
     // ── Unrealized P&L (from open positions, runtime) ───────────────────
-    try {
-      const unrealizedCards = this._db.prepare(`
-        SELECT COALESCE(
-          SUM(
-            CASE WHEN quantity != 0 AND mark_price IS NOT NULL AND avg_cost_price != 0
-              THEN (mark_price - avg_cost_price) * ABS(quantity)
-              ELSE 0
-            END
-          ), 0
-        ) AS total
-        FROM paper_positions
-        WHERE quantity != 0
-      `).get() as PnlSumRow;
-      cards.push({
-        key: 'unrealized_pnl',
-        label: 'Unrealized P&L',
-        value: unrealizedCards.total,
-        unit: 'INR',
-        change: null,
-        display: null,
-        provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
-      });
-    } catch {
-      cards.push({
-        key: 'unrealized_pnl',
-        label: 'Unrealized P&L',
-        value: 0,
-        unit: 'INR',
-        change: null,
-        display: null,
-        provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
-      });
-    }
+    cards.push({
+      key: 'unrealized_pnl',
+      label: 'Unrealized P&L',
+      value: paperPositionAgg.unrealizedPnl,
+      unit: 'INR',
+      change: null,
+      display: null,
+      provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
+    });
 
     // ── Open positions count ────────────────────────────────────────────
-    try {
-      const openRow = this._db.prepare(
-        'SELECT COUNT(*) AS cnt FROM paper_positions WHERE quantity != 0',
-      ).get() as CountRow;
-      cards.push({
-        key: 'open_positions',
-        label: 'Open Positions',
-        value: openRow.cnt,
-        unit: null,
-        change: null,
-        display: null,
-        provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
-      });
-    } catch {
-      cards.push({
-        key: 'open_positions',
-        label: 'Open Positions',
-        value: 0,
-        unit: null,
-        change: null,
-        display: null,
-        provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
-      });
-    }
+    cards.push({
+      key: 'open_positions',
+      label: 'Open Positions',
+      value: paperPositionAgg.openPositions,
+      unit: null,
+      change: null,
+      display: null,
+      provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
+    });
+
+    // ── Paper-ledger capital / value / net aggregates ───────────────────
+    cards.push({
+      key: 'invested_capital',
+      label: 'Invested Capital',
+      value: paperPositionAgg.investedCapital,
+      unit: 'INR',
+      change: null,
+      display: null,
+      provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
+    });
+    cards.push({
+      key: 'current_value',
+      label: 'Current Value',
+      value: paperPositionAgg.currentValue,
+      unit: 'INR',
+      change: null,
+      display: null,
+      provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
+    });
+    cards.push({
+      key: 'net_pnl',
+      label: 'Net P&L',
+      value: paperPositionAgg.netPnl,
+      unit: 'INR',
+      change: null,
+      display: null,
+      provenance: { source: 'runtime', asOf: now, sourceLabel: 'paper_positions' },
+    });
 
     // ── Total strategy decisions ────────────────────────────────────────
     try {
@@ -541,20 +579,18 @@ export class OperatorReadModel {
    * Empty state: returns empty array.
    */
   getStrategyPerformance(): OperatorStrategyPerformance[] {
-    const now = Date.now();
     const results: OperatorStrategyPerformance[] = [];
 
     try {
       const feeSelect = this._paperFillsHaveColumn('fees')
         ? 'COALESCE(SUM(pf.fees), 0) AS total_fees'
         : '0 AS total_fees';
-      // Attribution chain: paper_fills -> execution_attempts -> strategy_decisions
-      const rows = this._db.prepare(`
+
+      const fillRows = this._db.prepare(`
         SELECT
           sd.strategy_id,
           sd.strategy_version,
           COUNT(DISTINCT pf.id) AS trade_count,
-          COALESCE(SUM(pf.filled_quantity * pf.filled_price * CASE WHEN pf.side = 'buy' THEN -1 ELSE 1 END), 0) AS total_realized_pnl,
           ${feeSelect}
         FROM paper_fills pf
         INNER JOIN execution_attempts ea ON ea.id = pf.execution_attempt_id
@@ -565,54 +601,102 @@ export class OperatorReadModel {
         strategy_id: string;
         strategy_version: string;
         trade_count: number;
-        total_realized_pnl: number;
         total_fees: number;
       }>;
 
-      for (const row of rows) {
-        // Compute unrealized P&L for this strategy from open positions
-        // via the same attribution chain
-        let unrealizedPnl = 0;
-        try {
-          const unrealizedRows = this._db.prepare(`
-            SELECT COALESCE(
-              SUM(
-                CASE WHEN pp.quantity != 0 AND pp.mark_price IS NOT NULL AND pp.avg_cost_price != 0
-                  THEN (pp.mark_price - pp.avg_cost_price) * ABS(pp.quantity)
-                  ELSE 0
-                END
-              ), 0
-            ) AS total
-            FROM paper_positions pp
-            INNER JOIN (
-              SELECT DISTINCT pf2.exchange, pf2.tradingsymbol
-              FROM paper_fills pf2
-              INNER JOIN execution_attempts ea2 ON ea2.id = pf2.execution_attempt_id
-              INNER JOIN strategy_decisions sd2 ON sd2.id = ea2.strategy_decision_id
-              WHERE sd2.strategy_id = ? AND sd2.strategy_version = ?
-            ) AS attributed ON attributed.exchange = pp.exchange AND attributed.tradingsymbol = pp.tradingsymbol
-          `).get(row.strategy_id, row.strategy_version) as PnlSumRow;
-          unrealizedPnl = unrealizedRows.total;
-        } catch {
-          // Attribution join may miss unmatched positions; unrealized defaults to 0
+      const fillMap = new Map<string, { tradeCount: number; totalFees: number }>();
+      for (const row of fillRows) {
+        fillMap.set(`${row.strategy_id}:${row.strategy_version}`, {
+          tradeCount: row.trade_count,
+          totalFees: row.total_fees,
+        });
+      }
+
+      const realizedMap = new Map<string, number>();
+      if (this._tableExists('position_events')) {
+        const realizedRows = this._db.prepare(`
+          SELECT
+            sd.strategy_id,
+            sd.strategy_version,
+            COALESCE(SUM(pe.realized_pnl), 0) AS total_realized_pnl
+          FROM position_events pe
+          INNER JOIN execution_attempts ea ON ea.id = pe.execution_attempt_id
+          INNER JOIN strategy_decisions sd ON sd.id = ea.strategy_decision_id
+          GROUP BY sd.strategy_id, sd.strategy_version
+        `).all() as Array<{
+          strategy_id: string;
+          strategy_version: string;
+          total_realized_pnl: number;
+        }>;
+
+        for (const row of realizedRows) {
+          realizedMap.set(`${row.strategy_id}:${row.strategy_version}`, row.total_realized_pnl);
         }
+      }
+
+      const unrealizedMap = new Map<string, number>();
+      const unrealizedRows = this._db.prepare(`
+        SELECT
+          attributed.strategy_id,
+          attributed.strategy_version,
+          COALESCE(
+            SUM(
+              CASE WHEN pp.quantity != 0 AND pp.mark_price IS NOT NULL AND pp.avg_cost_price != 0
+                THEN (pp.mark_price - pp.avg_cost_price) * ABS(pp.quantity)
+                ELSE 0
+              END
+            ), 0
+          ) AS total_unrealized_pnl
+        FROM paper_positions pp
+        INNER JOIN (
+          SELECT DISTINCT
+            sd.strategy_id,
+            sd.strategy_version,
+            pf.exchange,
+            pf.tradingsymbol
+          FROM paper_fills pf
+          INNER JOIN execution_attempts ea ON ea.id = pf.execution_attempt_id
+          INNER JOIN strategy_decisions sd ON sd.id = ea.strategy_decision_id
+        ) AS attributed
+          ON attributed.exchange = pp.exchange
+         AND attributed.tradingsymbol = pp.tradingsymbol
+        WHERE pp.quantity != 0
+        GROUP BY attributed.strategy_id, attributed.strategy_version
+      `).all() as Array<{
+        strategy_id: string;
+        strategy_version: string;
+        total_unrealized_pnl: number;
+      }>;
+
+      for (const row of unrealizedRows) {
+        unrealizedMap.set(`${row.strategy_id}:${row.strategy_version}`, row.total_unrealized_pnl);
+      }
+
+      const keys = new Set<string>([
+        ...fillMap.keys(),
+        ...realizedMap.keys(),
+        ...unrealizedMap.keys(),
+      ]);
+
+      for (const key of Array.from(keys).sort()) {
+        const [strategyId, strategyVersion] = key.split(':');
+        const fill = fillMap.get(key);
+        const realizedPnl = realizedMap.get(key) ?? 0;
+        const unrealizedPnl = unrealizedMap.get(key) ?? 0;
 
         results.push({
-          strategyId: row.strategy_id,
-          strategyVersion: row.strategy_version,
-          // Intentionally withheld for operator surfaces until a truthful live
-          // denominator/capital base is persisted. Rendering raw realized P&L as
-          // a percentage produced misleading values such as 95720.6%.
+          strategyId,
+          strategyVersion,
           totalReturnPct: null,
-          sharpeRatio: null, // Not computable from fill-level data alone
+          sharpeRatio: null,
           maxDrawdownPct: null,
-          tradeCount: row.trade_count,
+          tradeCount: fill?.tradeCount ?? 0,
           winRate: null,
           profitFactor: null,
-          realizedPnl: row.total_realized_pnl,
-          totalFees: row.total_fees,
+          realizedPnl,
+          totalFees: fill?.totalFees ?? 0,
           unrealizedPnl,
-          provenance: this._provenance('historical', 'paper_fills+execution_attempts+strategy_decisions'),
+          provenance: this._provenance('historical', 'position_events+paper_fills+execution_attempts+strategy_decisions'),
         });
       }
     } catch {
@@ -638,20 +722,17 @@ export class OperatorReadModel {
    * Empty state: returns empty array.
    */
   getTickerPerformance(): OperatorTickerPerformance[] {
-    const now = Date.now();
     const results: OperatorTickerPerformance[] = [];
 
     try {
       const feeSelect = this._paperFillsHaveColumn('fees')
         ? 'COALESCE(SUM(fees), 0) AS total_fees'
         : '0 AS total_fees';
-      // Base data from paper_fills: trade count, realized P&L (approximated)
       const fillRows = this._db.prepare(`
         SELECT
           exchange,
           tradingsymbol,
           COUNT(*) AS trade_count,
-          COALESCE(SUM(filled_quantity * filled_price * CASE WHEN side = 'buy' THEN -1 ELSE 1 END), 0) AS realized_pnl,
           ${feeSelect},
           AVG(filled_price) AS avg_entry_price,
           MAX(filled_price) AS last_fill_price
@@ -662,17 +743,35 @@ export class OperatorReadModel {
         exchange: string;
         tradingsymbol: string;
         trade_count: number;
-        realized_pnl: number;
         total_fees: number;
         avg_entry_price: number | null;
         last_fill_price: number | null;
       }>;
 
-      // Build a map of current positions for unrealized P&L
+      const realizedMap = new Map<string, number>();
+      if (this._tableExists('position_events')) {
+        const realizedRows = this._db.prepare(`
+          SELECT
+            exchange,
+            tradingsymbol,
+            COALESCE(SUM(realized_pnl), 0) AS realized_pnl
+          FROM position_events
+          GROUP BY exchange, tradingsymbol
+        `).all() as Array<{
+          exchange: string;
+          tradingsymbol: string;
+          realized_pnl: number;
+        }>;
+
+        for (const row of realizedRows) {
+          realizedMap.set(`${row.exchange}:${row.tradingsymbol}`, row.realized_pnl);
+        }
+      }
+
       const positionMap = new Map<string, PerTickerPositionRow>();
       try {
         const positions = this._db.prepare(`
-          SELECT exchange, tradingsymbol, side, quantity, realized_pnl, mark_price
+          SELECT exchange, tradingsymbol, side, quantity, avg_cost_price, realized_pnl, mark_price
           FROM paper_positions
           ORDER BY exchange, tradingsymbol
         `).all() as PerTickerPositionRow[];
@@ -686,18 +785,19 @@ export class OperatorReadModel {
       for (const row of fillRows) {
         const key = `${row.exchange}:${row.tradingsymbol}`;
         const pos = positionMap.get(key);
+        let realizedPnl = realizedMap.has(key) ? (realizedMap.get(key) ?? 0) : (pos?.realized_pnl ?? 0);
+        if (realizedPnl === 0 && (pos?.realized_pnl ?? 0) !== 0) {
+          realizedPnl = pos!.realized_pnl;
+        }
 
         const netQuantity = pos?.quantity ?? 0;
-        const side = pos?.side ?? 'flat';
         const unrealizedPnl = pos && pos.mark_price !== null && row.avg_entry_price !== null
           ? (pos.mark_price - row.avg_entry_price) * Math.abs(netQuantity)
           : 0;
 
-        // Win rate: count fills where filled_price moved favorably
-        // For buys: profit when filled_price < current mark (we bought low)
-        // For sells: profit when filled_price > current mark (we sold high)
         let winRate: number | null = null;
-        if (row.trade_count > 0 && pos?.mark_price !== null) {
+        const markPrice = pos?.mark_price;
+        if (row.trade_count > 0 && markPrice !== null && markPrice !== undefined) {
           try {
             const winCount = this._db.prepare(`
               SELECT COUNT(*) AS cnt FROM paper_fills
@@ -706,7 +806,7 @@ export class OperatorReadModel {
                   (side = 'buy' AND filled_price < ?)
                   OR (side = 'sell' AND filled_price > ?)
                 )
-            `).get(row.exchange, row.tradingsymbol, pos!.mark_price, pos!.mark_price) as CountRow;
+            `).get(row.exchange, row.tradingsymbol, markPrice, markPrice) as CountRow;
             winRate = winCount.cnt / row.trade_count;
           } catch {
             // Ignore
@@ -716,34 +816,34 @@ export class OperatorReadModel {
         results.push({
           exchange: row.exchange,
           tradingsymbol: row.tradingsymbol,
-          totalPnl: (row.realized_pnl ?? 0) + unrealizedPnl,
+          totalPnl: realizedPnl + unrealizedPnl,
           tradeCount: row.trade_count,
           winRate,
           netQuantity,
           avgEntryPrice: row.avg_entry_price,
           lastPrice: pos?.mark_price ?? row.last_fill_price,
           unrealizedPnl,
-          realizedPnl: row.realized_pnl ?? 0,
+          realizedPnl,
           totalFees: row.total_fees ?? 0,
-          provenance: this._provenance('historical', 'paper_fills+paper_positions'),
+          provenance: this._provenance('historical', 'position_events+paper_fills+paper_positions'),
         });
       }
 
-      // Also include positions that have no fills (e.g. manually created)
       for (const [key, pos] of positionMap) {
         if (!fillRows.some(r => `${r.exchange}:${r.tradingsymbol}` === key)) {
+          const unrealizedPnl = pos.mark_price !== null && pos.avg_cost_price > 0
+            ? (pos.mark_price - pos.avg_cost_price) * Math.abs(pos.quantity)
+            : 0;
           results.push({
             exchange: pos.exchange,
             tradingsymbol: pos.tradingsymbol,
-            totalPnl: pos.realized_pnl,
+            totalPnl: pos.realized_pnl + unrealizedPnl,
             tradeCount: 0,
             winRate: null,
             netQuantity: pos.quantity,
             avgEntryPrice: pos.avg_cost_price || null,
             lastPrice: pos.mark_price,
-            unrealizedPnl: pos.mark_price !== null && pos.avg_cost_price > 0
-              ? (pos.mark_price - pos.avg_cost_price) * Math.abs(pos.quantity)
-              : 0,
+            unrealizedPnl,
             realizedPnl: pos.realized_pnl,
             totalFees: 0,
             provenance: this._provenance('runtime', 'paper_positions'),

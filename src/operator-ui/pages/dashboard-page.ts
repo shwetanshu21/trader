@@ -85,45 +85,18 @@ function findSummaryCard(cards: OperatorSummaryCard[], key: string): OperatorSum
 
 export function renderOverviewHero(payload: DashboardPayload): string {
   const cards = payload.summaryCards.data;
-  const metricKeys = ['current_pnl', 'unrealized_pnl', 'open_positions'];
-  const visibleCards = metricKeys
+  const metricKeys = ['net_pnl', 'invested_capital', 'current_value', 'open_positions'];
+  const heroCards = metricKeys
     .map(key => findSummaryCard(cards, key))
     .filter((card): card is OperatorSummaryCard => card !== null);
-
-  const canUseTickerPerformance = payload.tickerPerformance.state === 'ok' || payload.tickerPerformance.state === 'stale';
-  const openTickerRows = canUseTickerPerformance
-    ? payload.tickerPerformance.data.filter(row => row.netQuantity !== 0)
-    : [];
-  const openCostBasis = openTickerRows.reduce((sum, row) => sum + Math.abs(row.netQuantity) * (row.avgEntryPrice ?? 0), 0);
-  const openMarketValue = openTickerRows.reduce((sum, row) => sum + Math.abs(row.netQuantity) * (row.lastPrice ?? row.avgEntryPrice ?? 0), 0);
-  const derivedCards = [
-    {
-      key: 'open_cost_basis',
-      label: 'Open Cost Basis',
-      value: openCostBasis,
-      display: canUseTickerPerformance ? null : 'Unavailable',
-      unit: 'INR',
-      provenance: { source: 'synthetic' as const, asOf: Date.parse(payload.assembledAt), sourceLabel: 'tickerPerformance(open cost basis proxy)' },
-    },
-    {
-      key: 'open_market_value',
-      label: 'Open Market Value',
-      value: openMarketValue,
-      display: canUseTickerPerformance ? null : 'Unavailable',
-      unit: 'INR',
-      provenance: { source: 'synthetic' as const, asOf: Date.parse(payload.assembledAt), sourceLabel: 'tickerPerformance(mark value proxy)' },
-    },
-  ];
-
-  const heroCards = [...visibleCards, ...derivedCards];
 
   const cardHtml = heroCards.map(card => {
     const value = card.display ?? (card.unit === 'INR'
       ? formatCurrency(card.value, card.unit)
       : formatNumber(card.value, 0));
     const toneClass = card.value > 0 ? 'status-ok' : card.value < 0 ? 'status-err' : 'status-default';
-    const caveat = card.key === 'open_cost_basis' || card.key === 'open_market_value'
-      ? `<div class="hero-metric-footnote">${canUseTickerPerformance ? 'Exposure proxy · not broker cash or NAV' : 'Unavailable until ticker performance refresh succeeds'}</div>`
+    const caveat = card.key === 'invested_capital' || card.key === 'current_value'
+      ? '<div class="hero-metric-footnote">Paper-ledger aggregate · not broker cash or account NAV</div>'
       : '';
     return `<div class="hero-metric-card">
       <div class="hero-metric-label">${escapeHtml(card.label)}</div>
@@ -157,9 +130,6 @@ export function renderOverviewHero(payload: DashboardPayload): string {
   if (staleCount > 0) {
     exceptions.push(`${staleCount} section(s) are showing last-known cached data.`);
   }
-  if (!canUseTickerPerformance) {
-    exceptions.push('Exposure proxy cards are suppressed until ticker performance becomes available again.');
-  }
   if (exceptions.length === 0) {
     exceptions.push('No active operator exceptions. Runtime evidence and persisted sections are currently loading normally.');
   }
@@ -174,8 +144,8 @@ export function renderOverviewHero(payload: DashboardPayload): string {
     <div class="hero-grid">
       <div class="hero-primary">
         <div class="hero-eyebrow">Overview</div>
-        <h2>Capital, exposure proxies, and latest operator truth</h2>
-        <p class="hero-copy">The console shows realized and unrealized P&amp;L directly from persisted paper state. Exposure numbers are marked proxies derived from open positions, not broker cash or account NAV.</p>
+        <h2>Capital, paper-ledger value, and latest operator truth</h2>
+        <p class="hero-copy">The console shows realized and unrealized P&amp;L directly from persisted paper state. Invested capital and current value are aggregated from open paper positions and should be read as paper-ledger exposure, not broker cash or account NAV.</p>
         <div class="hero-metrics">${cardHtml}</div>
       </div>
       <div class="hero-secondary">
@@ -535,7 +505,7 @@ function buildDashboardBootstrapJson(payload: DashboardPayload, pollIntervalMs: 
     dbAvailable: payload.dbAvailable,
     dbError: payload.dbError,
     sections: Object.fromEntries(DASHBOARD_SECTION_ORDER.map((key) => {
-      const section = (payload as Record<string, unknown>)[key] as DashboardSection<unknown> | undefined;
+      const section = ((payload as unknown) as Record<string, unknown>)[key] as DashboardSection<unknown> | undefined;
       return [key, summarizeSection(section ?? defaultOvernightResearchSection())];
     })),
   };
@@ -604,8 +574,8 @@ function renderSummaryCardsSection(
 
       const label = escapeHtml(c.label || c.key || '');
       const badge = renderProvenanceBadge(c.provenance);
-      const footnote = c.key === 'open_cost_basis' || c.key === 'open_market_value'
-        ? '<div class="hero-metric-footnote">Exposure proxy, not account cash or NAV</div>'
+      const footnote = c.key === 'invested_capital' || c.key === 'current_value'
+        ? '<div class="hero-metric-footnote">Paper-ledger aggregate, not broker cash or NAV</div>'
         : '';
 
       return `<div class="summary-card">
@@ -627,7 +597,7 @@ function renderSummaryCardsSection(
   return renderDashboardSectionWrapper(
     'summaryCards',
     'Summary',
-    'Live P&L, exposure proxies, and persisted operator totals',
+    'Live P&L and paper-ledger capital aggregates',
     section,
     content,
   );

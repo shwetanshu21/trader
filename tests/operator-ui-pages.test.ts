@@ -69,7 +69,11 @@ function sampleSummaryCards(): OperatorSummaryCard[] {
   return [
     { key: 'upstox_auth', label: 'Upstox Auth', value: 0, unit: null, change: null, display: 'Healthy', provenance: testProvenance },
     { key: 'current_pnl', label: 'Current P&L', value: 15420.50, unit: 'INR', change: null, display: null, provenance: testProvenance },
+    { key: 'unrealized_pnl', label: 'Unrealized P&L', value: 3200.00, unit: 'INR', change: null, display: null, provenance: testProvenance },
     { key: 'open_positions', label: 'Open Positions', value: 3, unit: null, change: null, display: null, provenance: testProvenance },
+    { key: 'invested_capital', label: 'Invested Capital', value: 71250.00, unit: 'INR', change: null, display: null, provenance: testProvenance },
+    { key: 'current_value', label: 'Current Value', value: 74450.00, unit: 'INR', change: null, display: null, provenance: testProvenance },
+    { key: 'net_pnl', label: 'Net P&L', value: 18620.50, unit: 'INR', change: null, display: null, provenance: testProvenance },
   ];
 }
 
@@ -322,6 +326,9 @@ describe('Top-level operator pages', () => {
 
     const strategiesHtml = renderStrategiesPage(payload, sampleStrategyExposure());
     expect(strategiesHtml).toContain('Attributed Open Exposure');
+    expect(strategiesHtml).toContain('Invested Capital');
+    expect(strategiesHtml).toContain('Current Value');
+    expect(strategiesHtml).toContain('Net P&amp;L');
     expect(strategiesHtml).toContain('Unattributed Open Market Value');
     expect(strategiesHtml).toContain('/strategies');
   });
@@ -365,7 +372,9 @@ describe('Dashboard page', () => {
     expect(html).toContain('/decision?id=7');
     expect(html).toContain('/backtest?runId=42');
     expect(html).toContain('WF#5');
-    expect(html).toContain('Upstox Auth');
+    expect(html).toContain('Invested Capital');
+    expect(html).toContain('Current Value');
+    expect(html).toContain('Net P&amp;L');
     expect(html).toContain('Healthy');
     expect(html).toContain('data-dashboard-section="summaryCards"');
     expect(html).toContain('id="dashboard-section-strategyPerformance"');

@@ -559,6 +559,9 @@ describe('Scenario 1 — Basic WAL (writer closed before reader)', () => {
     expect(cardMap.get('total_paper_fills')!.value).toBe(3);
     // current_pnl: realized_pnl from paper_positions: RELIANCE=0, TCS=1000 => 1000
     expect(cardMap.get('current_pnl')!.value).toBe(1000);
+    expect(cardMap.get('invested_capital')!.value).toBe(25_000);
+    expect(cardMap.get('current_value')!.value).toBe(26_000);
+    expect(cardMap.get('net_pnl')!.value).toBe(2_000);
     // 1 open position (RELIANCE, qty=10)
     expect(cardMap.get('open_positions')!.value).toBe(1);
 
@@ -569,10 +572,13 @@ describe('Scenario 1 — Basic WAL (writer closed before reader)', () => {
     const stratA = stratPerf.find(s => s.strategyId === 'strat-a');
     expect(stratA).toBeDefined();
     expect(stratA!.tradeCount).toBe(2); // RELIANCE + TCS fills
+    expect(stratA!.realizedPnl).toBe(1000);
+    expect(stratA!.unrealizedPnl).toBe(1000);
 
     const stratB = stratPerf.find(s => s.strategyId === 'strat-b');
     expect(stratB).toBeDefined();
     expect(stratB!.tradeCount).toBe(1); // HDFC fill
+    expect(stratB!.realizedPnl).toBe(0);
 
     // ── Per-ticker performance ────────────────────────────────────────
     const tickerPerf = readModel.getTickerPerformance();
@@ -587,7 +593,7 @@ describe('Scenario 1 — Basic WAL (writer closed before reader)', () => {
     const tcs = tickerPerf.find(t => t.tradingsymbol === 'TCS');
     expect(tcs).toBeDefined();
     expect(tcs!.netQuantity).toBe(0); // flat
-    expect(tcs!.realizedPnl).toBe(20000); // fill-level: 5 * 4000 * 1 = 20000
+    expect(tcs!.realizedPnl).toBe(1000);
 
     const hdfc = tickerPerf.find(t => t.tradingsymbol === 'HDFC');
     expect(hdfc).toBeDefined();
@@ -680,6 +686,9 @@ describe('Scenario 2 — WAL concurrency (writer open while reader reads)', () =
     expect(cardMap.get('total_decisions')!.value).toBe(3);
     expect(cardMap.get('total_paper_fills')!.value).toBe(3);
     expect(cardMap.get('current_pnl')!.value).toBe(1000);
+    expect(cardMap.get('invested_capital')!.value).toBe(25_000);
+    expect(cardMap.get('current_value')!.value).toBe(26_000);
+    expect(cardMap.get('net_pnl')!.value).toBe(2_000);
 
     // Verify per-strategy reads work
     const stratPerf = readModel.getStrategyPerformance();
@@ -808,7 +817,7 @@ describe('Scenario 4 — Flat positions visible in historical aggregates', () =>
     const tcs = tickerPerf.find(t => t.tradingsymbol === 'TCS');
     expect(tcs).toBeDefined();
     expect(tcs!.netQuantity).toBe(0); // flat
-    expect(tcs!.realizedPnl).toBe(20000); // fill-level: 5 * 4000 * 1 = 20000
+    expect(tcs!.realizedPnl).toBe(1000);
 
     // Open-position count should still be 1 (RELIANCE is open, TCS is flat)
     const cards = readModel.getSummaryCards();
