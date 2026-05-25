@@ -3543,6 +3543,10 @@ export interface OperatorDecisionPerformance {
   outcomeCode: string | null;
   /** Total fees/charges in rupees, or null when no fill. */
   fees: number | null;
+  /** Hybrid LLM consultation status, or null when no hybrid evidence exists. */
+  llmStatus: string | null;
+  /** Human-readable hybrid LLM rationale, or null when absent. */
+  llmRationale: string | null;
   /** Realized P&L from this decision in rupees, or null when no fill. */
   realizedPnl: number | null;
   /** Provenance metadata. */

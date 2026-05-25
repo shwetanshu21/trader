@@ -601,6 +601,8 @@ describe('Scenario 1 — Basic WAL (writer closed before reader)', () => {
       expect(d.decisionStatus).toBe('approved');
       expect(d.executionStatus).toBe('completed');
       expect(d.outcomeCode).toBe('paper_simulated');
+      expect(d.llmStatus).toBeNull();
+      expect(d.llmRationale).toBeNull();
     }
 
     // ── Lifecycle states ──────────────────────────────────────────────

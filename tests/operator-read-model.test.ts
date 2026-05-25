@@ -581,6 +581,8 @@ describe('M010 S01 — OperatorReadModel', () => {
         expect(r.decisionStatus).toBe('approved');
         expect(r.executionStatus).toBe('completed');
         expect(r.outcomeCode).toBe('paper_simulated');
+        expect(r.llmStatus).toBeNull();
+        expect(r.llmRationale).toBeNull();
       }
     });
   });

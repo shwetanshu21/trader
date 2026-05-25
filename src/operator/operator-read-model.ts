@@ -143,6 +143,8 @@ interface PerDecisionRow {
   sd_decided_at: number;
   ea_status: string | null;
   ea_outcome_code: string | null;
+  hs_llm_status: string | null;
+  hs_llm_rationale: string | null;
   pf_fees: number | null;
   pe_realized_pnl: number | null;
 }
@@ -234,6 +236,7 @@ interface ResearchReasonCodeRow {
 export class OperatorReadModel {
   private readonly _db: Database.Database;
   private _paperFillColumns: Set<string> | null = null;
+  private _knownTables: Set<string> | null = null;
 
   /**
    * @param db - A read-only Database handle obtained from openOperatorDb().
@@ -881,6 +884,12 @@ export class OperatorReadModel {
       const feeSelect = this._paperFillsHaveColumn('fees')
         ? 'pf.fees AS pf_fees'
         : 'NULL AS pf_fees';
+      const hybridSelect = this._tableExists('hybrid_score_summary')
+        ? 'hs.llm_status AS hs_llm_status, hs.llm_rationale AS hs_llm_rationale'
+        : 'NULL AS hs_llm_status, NULL AS hs_llm_rationale';
+      const hybridJoin = this._tableExists('hybrid_score_summary')
+        ? 'LEFT JOIN hybrid_score_summary hs ON hs.proposal_attempt_id = sd.proposal_attempt_id'
+        : '';
       const rows = this._db.prepare(`
         SELECT
           sd.id AS sd_id,
@@ -895,6 +904,7 @@ export class OperatorReadModel {
           sd.decided_at AS sd_decided_at,
           ea.status AS ea_status,
           ea.outcome_code AS ea_outcome_code,
+          ${hybridSelect},
           ${feeSelect},
           (
             SELECT COALESCE(SUM(pe.realized_pnl), 0)
@@ -904,6 +914,7 @@ export class OperatorReadModel {
           ) AS pe_realized_pnl
         FROM strategy_decisions sd
         LEFT JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
+        ${hybridJoin}
         LEFT JOIN paper_fills pf ON pf.execution_attempt_id = ea.id
         ORDER BY sd.decided_at DESC
         LIMIT ?
@@ -924,8 +935,10 @@ export class OperatorReadModel {
           executionStatus: row.ea_status ?? null,
           outcomeCode: row.ea_outcome_code ?? null,
           fees: row.pf_fees ?? null,
+          llmStatus: row.hs_llm_status ?? null,
+          llmRationale: row.hs_llm_rationale ?? null,
           realizedPnl: row.pe_realized_pnl ?? null,
-          provenance: this._provenance('historical', 'strategy_decisions+execution_attempts+position_events'),
+          provenance: this._provenance('historical', 'strategy_decisions+hybrid_score_summary+execution_attempts+position_events'),
         });
       }
     } catch {
@@ -1515,5 +1528,18 @@ export class OperatorReadModel {
     }
 
     return this._paperFillColumns.has(column);
+  }
+
+  private _tableExists(tableName: string): boolean {
+    if (this._knownTables === null) {
+      try {
+        const rows = this._db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>;
+        this._knownTables = new Set(rows.map(row => row.name));
+      } catch {
+        this._knownTables = new Set();
+      }
+    }
+
+    return this._knownTables.has(tableName);
   }
 }

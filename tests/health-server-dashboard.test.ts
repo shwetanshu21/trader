@@ -2580,6 +2580,9 @@ describe('Dashboard renderer — HTML escaping', () => {
       expect(html).toContain('D:80%');
       expect(html).toContain('L:70%');
       expect(html).toContain('M:75%');
+      expect(html).toContain('LLM:consulted');
+      expect(html).toContain('Recent hybrid LLM status in this bounded decision window:');
+      expect(html).toContain('consulted 1');
     });
 
     it('renders component summary', async () => {

@@ -160,6 +160,19 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         <td>${escapeHtml(e.reason)}</td>
       </tr>`).join('');
 
+  const recentLlmStatusCounts = new Map<string, number>();
+  for (const decision of recentStrategyDecisions) {
+    const status = decision.hybrid?.llmStatus;
+    if (status) {
+      recentLlmStatusCounts.set(status, (recentLlmStatusCounts.get(status) ?? 0) + 1);
+    }
+  }
+  const recentLlmStatusSummary = recentStrategyDecisions.length === 0
+    ? ''
+    : recentLlmStatusCounts.size > 0
+      ? `<p class="muted">Recent hybrid LLM status in this bounded decision window: ${Array.from(recentLlmStatusCounts.entries()).map(([status, count]) => `<span class="reason">${escapeHtml(status)} ${count}</span>`).join(' ')}</p>`
+      : '<p class="muted">Recent hybrid LLM status in this bounded decision window: no persisted hybrid evidence.</p>';
+
   const strategyRows = recentStrategyDecisions.length === 0
     ? '<tr><td colspan="9" class="muted">No strategy decisions recorded</td></tr>'
     : recentStrategyDecisions.map(d => {
@@ -172,6 +185,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
             <span class="score">M:${(d.hybrid.mergedScore * 100).toFixed(0)}%</span>
             ${d.hybrid.llmScore != null ? `<span class="score llm">L:${(d.hybrid.llmScore * 100).toFixed(0)}%</span>` : `<span class="score muted">L:—</span>`}
             <span class="score policy">${escapeHtml(d.hybrid.mergePolicy)}</span>
+            <span class="score ${d.hybrid.llmStatus === 'consulted' ? '' : d.hybrid.llmStatus === 'degraded' || d.hybrid.llmStatus === 'error' ? 'warning' : 'muted'}" title="${escapeHtml(d.hybrid.llmRationale ?? 'No LLM rationale recorded.')}">LLM:${escapeHtml(d.hybrid.llmStatus)}</span>
             ${d.hybrid.isDowngraded ? `<span class="downgrade-badge" title="${escapeHtml(d.hybrid.downgradeContext ?? '')}">▼ downgraded</span>` : ''}
             ${d.hybrid.components.length > 0 ? `<div class="hybrid-comps">${d.hybrid.components.map(c => `<span class="comp">${escapeHtml(c.componentName)}:${(c.score * 100).toFixed(0)}%</span>`).join('')}</div>` : ''}
             ${d.hybrid.llmRationale ? `<div class="hybrid-rationale">${escapeHtml(d.hybrid.llmRationale)}</div>` : ''}
@@ -453,6 +467,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
   .status-pending { color: #fbbf24; }
   .hybrid-block { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
   .score { display: inline-block; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.75rem; background: #1e3a5f; color: #93c5fd; font-variant-numeric: tabular-nums; }
+  .score.warning { background: #5b3412; color: #fde68a; }
   .score.llm { background: #3b1f5e; color: #c4b5fd; }
   .score.policy { background: #1a3a2a; color: #6ee7b7; }
   .downgrade-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.7rem; background: #7f1d1d; color: #fca5a5; cursor: help; }
@@ -539,6 +554,7 @@ ${universeSection}
 
 <div class="section">
   <h2>Strategy Decisions (${recentStrategyDecisions.length})</h2>
+  ${recentLlmStatusSummary}
   <table>
     <thead><tr><td>Exchange</td><td>Symbol</td><td>Side</td><td>Status</td><td>Notional</td><td>Reasons</td><td>Hybrid</td><td>India Research</td></tr></thead>
     <tbody>${strategyRows}</tbody>

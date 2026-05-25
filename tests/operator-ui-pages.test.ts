@@ -99,8 +99,9 @@ function sampleDecisionPerformance(): OperatorDecisionPerformance[] {
       decisionId: 7, proposalAttemptId: 100, exchange: 'NSE', tradingsymbol: 'RELIANCE',
       side: 'buy', quantity: 25, price: 2850.00, decisionStatus: 'approved',
       strategyId: 'india-nse-eq-v1', decidedAt: '2025-01-10T10:20:30.000Z',
-      executionStatus: 'completed', outcomeCode: 'paper_simulated', realizedPnl: 1200.00,
-      provenance: testProvenance,
+      executionStatus: 'completed', outcomeCode: 'paper_simulated', fees: 12.34,
+      llmStatus: 'degraded', llmRationale: 'LLM returned empty rankings — using deterministic fallback',
+      realizedPnl: 1200.00, provenance: testProvenance,
     },
   ];
 }
@@ -371,6 +372,9 @@ describe('Dashboard page', () => {
     expect(html).toContain('id="dashboard-bootstrap"');
     expect(html).toContain('"pollIntervalMs":1500');
     expect(html).toContain('window.setTimeout(pollOnce, pollIntervalMs);');
+    expect(html).toContain('Recent hybrid LLM status in this bounded decision window');
+    expect(html).toContain('LLM Status');
+    expect(html).toContain('degraded 1');
   });
 
   it('renders degraded and unavailable states with explicit state metadata', () => {

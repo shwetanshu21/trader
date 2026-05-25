@@ -773,6 +773,16 @@ function renderDecisionPerformanceSection(
   let content: string;
 
   if ((section.state === 'ok' || section.state === 'stale') && section.data.length > 0) {
+    const llmCounts = new Map<string, number>();
+    for (const decision of section.data) {
+      if (decision.llmStatus) {
+        llmCounts.set(decision.llmStatus, (llmCounts.get(decision.llmStatus) ?? 0) + 1);
+      }
+    }
+    const llmSummary = llmCounts.size > 0
+      ? `<div class="section-note">Recent hybrid LLM status in this bounded decision window: ${Array.from(llmCounts.entries()).map(([status, count]) => `<span class="hero-chip ${status === 'consulted' ? 'hero-chip-ok' : status === 'degraded' || status === 'error' ? 'hero-chip-warn' : 'hero-chip-neutral'}">${escapeHtml(status)} ${count}</span>`).join(' ')}</div>`
+      : '<div class="section-note">Recent hybrid LLM status in this bounded decision window: no persisted hybrid evidence.</div>';
+
     const rows = section.data.map(d => {
       const status = d.decisionStatus;
       const execStatus = d.executionStatus ?? '—';
@@ -783,6 +793,9 @@ function renderDecisionPerformanceSection(
       const fees = d.fees !== null ? formatCurrency(d.fees, 'INR') : '—';
       const badge = renderProvenanceBadge(d.provenance);
       const decisionHref = decisionDetailHref(d.decisionId);
+      const llmStatus = d.llmStatus
+        ? `<span class="${statusClass(d.llmStatus)}" title="${escapeHtml(d.llmRationale ?? 'No LLM rationale recorded.')}">${escapeHtml(d.llmStatus)}</span>`
+        : '<span class="status-skip">—</span>';
 
       return `<tr>
         <td><code>${escapeHtml(d.exchange)}</code></td>
@@ -790,6 +803,7 @@ function renderDecisionPerformanceSection(
         <td>${escapeHtml(d.side)}</td>
         <td class="num">${formatInt(d.quantity)}</td>
         <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
+        <td>${llmStatus}</td>
         <td>${escapeHtml(execStatus)}</td>
         <td>${escapeHtml(outcome)}</td>
         <td class="num">${escapeHtml(fees)}</td>
@@ -800,13 +814,14 @@ function renderDecisionPerformanceSection(
       </tr>`;
     }).join('\n');
 
-    content = `<table>
+    content = `${llmSummary}<table>
       <thead><tr>
         <th>Exchange</th>
         <th>Symbol</th>
         <th>Side</th>
         <th class="num">Qty</th>
         <th>Status</th>
+        <th>LLM Status</th>
         <th>Exec Status</th>
         <th>Outcome</th>
         <th class="num">Fees</th>
