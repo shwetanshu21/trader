@@ -225,14 +225,30 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
 
     // ── Paper fills table ───────────────────────────────────────────
     const paperFillsRows = execution.recentPaperFills.length === 0
-      ? '<tr><td colspan="5" class="muted">No paper fills</td></tr>'
-      : execution.recentPaperFills.map(f => `<tr>
+      ? '<tr><td colspan="9" class="muted">No paper fills</td></tr>'
+      : execution.recentPaperFills.map(f => {
+          const feeBreakdown = f.feeBreakdown
+            ? [
+                `brk ${f.feeBreakdown.brokerage.toFixed(2)}`,
+                `stt ${f.feeBreakdown.stt.toFixed(2)}`,
+                `txn ${f.feeBreakdown.exchangeTransactionCharge.toFixed(2)}`,
+                `gst ${f.feeBreakdown.gst.toFixed(2)}`,
+                `stamp ${f.feeBreakdown.stampDuty.toFixed(2)}`,
+                f.feeBreakdown.dpCharge > 0 ? `dp ${f.feeBreakdown.dpCharge.toFixed(2)}` : null,
+              ].filter(Boolean).join(' · ')
+            : '—';
+          return `<tr>
           <td>${escapeHtml(f.tradingsymbol)}</td>
           <td>${escapeHtml(f.side)}</td>
           <td>${f.filledQuantity} @ ${f.filledPrice.toFixed(2)}</td>
+          <td>${f.referencePrice != null ? f.referencePrice.toFixed(2) : '—'}</td>
+          <td>${f.slippageAmount.toFixed(2)}</td>
+          <td>${f.fees.toFixed(2)}</td>
+          <td>${escapeHtml(feeBreakdown)}</td>
           <td><code>${escapeHtml(f.brokerOrderId)}</code></td>
           <td>${escapeHtml(f.filledAt)}</td>
-        </tr>`).join('');
+        </tr>`;
+        }).join('');
 
     // ── Current positions table ─────────────────────────────────────
     const positionsRows = execution.currentPositions.length === 0
@@ -324,7 +340,7 @@ export function renderDashboardHtml(snapshot: DashboardSnapshot): string {
         </table>
         <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Paper Fills (${execution.totalFills})</h3>
         <table style="margin-top:0.5rem;">
-          <thead><tr><td>Symbol</td><td>Side</td><td>Fill</td><td>Order ID</td><td>Filled At</td></tr></thead>
+          <thead><tr><td>Symbol</td><td>Side</td><td>Fill</td><td>Ref</td><td>Slip</td><td>Fees</td><td>Breakdown</td><td>Order ID</td><td>Filled At</td></tr></thead>
           <tbody>${paperFillsRows}</tbody>
         </table>
         <h3 style="margin-top:0.75rem;font-size:0.9rem;color:#94a3b8;">Current Positions (${execution.currentPositions.length})</h3>

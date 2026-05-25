@@ -2335,6 +2335,21 @@ export interface DashboardPaperOrder {
   brokerOrderId: string;
 }
 
+/** Per-fill India/Upstox fee breakdown shown on operator/dashboard surfaces. */
+export interface DashboardFeeBreakdown {
+  segment: string;
+  turnover: number;
+  brokerage: number;
+  stt: number;
+  exchangeTransactionCharge: number;
+  ipftCharge: number;
+  sebiCharge: number;
+  stampDuty: number;
+  gst: number;
+  dpCharge: number;
+  totalFees: number;
+}
+
 /** A recent paper fill for the operator dashboard. */
 export interface DashboardPaperFill {
   id: number;
@@ -2352,6 +2367,14 @@ export interface DashboardPaperFill {
   filledQuantity: number;
   /** Fill price. */
   filledPrice: number;
+  /** Reference quote-side price before simulated slippage. */
+  referencePrice: number | null;
+  /** Aggregate slippage applied across the fill quantity. */
+  slippageAmount: number;
+  /** Aggregate fees/charges applied to this fill. */
+  fees: number;
+  /** Derived India/Upstox charge breakdown, or null when unavailable. */
+  feeBreakdown: DashboardFeeBreakdown | null;
   /** Broker order ID for traceability. */
   brokerOrderId: string;
 }
@@ -3417,6 +3440,8 @@ export interface OperatorStrategyPerformance {
   profitFactor: number | null;
   /** Total realized P&L in rupees. */
   realizedPnl: number;
+  /** Total realized fees/charges in rupees. */
+  totalFees: number;
   /** Total unrealized P&L in rupees (0 for flat positions). */
   unrealizedPnl: number;
   /** Provenance metadata. */
@@ -3449,6 +3474,8 @@ export interface OperatorTickerPerformance {
   unrealizedPnl: number;
   /** Realized P&L in rupees. */
   realizedPnl: number;
+  /** Total realized fees/charges in rupees. */
+  totalFees: number;
   /** Provenance metadata. */
   provenance: OperatorProvenance;
 }
@@ -3514,6 +3541,8 @@ export interface OperatorDecisionPerformance {
   executionStatus: string | null;
   /** Execution outcome code, or null when not consumed or not completed. */
   outcomeCode: string | null;
+  /** Total fees/charges in rupees, or null when no fill. */
+  fees: number | null;
   /** Realized P&L from this decision in rupees, or null when no fill. */
   realizedPnl: number | null;
   /** Provenance metadata. */
@@ -3790,6 +3819,16 @@ export interface OperatorDecisionDetail {
   hybrid: OperatorHybridEvidenceDetail | null;
   /** Linked execution attempt, or null when the decision is unconsumed. */
   executionAttempt: OperatorExecutionAttemptDetail | null;
+  /** Linked paper fill evidence with fee breakdown, or null when no fill exists. */
+  paperFill: {
+    filledAt: string;
+    filledQuantity: number;
+    filledPrice: number;
+    referencePrice: number | null;
+    slippageAmount: number;
+    fees: number;
+    feeBreakdown: DashboardFeeBreakdown | null;
+  } | null;
   /** Realized P&L linkage, or null when no execution attempt exists. */
   realizedPnl: OperatorDecisionRealizedPnlDetail | null;
   /** Non-fatal diagnostics such as malformed optional JSON. */
@@ -3875,6 +3914,7 @@ export interface OperatorStrategyDetail {
     winRate: number | null;
     profitFactor: number | null;
     realizedPnl: number;
+    totalFees: number;
     unrealizedPnl: number;
   };
   /** Recent per-decision execution outcomes for this strategy version. */

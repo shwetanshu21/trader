@@ -126,6 +126,33 @@ export function renderDecisionDetailPage(detail: OperatorDecisionDetail): string
             { label: 'Attempted At', value: escapeHtml(formatTimestamp(detail.executionAttempt.attemptedAt)) },
             { label: 'Completed At', value: escapeHtml(formatTimestamp(detail.executionAttempt.completedAt)) },
           ])}
+          ${detail.paperFill ? `<div style="margin-top:0.9rem;">
+            <h3>Linked Paper Fill</h3>
+            ${renderKeyValueGrid([
+              { key: 'Filled At', value: escapeHtml(formatTimestamp(detail.paperFill.filledAt)) },
+              { key: 'Filled Quantity', value: escapeHtml(formatInt(detail.paperFill.filledQuantity)) },
+              { key: 'Filled Price', value: escapeHtml(formatCurrency(detail.paperFill.filledPrice, null)) },
+              { key: 'Reference Price', value: escapeHtml(detail.paperFill.referencePrice === null ? '—' : formatCurrency(detail.paperFill.referencePrice, null)) },
+              { key: 'Slippage', value: escapeHtml(formatCurrency(detail.paperFill.slippageAmount, 'INR')) },
+              { key: 'Fees', value: escapeHtml(formatCurrency(detail.paperFill.fees, 'INR')) },
+            ])}
+            ${detail.paperFill.feeBreakdown ? `<div style="margin-top:0.9rem;">
+              <h3>India / Upstox Charge Breakdown</h3>
+              ${renderKeyValueGrid([
+                { key: 'Segment', value: escapeHtml(detail.paperFill.feeBreakdown.segment) },
+                { key: 'Turnover', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.turnover, 'INR')) },
+                { key: 'Brokerage', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.brokerage, 'INR')) },
+                { key: 'STT / CTT', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.stt, 'INR')) },
+                { key: 'Exchange Txn', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.exchangeTransactionCharge, 'INR')) },
+                { key: 'IPFT', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.ipftCharge, 'INR')) },
+                { key: 'SEBI', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.sebiCharge, 'INR')) },
+                { key: 'Stamp Duty', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.stampDuty, 'INR')) },
+                { key: 'GST', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.gst, 'INR')) },
+                { key: 'DP Charge', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.dpCharge, 'INR')) },
+                { key: 'Total Fees', value: escapeHtml(formatCurrency(detail.paperFill.feeBreakdown.totalFees, 'INR')) },
+              ])}
+            </div>` : ''}
+          </div>` : ''}
           <div style="margin-top:0.9rem;">
             <h3>Execution Message</h3>
             <p>${escapeHtml(detail.executionAttempt.message)}</p>

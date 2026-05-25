@@ -24,8 +24,11 @@ import {
 import { StrategyDecisionRepository } from '../persistence/strategy-decision-repo.js';
 import { HybridScoreRepository } from '../persistence/hybrid-score-repo.js';
 import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
+import { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import { PaperPositionRepository } from '../persistence/paper-position-repo.js';
 import { WalkForwardRepository } from '../persistence/walk-forward-repo.js';
+import { calculatePersistedPaperFillChargeBreakdown } from '../execution/india-upstox-fee-visibility.js';
+import { getIndiaTradingDayBounds, isDeliverySellDpCandidate } from '../execution/india-upstox-fee-model.js';
 
 interface StrategyDecisionRawRow {
   id: number;
@@ -91,6 +94,7 @@ interface GovernanceDecisionDbRow {
 interface StrategyPerformanceRow {
   trade_count: number;
   realized_pnl: number;
+  total_fees: number;
   unrealized_pnl: number;
   total_return_pct: number | null;
   avg_sharpe: number | null;
@@ -112,6 +116,7 @@ interface RecentDecisionRow {
   sd_decided_at: number;
   ea_status: string | null;
   ea_outcome_code: string | null;
+  pf_fees: number | null;
   pe_realized_pnl: number | null;
 }
 
@@ -175,6 +180,7 @@ export class OperatorDetailReadModel {
   private readonly _strategyDecisionRepo: StrategyDecisionRepository;
   private readonly _hybridScoreRepo: HybridScoreRepository;
   private readonly _executionAttemptRepo: ExecutionAttemptRepository;
+  private readonly _paperFillRepo: PaperFillRepository;
   private readonly _paperPositionRepo: PaperPositionRepository;
   private readonly _walkForwardRepo: WalkForwardRepository;
 
@@ -183,6 +189,7 @@ export class OperatorDetailReadModel {
     this._strategyDecisionRepo = new StrategyDecisionRepository(db);
     this._hybridScoreRepo = new HybridScoreRepository(db);
     this._executionAttemptRepo = new ExecutionAttemptRepository(db);
+    this._paperFillRepo = new PaperFillRepository(db);
     this._paperPositionRepo = new PaperPositionRepository(db);
     this._walkForwardRepo = new WalkForwardRepository(db);
   }
@@ -207,6 +214,7 @@ export class OperatorDetailReadModel {
       const executionAttempt = this._executionAttemptRepo.getByStrategyDecisionId(decision.id);
 
       let executionDetail: OperatorExecutionAttemptDetail | null = null;
+      let paperFill: OperatorDecisionDetail['paperFill'] = null;
       let realizedPnl: OperatorDecisionDetail['realizedPnl'] = null;
       if (executionAttempt) {
         const refusalReasons = this._executionAttemptRepo.getRefusalReasons(executionAttempt.id).map<OperatorDecisionReasonDetail>(reason => ({
@@ -224,6 +232,49 @@ export class OperatorDetailReadModel {
           completedAt: this._isoNullable(executionAttempt.completedAt),
           refusalReasons,
         };
+
+        const fill = this._paperFillRepo.getByExecutionAttemptId(executionAttempt.id);
+        if (fill) {
+          const breakdown = calculatePersistedPaperFillChargeBreakdown({
+            exchange: decision.exchange,
+            tradingsymbol: decision.tradingsymbol,
+            side: decision.side,
+            product: decision.product,
+            quantity: fill.filledQuantity,
+            executionClass: decision.execution_class as 'EQ' | 'FO',
+            segment: decision.segment,
+            instrumentType: decision.instrument_type,
+            expiry: decision.expiry,
+            strike: decision.strike,
+            lotSize: decision.lot_size,
+            tickSize: decision.tick_size,
+            freezeQuantity: decision.freeze_quantity,
+            fillPrice: fill.filledPrice,
+            filledAt: fill.filledAt,
+            applyDpCharge: this._isFirstDeliverySellFillForDay(fill.id, decision),
+          });
+          paperFill = {
+            filledAt: this._iso(fill.filledAt),
+            filledQuantity: fill.filledQuantity,
+            filledPrice: fill.filledPrice,
+            referencePrice: fill.referencePrice,
+            slippageAmount: fill.slippageAmount,
+            fees: fill.fees,
+            feeBreakdown: {
+              segment: breakdown.segment,
+              turnover: breakdown.turnover,
+              brokerage: breakdown.brokerage,
+              stt: breakdown.stt,
+              exchangeTransactionCharge: breakdown.exchangeTransactionCharge,
+              ipftCharge: breakdown.ipftCharge,
+              sebiCharge: breakdown.sebiCharge,
+              stampDuty: breakdown.stampDuty,
+              gst: breakdown.gst,
+              dpCharge: breakdown.dpCharge,
+              totalFees: breakdown.totalFees,
+            },
+          };
+        }
 
         const linkedEvents = this._paperPositionRepo.getEventsByExecutionAttemptId(executionAttempt.id);
         const currentPosition = this._paperPositionRepo.getPosition(decision.exchange, decision.tradingsymbol, decision.product);
@@ -316,6 +367,7 @@ export class OperatorDetailReadModel {
         },
         hybrid: hybridDetail,
         executionAttempt: executionDetail,
+        paperFill,
         realizedPnl,
         diagnostics,
         provenance: this._provenance('historical', 'strategy_decisions+reasons+hybrid_score+execution_attempts+position_events'),
@@ -433,6 +485,7 @@ export class OperatorDetailReadModel {
           winRate: performanceRow.avg_win_rate,
           profitFactor: performanceRow.avg_profit_factor,
           realizedPnl: performanceRow.realized_pnl,
+          totalFees: performanceRow.total_fees,
           unrealizedPnl: performanceRow.unrealized_pnl,
         },
         recentDecisions,
@@ -816,6 +869,7 @@ export class OperatorDetailReadModel {
       SELECT
         COALESCE(COUNT(pf.id), 0) AS trade_count,
         COALESCE(SUM(DISTINCT pp.realized_pnl), 0) AS realized_pnl,
+        COALESCE(SUM(pf.fees), 0) AS total_fees,
         COALESCE(SUM(DISTINCT CASE
           WHEN pp.quantity != 0 AND pp.mark_price IS NOT NULL AND pp.avg_cost_price != 0
             THEN (pp.mark_price - pp.avg_cost_price) * ABS(pp.quantity)
@@ -846,6 +900,7 @@ export class OperatorDetailReadModel {
     return row ?? {
       trade_count: 0,
       realized_pnl: 0,
+      total_fees: 0,
       unrealized_pnl: 0,
       total_return_pct: null,
       avg_sharpe: null,
@@ -870,6 +925,7 @@ export class OperatorDetailReadModel {
         sd.decided_at AS sd_decided_at,
         ea.status AS ea_status,
         ea.outcome_code AS ea_outcome_code,
+        pf.fees AS pf_fees,
         (
           SELECT COALESCE(SUM(pe.realized_pnl), 0)
           FROM position_events pe
@@ -877,6 +933,7 @@ export class OperatorDetailReadModel {
         ) AS pe_realized_pnl
       FROM strategy_decisions sd
       LEFT JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
+      LEFT JOIN paper_fills pf ON pf.execution_attempt_id = ea.id
       WHERE sd.strategy_id = ?
         AND sd.strategy_version = ?
       ORDER BY sd.decided_at DESC, sd.id DESC
@@ -896,6 +953,7 @@ export class OperatorDetailReadModel {
       decidedAt: this._iso(row.sd_decided_at),
       executionStatus: row.ea_status,
       outcomeCode: row.ea_outcome_code,
+      fees: row.pf_fees,
       realizedPnl: row.ea_status ? row.pe_realized_pnl : null,
       provenance: this._provenance('historical', 'strategy_decisions+execution_attempts+position_events'),
     }));
@@ -959,6 +1017,44 @@ export class OperatorDetailReadModel {
       createdAt: this._iso(row.created_at),
       provenance: this._provenance('historical', 'research_publications+hypothesis_evaluations+hypothesis_graphs+strategy_lifecycle_state+governance_decisions'),
     };
+  }
+
+  private _isFirstDeliverySellFillForDay(
+    fillId: number,
+    decision: {
+      exchange: string;
+      tradingsymbol: string;
+      product: string;
+      side: string;
+      execution_class: string;
+      instrument_type: string;
+      segment: string;
+    },
+  ): boolean {
+    if (!isDeliverySellDpCandidate({
+      exchange: decision.exchange,
+      side: decision.side,
+      product: decision.product,
+      executionClass: decision.execution_class as 'EQ' | 'FO',
+      instrumentType: decision.instrument_type,
+      segment: decision.segment,
+    })) {
+      return false;
+    }
+
+    const fill = this._paperFillRepo.getById(fillId);
+    if (!fill) return false;
+    const { startMs, endMs } = getIndiaTradingDayBounds(fill.filledAt);
+    const sameDaySells = this._paperFillRepo.getByWindow(
+      fill.exchange,
+      fill.tradingsymbol,
+      fill.product,
+      'sell',
+      startMs,
+      endMs,
+    );
+
+    return sameDaySells.length > 0 && sameDaySells[0].id === fill.id;
   }
 
   private _countRows(sql: string, ...params: Array<string | number>): number {

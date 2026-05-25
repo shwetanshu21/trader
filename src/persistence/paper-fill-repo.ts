@@ -116,6 +116,33 @@ export class PaperFillRepository {
   }
 
   /**
+   * Retrieve fills for one instrument/product/side within a time window,
+   * oldest first. Used for exact per-day fee attribution such as DP charges.
+   */
+  getByWindow(
+    exchange: string,
+    tradingsymbol: string,
+    product: string,
+    side: string,
+    startMs: number,
+    endMs: number,
+  ): PaperFillRow[] {
+    const rows = this._db.prepare(`
+      SELECT *
+      FROM paper_fills
+      WHERE exchange = ?
+        AND tradingsymbol = ?
+        AND product = ?
+        AND lower(side) = lower(?)
+        AND filled_at >= ?
+        AND filled_at < ?
+      ORDER BY filled_at ASC, id ASC
+    `).all(exchange, tradingsymbol, product, side, startMs, endMs) as PaperFillDbRow[];
+
+    return rows.map(mapFillRow);
+  }
+
+  /**
    * Count total paper fill rows.
    */
   count(): number {

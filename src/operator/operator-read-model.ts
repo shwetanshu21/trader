@@ -143,6 +143,7 @@ interface PerDecisionRow {
   sd_decided_at: number;
   ea_status: string | null;
   ea_outcome_code: string | null;
+  pf_fees: number | null;
   pe_realized_pnl: number | null;
 }
 
@@ -232,6 +233,7 @@ interface ResearchReasonCodeRow {
 
 export class OperatorReadModel {
   private readonly _db: Database.Database;
+  private _paperFillColumns: Set<string> | null = null;
 
   /**
    * @param db - A read-only Database handle obtained from openOperatorDb().
@@ -540,13 +542,17 @@ export class OperatorReadModel {
     const results: OperatorStrategyPerformance[] = [];
 
     try {
+      const feeSelect = this._paperFillsHaveColumn('fees')
+        ? 'COALESCE(SUM(pf.fees), 0) AS total_fees'
+        : '0 AS total_fees';
       // Attribution chain: paper_fills -> execution_attempts -> strategy_decisions
       const rows = this._db.prepare(`
         SELECT
           sd.strategy_id,
           sd.strategy_version,
           COUNT(DISTINCT pf.id) AS trade_count,
-          COALESCE(SUM(pf.filled_quantity * pf.filled_price * CASE WHEN pf.side = 'buy' THEN -1 ELSE 1 END), 0) AS total_realized_pnl
+          COALESCE(SUM(pf.filled_quantity * pf.filled_price * CASE WHEN pf.side = 'buy' THEN -1 ELSE 1 END), 0) AS total_realized_pnl,
+          ${feeSelect}
         FROM paper_fills pf
         INNER JOIN execution_attempts ea ON ea.id = pf.execution_attempt_id
         INNER JOIN strategy_decisions sd ON sd.id = ea.strategy_decision_id
@@ -557,6 +563,7 @@ export class OperatorReadModel {
         strategy_version: string;
         trade_count: number;
         total_realized_pnl: number;
+        total_fees: number;
       }>;
 
       for (const row of rows) {
@@ -600,6 +607,7 @@ export class OperatorReadModel {
           winRate: null,
           profitFactor: null,
           realizedPnl: row.total_realized_pnl,
+          totalFees: row.total_fees,
           unrealizedPnl,
           provenance: this._provenance('historical', 'paper_fills+execution_attempts+strategy_decisions'),
         });
@@ -631,6 +639,9 @@ export class OperatorReadModel {
     const results: OperatorTickerPerformance[] = [];
 
     try {
+      const feeSelect = this._paperFillsHaveColumn('fees')
+        ? 'COALESCE(SUM(fees), 0) AS total_fees'
+        : '0 AS total_fees';
       // Base data from paper_fills: trade count, realized P&L (approximated)
       const fillRows = this._db.prepare(`
         SELECT
@@ -638,6 +649,7 @@ export class OperatorReadModel {
           tradingsymbol,
           COUNT(*) AS trade_count,
           COALESCE(SUM(filled_quantity * filled_price * CASE WHEN side = 'buy' THEN -1 ELSE 1 END), 0) AS realized_pnl,
+          ${feeSelect},
           AVG(filled_price) AS avg_entry_price,
           MAX(filled_price) AS last_fill_price
         FROM paper_fills
@@ -648,6 +660,7 @@ export class OperatorReadModel {
         tradingsymbol: string;
         trade_count: number;
         realized_pnl: number;
+        total_fees: number;
         avg_entry_price: number | null;
         last_fill_price: number | null;
       }>;
@@ -708,6 +721,7 @@ export class OperatorReadModel {
           lastPrice: pos?.mark_price ?? row.last_fill_price,
           unrealizedPnl,
           realizedPnl: row.realized_pnl ?? 0,
+          totalFees: row.total_fees ?? 0,
           provenance: this._provenance('historical', 'paper_fills+paper_positions'),
         });
       }
@@ -728,6 +742,7 @@ export class OperatorReadModel {
               ? (pos.mark_price - pos.avg_cost_price) * Math.abs(pos.quantity)
               : 0,
             realizedPnl: pos.realized_pnl,
+            totalFees: 0,
             provenance: this._provenance('runtime', 'paper_positions'),
           });
         }
@@ -863,6 +878,9 @@ export class OperatorReadModel {
     const results: OperatorDecisionPerformance[] = [];
 
     try {
+      const feeSelect = this._paperFillsHaveColumn('fees')
+        ? 'pf.fees AS pf_fees'
+        : 'NULL AS pf_fees';
       const rows = this._db.prepare(`
         SELECT
           sd.id AS sd_id,
@@ -877,6 +895,7 @@ export class OperatorReadModel {
           sd.decided_at AS sd_decided_at,
           ea.status AS ea_status,
           ea.outcome_code AS ea_outcome_code,
+          ${feeSelect},
           (
             SELECT COALESCE(SUM(pe.realized_pnl), 0)
             FROM position_events pe
@@ -885,6 +904,7 @@ export class OperatorReadModel {
           ) AS pe_realized_pnl
         FROM strategy_decisions sd
         LEFT JOIN execution_attempts ea ON ea.strategy_decision_id = sd.id
+        LEFT JOIN paper_fills pf ON pf.execution_attempt_id = ea.id
         ORDER BY sd.decided_at DESC
         LIMIT ?
       `).all(limit) as PerDecisionRow[];
@@ -903,6 +923,7 @@ export class OperatorReadModel {
           decidedAt: new Date(row.sd_decided_at).toISOString(),
           executionStatus: row.ea_status ?? null,
           outcomeCode: row.ea_outcome_code ?? null,
+          fees: row.pf_fees ?? null,
           realizedPnl: row.pe_realized_pnl ?? null,
           provenance: this._provenance('historical', 'strategy_decisions+execution_attempts+position_events'),
         });
@@ -1481,5 +1502,18 @@ export class OperatorReadModel {
     } catch {
       return 0;
     }
+  }
+
+  private _paperFillsHaveColumn(column: string): boolean {
+    if (this._paperFillColumns === null) {
+      try {
+        const rows = this._db.prepare(`PRAGMA table_info('paper_fills')`).all() as Array<{ name: string }>;
+        this._paperFillColumns = new Set(rows.map(row => row.name));
+      } catch {
+        this._paperFillColumns = new Set();
+      }
+    }
+
+    return this._paperFillColumns.has(column);
   }
 }

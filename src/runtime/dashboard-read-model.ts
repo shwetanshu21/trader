@@ -51,6 +51,8 @@ import type { HybridScoreRepository } from '../persistence/hybrid-score-repo.js'
 import type { OvernightRunRepo } from '../research/overnight-run-repo.js';
 import { OvernightRunStatus, parseOvernightRunMetadata } from '../research/overnight-run-repo.js';
 import type { HypothesisGenerationRepository } from '../persistence/hypothesis-generation-repo.js';
+import { calculatePersistedPaperFillChargeBreakdown } from '../execution/india-upstox-fee-visibility.js';
+import { getIndiaTradingDayBounds, isDeliverySellDpCandidate } from '../execution/india-upstox-fee-model.js';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -558,6 +560,10 @@ export class DashboardReadModel {
           side: f.side,
           filledQuantity: f.filledQuantity,
           filledPrice: f.filledPrice,
+          referencePrice: f.referencePrice,
+          slippageAmount: f.slippageAmount,
+          fees: f.fees,
+          feeBreakdown: this._deriveFillFeeBreakdown(f.executionAttemptId),
           brokerOrderId: f.brokerOrderId,
         }));
       }
@@ -626,6 +632,93 @@ export class DashboardReadModel {
     } catch {
       return null;
     }
+  }
+
+  private _deriveFillFeeBreakdown(executionAttemptId: number): DashboardPaperFill['feeBreakdown'] {
+    if (!this._attemptRepo || !this._strategyDecisionRepo || !this._paperFillRepo) {
+      return null;
+    }
+
+    try {
+      const attempt = this._attemptRepo.getById(executionAttemptId);
+      if (!attempt) return null;
+      const decision = this._strategyDecisionRepo.getDecisionById(attempt.strategyDecisionId);
+      const fill = this._paperFillRepo.getByExecutionAttemptId(executionAttemptId);
+      if (!decision || !fill) return null;
+
+      const breakdown = calculatePersistedPaperFillChargeBreakdown({
+        exchange: decision.exchange,
+        tradingsymbol: decision.tradingsymbol,
+        side: decision.side,
+        product: decision.product,
+        quantity: fill.filledQuantity,
+        executionClass: decision.executionClass as 'EQ' | 'FO',
+        segment: decision.segment,
+        instrumentType: decision.instrumentType,
+        expiry: decision.expiry,
+        strike: decision.strike,
+        lotSize: decision.lotSize,
+        tickSize: decision.tickSize,
+        freezeQuantity: decision.freezeQuantity,
+        fillPrice: fill.filledPrice,
+        filledAt: fill.filledAt,
+        applyDpCharge: this._isFirstDeliverySellFillForDay(fill.id, decision),
+      });
+
+      return {
+        segment: breakdown.segment,
+        turnover: breakdown.turnover,
+        brokerage: breakdown.brokerage,
+        stt: breakdown.stt,
+        exchangeTransactionCharge: breakdown.exchangeTransactionCharge,
+        ipftCharge: breakdown.ipftCharge,
+        sebiCharge: breakdown.sebiCharge,
+        stampDuty: breakdown.stampDuty,
+        gst: breakdown.gst,
+        dpCharge: breakdown.dpCharge,
+        totalFees: breakdown.totalFees,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private _isFirstDeliverySellFillForDay(
+    fillId: number,
+    decision: {
+      exchange: string;
+      tradingsymbol: string;
+      product: string;
+      side: string;
+      executionClass: string;
+      instrumentType: string;
+      segment: string;
+    },
+  ): boolean {
+    if (!this._paperFillRepo || !isDeliverySellDpCandidate({
+      exchange: decision.exchange,
+      side: decision.side,
+      product: decision.product,
+      executionClass: decision.executionClass as 'EQ' | 'FO',
+      instrumentType: decision.instrumentType,
+      segment: decision.segment,
+    })) {
+      return false;
+    }
+
+    const fill = this._paperFillRepo.getById(fillId);
+    if (!fill) return false;
+    const { startMs, endMs } = getIndiaTradingDayBounds(fill.filledAt);
+    const sameDaySells = this._paperFillRepo.getByWindow(
+      fill.exchange,
+      fill.tradingsymbol,
+      fill.product,
+      'sell',
+      startMs,
+      endMs,
+    );
+
+    return sameDaySells.length > 0 && sameDaySells[0].id === fill.id;
   }
 
   private _getRiskState(): DashboardRiskState | null {

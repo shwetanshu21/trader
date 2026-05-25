@@ -55,6 +55,7 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
       { label: 'Strategy', value: `<code>${escapeHtml(detail.strategyId)}</code>` },
       { label: 'Version', value: `<code>${escapeHtml(detail.strategyVersion)}</code>` },
       { label: 'Realized P&L', value: escapeHtml(formatCurrency(detail.performance.realizedPnl, 'INR')) },
+      { label: 'Fees', value: escapeHtml(formatCurrency(detail.performance.totalFees, 'INR')) },
       { label: 'Unrealized P&L', value: escapeHtml(formatCurrency(detail.performance.unrealizedPnl, 'INR')) },
       { label: 'Total P&L', value: `<span class="${detail.performance.realizedPnl + detail.performance.unrealizedPnl >= 0 ? 'status-ok' : 'status-err'}">${escapeHtml(formatCurrency(detail.performance.realizedPnl + detail.performance.unrealizedPnl, 'INR'))}</span>` },
       { label: 'Trade Count', value: escapeHtml(formatInt(detail.performance.tradeCount)) },
@@ -165,7 +166,7 @@ function renderDecisionTable(rows: OperatorDecisionPerformance[]): string {
   }
 
   return `<table>
-    <thead><tr><th>Decision</th><th>Instrument</th><th>Side</th><th class="num">Qty</th><th>Status</th><th>Execution</th><th>Outcome</th><th class="num">Realized P&amp;L</th><th>Decided At</th></tr></thead>
+    <thead><tr><th>Decision</th><th>Instrument</th><th>Side</th><th class="num">Qty</th><th>Status</th><th>Execution</th><th>Outcome</th><th class="num">Fees</th><th class="num">Realized P&amp;L</th><th>Decided At</th></tr></thead>
     <tbody>${rows.map(row => `<tr>
       <td>${renderLink(decisionDetailHref(row.decisionId), `#${row.decisionId}`)}</td>
       <td><code>${escapeHtml(row.exchange)}:${escapeHtml(row.tradingsymbol)}</code></td>
@@ -174,6 +175,7 @@ function renderDecisionTable(rows: OperatorDecisionPerformance[]): string {
       <td><span class="${statusClass(row.decisionStatus)}">${escapeHtml(row.decisionStatus)}</span></td>
       <td>${row.executionStatus ? `<span class="${statusClass(row.executionStatus)}">${escapeHtml(row.executionStatus)}</span>` : '<span class="status-skip">unconsumed</span>'}</td>
       <td>${escapeHtml(row.outcomeCode ?? '—')}</td>
+      <td class="num">${row.fees === null ? '—' : escapeHtml(formatCurrency(row.fees, 'INR'))}</td>
       <td class="num">${row.realizedPnl === null ? '—' : `<span class="${row.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${escapeHtml(formatCurrency(row.realizedPnl, 'INR'))}</span>`}</td>
       <td>${escapeHtml(formatTimestamp(row.decidedAt))}</td>
     </tr>`).join('')}</tbody>

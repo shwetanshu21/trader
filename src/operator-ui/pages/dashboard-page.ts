@@ -654,6 +654,7 @@ function renderStrategyPerformanceSection(
         <td><code>${escapeHtml(s.strategyVersion)}</code></td>
         <td class="num">${formatInt(s.tradeCount)}</td>
         <td class="num ${s.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(s.realizedPnl, 'INR')}</td>
+        <td class="num">${formatCurrency(s.totalFees, 'INR')}</td>
         <td class="num ${s.unrealizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(s.unrealizedPnl, 'INR')}</td>
         <td class="num">${sharpe}</td>
         <td class="num">${drawdown}</td>
@@ -669,6 +670,7 @@ function renderStrategyPerformanceSection(
         <th>Version</th>
         <th class="num">Trades</th>
         <th class="num">Realized P&amp;L</th>
+        <th class="num">Fees</th>
         <th class="num">Unrealized P&amp;L</th>
         <th class="num">Sharpe</th>
         <th class="num">Max DD</th>
@@ -721,6 +723,7 @@ function renderTickerPerformanceSection(
         <td class="num">${formatInt(t.tradeCount)}</td>
         <td class="num">${winRate}</td>
         <td class="num ${t.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(t.realizedPnl, null)}</td>
+        <td class="num">${formatCurrency(t.totalFees, 'INR')}</td>
         <td class="num ${t.unrealizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(t.unrealizedPnl, null)}</td>
         <td class="num ${t.totalPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(t.totalPnl, null)}</td>
         <td>${badge}</td>
@@ -738,6 +741,7 @@ function renderTickerPerformanceSection(
         <th class="num">Trades</th>
         <th class="num">Win Rate</th>
         <th class="num">Realized</th>
+        <th class="num">Fees</th>
         <th class="num">Unrealized</th>
         <th class="num">Total</th>
         <th>Source</th>
@@ -776,6 +780,7 @@ function renderDecisionPerformanceSection(
       const pnl = d.realizedPnl !== null
         ? `<span class="${d.realizedPnl >= 0 ? 'status-ok' : 'status-err'}">${formatCurrency(d.realizedPnl, null)}</span>`
         : '—';
+      const fees = d.fees !== null ? formatCurrency(d.fees, 'INR') : '—';
       const badge = renderProvenanceBadge(d.provenance);
       const decisionHref = decisionDetailHref(d.decisionId);
 
@@ -787,6 +792,7 @@ function renderDecisionPerformanceSection(
         <td><span class="${statusClass(status)}">${escapeHtml(status)}</span></td>
         <td>${escapeHtml(execStatus)}</td>
         <td>${escapeHtml(outcome)}</td>
+        <td class="num">${escapeHtml(fees)}</td>
         <td class="num">${pnl}</td>
         <td><code>${escapeHtml(d.strategyId)}</code></td>
         <td>${escapeHtml(formatTimestamp(d.decidedAt))}</td>
@@ -803,6 +809,7 @@ function renderDecisionPerformanceSection(
         <th>Status</th>
         <th>Exec Status</th>
         <th>Outcome</th>
+        <th class="num">Fees</th>
         <th class="num">Realized P&amp;L</th>
         <th>Strategy</th>
         <th>Decided At</th>
