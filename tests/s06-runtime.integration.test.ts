@@ -396,11 +396,12 @@ describe('S06 Runtime — paper-trading witness and restart safety', () => {
 
     // ── Phase 2 assertions ──────────────────────────────────────────────
 
-    // /health/execution — should still show 1 attempt (refused candidate is NOT consumed)
-    // but risk state should show active halt
+    // /health/execution — should now show 2 attempts because the second
+    // approved candidate is terminally consumed as a persisted refusal at the
+    // risk boundary, while downstream paper order/fill counts remain unchanged.
     const exec2 = await fetchJson(h1.server, '/health/execution');
     expect(exec2.status).toBe(200);
-    expect(exec2.body.totalAttempts).toBe(1); // No new attempt — candidate skipped by risk guard
+    expect(exec2.body.totalAttempts).toBe(2);
     expect(exec2.body.totalOrders).toBe(1);   // No new order
     expect(exec2.body.totalFills).toBe(1);    // No new fill
 
@@ -443,15 +444,18 @@ describe('S06 Runtime — paper-trading witness and restart safety', () => {
 
     // ── Phase 3 assertions ──────────────────────────────────────────────
 
-    // /health/execution — evidence preserved without duplication
+    // /health/execution — evidence preserved without duplication. We should
+    // still have exactly the original simulated fill plus the persisted risk
+    // refusal from phase 2 after restart.
     const exec3 = await fetchJson(h2.server, '/health/execution');
     expect(exec3.status).toBe(200);
-    expect(exec3.body.totalAttempts).toBe(1);      // No duplication
+    expect(exec3.body.totalAttempts).toBe(2);
     expect(exec3.body.totalOrders).toBe(1);
     expect(exec3.body.totalFills).toBe(1);
     expect(exec3.body.openPositionCount).toBe(1);   // Position still open
-    expect(exec3.body.recentAttempts.length).toBe(1);
-    expect(exec3.body.recentAttempts[0].tradingsymbol).toBe('RELIANCE');
+    expect(exec3.body.recentAttempts.length).toBeGreaterThanOrEqual(2);
+    expect(exec3.body.recentAttempts.some((a: any) => a.tradingsymbol === 'RELIANCE')).toBe(true);
+    expect(exec3.body.recentAttempts.some((a: any) => a.tradingsymbol === 'INFY')).toBe(true);
 
     // Risk state preserved across restart
     expect(exec3.body.riskState.haltState).toBe('active_halt');
@@ -475,7 +479,7 @@ describe('S06 Runtime — paper-trading witness and restart safety', () => {
     // /dashboard.json — full evidence preserved
     const dash3 = await fetchJson(h2.server, '/dashboard.json');
     expect(dash3.status).toBe(200);
-    expect(dash3.body.execution.totalAttempts).toBe(1);
+    expect(dash3.body.execution.totalAttempts).toBe(2);
     expect(dash3.body.execution.totalOrders).toBe(1);
     expect(dash3.body.execution.totalFills).toBe(1);
     expect(dash3.body.execution.openPositionCount).toBe(1);

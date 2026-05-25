@@ -31,6 +31,7 @@ import type { QuoteSnapshot } from '../integrations/broker/types.js';
 import type { InstrumentRecord } from '../integrations/broker/types.js';
 import { ExecutionAttemptRepository } from '../persistence/execution-attempt-repo.js';
 import { PaperExecutionPolicy } from './paper-execution-policy.js';
+import { isDeliverySellDpCandidate } from './india-upstox-fee-model.js';
 import { PaperExecutionLedger } from './paper-execution-ledger.js';
 import { BlockedExecutionAdapter, LiveExecutionAdapter } from './execution-adapters.js';
 
@@ -256,7 +257,13 @@ export class ModeAwareExecutionService {
     quote: QuoteSnapshot | null,
     instrument: InstrumentRecord | null,
   ): ExecutionAttemptRow {
-    const evaluation = this._paperPolicy.evaluate(candidate, quote, instrument);
+    const filledAt = quote?.receivedAt ?? Date.now();
+    const evaluation = this._paperPolicy.evaluate(candidate, quote, instrument, {
+      filledAt,
+      applyDpCharge: this._paperLedger !== null && isDeliverySellDpCandidate(candidate)
+        ? this._paperLedger.shouldApplyDeliverySellDpCharge(candidate, filledAt)
+        : true,
+    });
 
     if (evaluation.canFill) {
       // Route through the ledger for atomic multi-table persistence

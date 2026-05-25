@@ -37,6 +37,7 @@ import { ExecutionAttemptRepository } from '../persistence/execution-attempt-rep
 import { PaperOrderRepository } from '../persistence/paper-order-repo.js';
 import { PaperFillRepository } from '../persistence/paper-fill-repo.js';
 import { PaperPositionRepository } from '../persistence/paper-position-repo.js';
+import { getIndiaTradingDayBounds, isDeliverySellDpCandidate } from './india-upstox-fee-model.js';
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -86,6 +87,41 @@ export class PaperExecutionLedger {
     this._orderRepo = options.orderRepo;
     this._fillRepo = options.fillRepo;
     this._positionRepo = options.positionRepo;
+  }
+
+  /**
+   * Delivery-sell DP charges apply once per scrip per India trading day.
+   * This helper checks whether the current candidate should still incur that
+   * charge based on already-persisted paper fills.
+   */
+  shouldApplyDeliverySellDpCharge(
+    candidate: StrategyApprovedCandidate,
+    atMs: number,
+  ): boolean {
+    if (!isDeliverySellDpCandidate(candidate)) {
+      return false;
+    }
+
+    const { startMs, endMs } = getIndiaTradingDayBounds(atMs);
+    const row = this._db.prepare(`
+      SELECT 1
+      FROM paper_fills
+      WHERE exchange = ?
+        AND tradingsymbol = ?
+        AND product = ?
+        AND lower(side) = 'sell'
+        AND filled_at >= ?
+        AND filled_at < ?
+      LIMIT 1
+    `).get(
+      candidate.exchange,
+      candidate.tradingsymbol,
+      candidate.product,
+      startMs,
+      endMs,
+    ) as { 1?: number } | undefined;
+
+    return row === undefined;
   }
 
   // -------------------------------------------------------------------------

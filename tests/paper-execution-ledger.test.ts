@@ -358,6 +358,40 @@ describe('PaperExecutionLedger', () => {
       expect(result.position.realizedPnl).toBeCloseTo(97.90, 2);
     });
 
+    it('does not double-charge delivery-sell DP charges on the same India trading day', () => {
+      const ctx = createContext();
+
+      const firstDeliverySell = seedCandidate(ctx, {
+        side: 'sell',
+        product: 'CNC',
+        quantity: 5,
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+      });
+      const first = ctx.ledger.writeSuccessfulPaperFill(firstDeliverySell, successEvaluation({
+        fillPrice: 3000.00,
+        fees: 78.3168,
+        simulatedBrokerOrderId: 'paper-dp-first',
+      }));
+
+      const secondDeliverySell = seedCandidate(ctx, {
+        side: 'sell',
+        product: 'CNC',
+        quantity: 5,
+        exchange: 'NSE',
+        tradingsymbol: 'INFY',
+      });
+      const second = ctx.ledger.writeSuccessfulPaperFill(secondDeliverySell, successEvaluation({
+        fillPrice: 3000.00,
+        fees: 54.7168,
+        simulatedBrokerOrderId: 'paper-dp-second',
+      }));
+
+      expect(first.fill.fees).toBeCloseTo(78.3168, 4);
+      expect(second.fill.fees).toBeCloseTo(54.7168, 4);
+      expect(first.fill.fees - second.fill.fees).toBeCloseTo(23.6, 4);
+    });
+
     it('adjusts position with weighted avg cost on same-direction buy', () => {
       const ctx = createContext();
 

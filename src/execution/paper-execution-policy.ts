@@ -21,13 +21,14 @@ import {
 } from '../types/runtime.js';
 import type { QuoteSnapshot } from '../integrations/broker/types.js';
 import type { InstrumentRecord } from '../integrations/broker/types.js';
+import { calculateIndiaUpstoxCharges } from './india-upstox-fee-model.js';
 
 // ---------------------------------------------------------------------------
 // DTOs
 // ---------------------------------------------------------------------------
 
 /** Result of a single paper evaluation. */
-export interface PaperEvaluationResult {
+export interface PaperExecutionResult {
   /** Whether the paper broker can simulate a fill. */
   readonly canFill: boolean;
   /** The simulated gross executed fill price (null when cannot fill). */
@@ -50,6 +51,15 @@ export interface PaperEvaluationResult {
   readonly simulatedBrokerOrderId: string | null;
 }
 
+export interface PaperExecutionFeeContext {
+  /** Whether a delivery-sell DP charge should be applied for this execution. */
+  readonly applyDpCharge?: boolean;
+  /** Authoritative fill timestamp for date-sensitive charge schedules. */
+  readonly filledAt?: number;
+}
+
+export type PaperEvaluationResult = PaperExecutionResult;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -58,8 +68,6 @@ export interface PaperEvaluationResult {
 const PAPER_QUOTE_STALENESS_MS = 5 * 60 * 1000;
 /** Adverse slippage applied to market-like paper fills (1 basis point). */
 const PAPER_SLIPPAGE_RATE = 0.0001;
-/** Transaction charges applied to every paper fill (0.5 basis points). */
-const PAPER_FEE_RATE = 0.00005;
 
 // ---------------------------------------------------------------------------
 // PaperExecutionPolicy
@@ -83,7 +91,8 @@ export class PaperExecutionPolicy {
     candidate: StrategyApprovedCandidate,
     quote: QuoteSnapshot | null,
     instrument: InstrumentRecord | null,
-  ): PaperEvaluationResult {
+    feeContext?: PaperExecutionFeeContext,
+  ): PaperExecutionResult {
     // ── Quote availability check ──────────────────────────────────────────
     if (quote === null) {
       return this._refuse(
@@ -113,11 +122,11 @@ export class PaperExecutionPolicy {
     const side = candidate.side?.toLowerCase();
 
     if (side === 'buy') {
-      return this._evaluateBuy(candidate, quote, instrument);
+      return this._evaluateBuy(candidate, quote, instrument, feeContext);
     }
 
     if (side === 'sell') {
-      return this._evaluateSell(candidate, quote, instrument);
+      return this._evaluateSell(candidate, quote, instrument, feeContext);
     }
 
     return this._refuse(
@@ -138,7 +147,8 @@ export class PaperExecutionPolicy {
     candidate: StrategyApprovedCandidate,
     quote: QuoteSnapshot,
     instrument: InstrumentRecord,
-  ): PaperEvaluationResult {
+    feeContext?: PaperExecutionFeeContext,
+  ): PaperExecutionResult {
     const prevailingPrice = quote.ask ?? quote.lastPrice ?? null;
 
     if (prevailingPrice === null || prevailingPrice <= 0) {
@@ -174,7 +184,13 @@ export class PaperExecutionPolicy {
       fillPrice = this._applyAdverseSlippage(prevailingPrice, 'buy', instrument.tickSize);
     }
 
-    const economics = this._computeExecutionEconomics(candidate.quantity, prevailingPrice, fillPrice);
+    const economics = this._computeExecutionEconomics(
+      candidate,
+      prevailingPrice,
+      fillPrice,
+      feeContext?.filledAt ?? quote.receivedAt,
+      feeContext?.applyDpCharge ?? true,
+    );
     const simId = `paper-${Date.now()}-${candidate.id}-buy`;
     return {
       canFill: true,
@@ -198,7 +214,8 @@ export class PaperExecutionPolicy {
     candidate: StrategyApprovedCandidate,
     quote: QuoteSnapshot,
     instrument: InstrumentRecord,
-  ): PaperEvaluationResult {
+    feeContext?: PaperExecutionFeeContext,
+  ): PaperExecutionResult {
     const prevailingPrice = quote.bid ?? quote.lastPrice ?? null;
 
     if (prevailingPrice === null || prevailingPrice <= 0) {
@@ -234,7 +251,13 @@ export class PaperExecutionPolicy {
       fillPrice = this._applyAdverseSlippage(prevailingPrice, 'sell', instrument.tickSize);
     }
 
-    const economics = this._computeExecutionEconomics(candidate.quantity, prevailingPrice, fillPrice);
+    const economics = this._computeExecutionEconomics(
+      candidate,
+      prevailingPrice,
+      fillPrice,
+      feeContext?.filledAt ?? quote.receivedAt,
+      feeContext?.applyDpCharge ?? true,
+    );
     const simId = `paper-${Date.now()}-${candidate.id}-sell`;
     return {
       canFill: true,
@@ -251,13 +274,20 @@ export class PaperExecutionPolicy {
   }
 
   private _computeExecutionEconomics(
-    quantity: number,
+    candidate: StrategyApprovedCandidate,
     referencePrice: number,
     fillPrice: number,
+    filledAt: number,
+    applyDpCharge: boolean,
   ): { slippagePerUnit: number; slippageAmount: number; fees: number } {
     const slippagePerUnit = +Math.max(Math.abs(fillPrice - referencePrice), 0).toFixed(4);
-    const slippageAmount = +(slippagePerUnit * quantity).toFixed(4);
-    const fees = +Math.max(fillPrice * quantity * PAPER_FEE_RATE, 0).toFixed(4);
+    const slippageAmount = +(slippagePerUnit * candidate.quantity).toFixed(4);
+    const fees = calculateIndiaUpstoxCharges({
+      candidate,
+      fillPrice,
+      filledAt,
+      applyDpCharge,
+    }).totalFees;
     return { slippagePerUnit, slippageAmount, fees };
   }
 

@@ -51,6 +51,25 @@ function sampleCandidate(overrides?: Partial<StrategyApprovedCandidate>): Strate
     ask: 2851.00,
     notional: 213787.50,
     sizingBasis: 'last_price',
+    maxLossRupees: null,
+    stopDistance: null,
+    stopPrice: null,
+    trailingStopDistance: null,
+    riskBudgetRupees: null,
+    executionClass: overrides?.exchange === 'NFO' ? 'FO' : 'EQ',
+    segment: overrides?.exchange === 'NFO' ? 'NFO' : 'NSE',
+    instrumentType: overrides?.exchange === 'NFO'
+      ? String(overrides?.tradingsymbol ?? '').endsWith('CE')
+        ? 'CE'
+        : String(overrides?.tradingsymbol ?? '').endsWith('PE')
+          ? 'PE'
+          : 'FUT'
+      : 'EQ',
+    expiry: overrides?.exchange === 'NFO' ? '2026-12-31' : null,
+    strike: overrides?.exchange === 'NFO' ? 3000 : null,
+    lotSize: overrides?.exchange === 'NFO' ? 25 : 1,
+    tickSize: 0.05,
+    freezeQuantity: null,
     ...overrides,
   };
 }
@@ -382,24 +401,52 @@ describe('PaperExecutionPolicy', () => {
       expect(result.refusalReasons[0].reasonCode).toBe(ExecutionRefusalCode.StaleOrMissingQuote);
     });
 
-    it('includes FO symbol in descriptive message on successful fill', () => {
+    it('uses quote timestamp so replay-era futures sells get historical fee schedules', () => {
       const candidate = sampleCandidate({
         exchange: 'NFO',
-        tradingsymbol: 'FINNIFTY24DEC24400PE',
-        price: 150.00,
-        orderType: 'LIMIT',
+        tradingsymbol: 'NIFTY26MAYFUT',
+        side: 'sell',
+        product: 'NRML',
+        quantity: 25,
+        executionClass: 'FO',
+        segment: 'NFO',
+        instrumentType: 'FUT',
+        expiry: '2026-05-28',
+        lotSize: 25,
       });
-      const quote = sampleQuote({
+      const quote2025 = sampleQuote({
         exchange: 'NFO',
-        tradingsymbol: 'FINNIFTY24DEC24400PE',
-        ask: 148.00,
-        bid: 147.50,
-        lastPrice: 147.75,
+        tradingsymbol: 'NIFTY26MAYFUT',
+        bid: 21500.00,
+        ask: 21520.00,
+        lastPrice: 21510.00,
+        receivedAt: Date.parse('2025-12-15T12:00:00+05:30'),
       });
-      const result = policy.evaluate(candidate, quote, sampleInstrument());
-      expect(result.canFill).toBe(true);
-      expect(result.message).toContain('FINNIFTY24DEC24400PE');
-      expect(result.message).toContain('ref=148');
+      const quote2026 = sampleQuote({
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY26MAYFUT',
+        bid: 21500.00,
+        ask: 21520.00,
+        lastPrice: 21510.00,
+        receivedAt: Date.parse('2026-05-25T12:00:00+05:30'),
+      });
+
+      const beforeRateChange = new PaperExecutionPolicy(() => quote2025.receivedAt + 1_000).evaluate(candidate, quote2025, sampleInstrument({
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY26MAYFUT',
+        instrumentType: 'FUT' as any,
+        segment: 'NFO' as any,
+        lotSize: 25,
+      }));
+      const afterRateChange = new PaperExecutionPolicy(() => quote2026.receivedAt + 1_000).evaluate(candidate, quote2026, sampleInstrument({
+        exchange: 'NFO',
+        tradingsymbol: 'NIFTY26MAYFUT',
+        instrumentType: 'FUT' as any,
+        segment: 'NFO' as any,
+        lotSize: 25,
+      }));
+
+      expect(afterRateChange.fees!).toBeGreaterThan(beforeRateChange.fees!);
     });
   });
 });
