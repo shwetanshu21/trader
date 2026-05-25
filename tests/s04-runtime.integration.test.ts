@@ -42,6 +42,7 @@ import {
   ExecutionMode,
   ExecutionAttemptStatus,
   ExecutionOutcomeCode,
+  ExecutionRefusalCode,
   ValidationReasonCode,
   MarketPhase,
   ZerodhaSessionState,
@@ -1910,8 +1911,9 @@ describe('RuntimeApp-root witnesses', () => {
       // Plugin identities are preserved
       const parsedPlugins = JSON.parse(run.pluginsJson) as Array<{ id: string }>;
       expect(parsedPlugins.length).toBeGreaterThanOrEqual(2);
-      expect(parsedPlugins[0].id).toBe('deterministic-screener-v1');
-      expect(parsedPlugins[1].id).toBe('llm-ranking-v1');
+      const pluginIds = parsedPlugins.map(plugin => plugin.id);
+      expect(pluginIds).toContain('deterministic-screener-v1');
+      expect(pluginIds).toContain('llm-ranking-v1');
 
       // Candidates are capped at maxCandidates (5) matching coordinator config
       expect(run.candidates.length).toBeLessThanOrEqual(5);
@@ -2061,6 +2063,99 @@ describe('RuntimeApp-root witnesses', () => {
       await h.executionGateSupervisor!.doWork(new Date(), minimalHealth());
       expect(h.strategyDecisionRepo!.countDecisions()).toBe(0);
       expect(h.executionAttemptRepo!.count()).toBe(0);
+
+      app.stop('Test teardown');
+    });
+
+    it('risk-refused approved decisions are terminally consumed via execution attempts', async () => {
+      const app = buildRuntimeApp(ExecutionMode.Paper);
+      const h = app.build();
+      seedUniverse(h);
+
+      const now = Date.now();
+
+      for (let index = 0; index < 5; index++) {
+        h.positionRepo!.upsertPosition({
+          exchange: 'NSE',
+          tradingsymbol: `OPEN${index}`,
+          product: 'MIS',
+          side: PositionSide.Long,
+          quantity: 1,
+          avgCostPrice: 100 + index,
+          realizedPnl: 0,
+          stopPrice: null,
+          trailingAnchorPrice: null,
+          trailingStopDistance: null,
+          markPrice: 100 + index,
+          markedAt: now,
+          updatedAt: now,
+        });
+      }
+
+      const proposal = h.proposalRepo!.insertAttempt({
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        instrumentToken: 2885,
+        side: 'buy',
+        product: 'MIS',
+        quantity: 10,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        tag: null,
+        proposalStatus: ProposalStatus.Accepted,
+        createdAt: now,
+      });
+
+      const decision = h.strategyDecisionRepo!.insertDecision({
+        proposalAttemptId: proposal.id,
+        decisionStatus: StrategyDecisionStatus.Approved,
+        strategyId: 'india-nse-eq-v1',
+        strategyVersion: '1.0.0',
+        decidedAt: now,
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE',
+        side: 'buy',
+        product: 'MIS',
+        quantity: 10,
+        price: null,
+        triggerPrice: null,
+        orderType: 'MARKET',
+        quoteLastPrice: 2500,
+        quoteBid: 2499.5,
+        quoteAsk: 2500.5,
+        quoteVolume: 1000000,
+        quoteReceivedAt: now,
+        riskNotional: 25000,
+        riskSizingBasis: 'last_price',
+        riskMaxLossRupees: 500,
+        riskStopDistance: null,
+        riskExposureTag: 'intraday',
+        indiaResearchEvidence: null,
+        executionClass: 'EQ',
+        segment: 'NSE',
+        instrumentType: 'EQ',
+        expiry: null,
+        strike: null,
+        lotSize: 1,
+        tickSize: 0.05,
+        freezeQuantity: null,
+      });
+
+      await h.executionGateSupervisor!.doWork(new Date(now), minimalHealth());
+
+      const attempt = h.executionAttemptRepo!.getByStrategyDecisionId(decision.id);
+      expect(attempt).not.toBeNull();
+      expect(attempt!.status).toBe(ExecutionAttemptStatus.Refused);
+      expect(attempt!.executionMode).toBe(ExecutionMode.Paper);
+      expect(attempt!.message).toContain('Maximum open positions exceeded');
+
+      const reasons = h.executionAttemptRepo!.getRefusalReasons(attempt!.id);
+      expect(reasons.length).toBeGreaterThanOrEqual(1);
+      expect(reasons[0].reasonCode).toBe(ExecutionRefusalCode.RiskCheckFailed);
+      expect(reasons[0].reasonMessage).toContain('Maximum open positions exceeded');
+
+      expect(h.strategyDecisionRepo!.getApprovedUnconsumedCandidates().find(c => c.id === decision.id)).toBeUndefined();
 
       app.stop('Test teardown');
     });

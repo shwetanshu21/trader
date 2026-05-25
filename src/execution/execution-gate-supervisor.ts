@@ -33,7 +33,10 @@ import type { HealthStatus } from '../types/runtime.js';
 import {
   ExecutionMode,
   ExecutionRefusalCode,
+  ExecutionAttemptStatus,
+  ExecutionOutcomeCode,
   StrategyLifecyclePhase,
+  type ExecutionRefusalReason,
 } from '../types/runtime.js';
 import type { StrategyLifecycleStateRow } from '../types/runtime.js';
 import { BrokerRepository } from '../persistence/broker-repo.js';
@@ -239,11 +242,12 @@ export class ExecutionGateSupervisor implements TickWork {
 
           if (guardResult.verdict === 'refuse') {
             refusedCount++;
+            this._persistRiskRefusal(candidate, guardResult.refusalReasons, globalMode);
             console.log(
               `[execution-gate] Risk guard REFUSED ${candidate.exchange}:${candidate.tradingsymbol} ` +
               `(${candidate.product}, ${candidate.side}): ${guardResult.refusalReasons[0]?.reasonMessage ?? 'Unknown'}`,
             );
-            continue; // Skip — don't pass to execution service
+            continue; // Refusal is terminal consumption — don't pass to execution service
           }
 
           if (guardResult.verdict === 'halt') {
@@ -288,6 +292,47 @@ export class ExecutionGateSupervisor implements TickWork {
 
       // Re-throw so the scheduler can degrade the lifecycle
       throw err;
+    }
+  }
+
+  private _persistRiskRefusal(
+    candidate: import('../types/runtime.js').StrategyApprovedCandidate,
+    refusalReasons: Array<{ reasonCode: string; reasonMessage: string }>,
+    executionMode: ExecutionMode,
+  ): void {
+    const now = Date.now();
+    const reasons: ExecutionRefusalReason[] = refusalReasons.map(reason => ({
+      reasonCode: this._mapGuardReasonToExecutionReason(reason.reasonCode),
+      reasonMessage: reason.reasonMessage,
+    }));
+
+    this._attemptRepo.insertAttemptWithRefusalReasons(
+      {
+        strategyDecisionId: candidate.id,
+        executionMode,
+        status: ExecutionAttemptStatus.Refused,
+        outcomeCode: executionMode === ExecutionMode.Paper
+          ? ExecutionOutcomeCode.PaperRejected
+          : null,
+        brokerOrderId: null,
+        message: reasons.map(r => r.reasonMessage).join('; '),
+        attemptedAt: now,
+        completedAt: now,
+      },
+      reasons,
+    );
+  }
+
+  private _mapGuardReasonToExecutionReason(reasonCode: string): ExecutionRefusalCode {
+    switch (reasonCode) {
+      case 'market_closed':
+        return ExecutionRefusalCode.MarketClosed;
+      case 'missing_quote':
+      case 'stale_quote':
+      case 'missing_position_data':
+        return ExecutionRefusalCode.StaleOrMissingQuote;
+      default:
+        return ExecutionRefusalCode.RiskCheckFailed;
     }
   }
 

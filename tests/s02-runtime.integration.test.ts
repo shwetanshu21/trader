@@ -397,6 +397,43 @@ describe('Scheduler — TickWork integration', () => {
     scheduler.stop('test done');
   });
 
+  it('does not re-enter tickWork while a previous scheduler tick is still running', async () => {
+    const { repo, lifecycle, health, telemetry, clock } = createFixtures();
+    let active = 0;
+    let maxActive = 0;
+    let invocations = 0;
+
+    const slowWork: TickWork = {
+      label: 'slow-work',
+      async doWork() {
+        invocations++;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise(resolve => setTimeout(resolve, 60));
+        active--;
+      },
+    };
+
+    lifecycle.start();
+
+    const scheduler = new Scheduler({
+      clock,
+      lifecycle,
+      repo,
+      health,
+      telemetry,
+      intervalMs: 10,
+      tickWork: [slowWork],
+    });
+
+    scheduler.start();
+    await new Promise(resolve => setTimeout(resolve, 95));
+    scheduler.stop('test done');
+
+    expect(maxActive).toBe(1);
+    expect(invocations).toBeLessThanOrEqual(3);
+  });
+
   it('empty tickWork array works the same as no tickWork', async () => {
     const { mgr, repo, lifecycle, health, telemetry, clock } = createFixtures();
     lifecycle.start();

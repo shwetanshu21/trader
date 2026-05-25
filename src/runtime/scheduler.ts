@@ -90,6 +90,7 @@ export class Scheduler {
 
   private _timer: ReturnType<typeof setInterval> | null = null;
   private _abortController: AbortController | null = null;
+  private _tickInFlight: boolean = false;
   private _tickCount: number = 0;
   private _startedAt: number | null = null;
   private _lastTickTimestamp: number | null = null;
@@ -272,6 +273,17 @@ export class Scheduler {
    * 6. If lifecycle is Degraded and this tick recovered, transition back to Running
    */
   private async _tick(): Promise<TickResult> {
+    if (this._tickInFlight) {
+      return {
+        marketPhase: this._currentPhase,
+        durationMs: 0,
+        tickCount: this._tickCount,
+        error: 'Skipped: previous scheduler tick still in flight',
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    this._tickInFlight = true;
     const tickStart = Date.now();
     let error: string | null = null;
 
@@ -361,6 +373,8 @@ export class Scheduler {
       } catch {
         // If degradation fails (e.g. already Stopped), that's fine
       }
+    } finally {
+      this._tickInFlight = false;
     }
 
     return {
