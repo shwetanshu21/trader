@@ -22,5 +22,7 @@ describe('verify-replay-paper-stop-proof', () => {
     expect(json.failed).toBe(0);
     expect(json.evidence.attempts).toBe(2);
     expect(json.evidence.fills).toBe(2);
+    expect(json.evidence.feeImpact.totalFees).toBeGreaterThan(0);
+    expect(json.evidence.feeImpact.grossPnlBeforeFees).toBeGreaterThan(json.evidence.feeImpact.netPnlAfterFees);
   });
 });

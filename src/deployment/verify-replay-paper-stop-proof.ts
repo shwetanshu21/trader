@@ -169,6 +169,15 @@ async function main() {
   assert('two execution attempts persisted', attemptRepo.count() === 2, `count=${attemptRepo.count()}`);
   assert('two paper fills persisted', fillRepo.count() === 2, `count=${fillRepo.count()}`);
 
+  const feeRow = db.prepare('SELECT COALESCE(SUM(fees), 0) AS total_fees FROM paper_fills').get() as { total_fees: number };
+  const pnlRow = db.prepare('SELECT COALESCE(SUM(realized_pnl), 0) AS net_realized_pnl FROM position_events').get() as { net_realized_pnl: number };
+  const totalFees = feeRow.total_fees;
+  const netRealizedPnl = pnlRow.net_realized_pnl;
+  const grossPnlBeforeFees = netRealizedPnl + totalFees;
+
+  assert('paper fees are persisted', totalFees > 0, `totalFees=${totalFees}`);
+  assert('gross pnl exceeds net pnl by fee amount', grossPnlBeforeFees > netRealizedPnl, `gross=${grossPnlBeforeFees} net=${netRealizedPnl}`);
+
   const passed = assertions.filter(a => a.pass).length;
   const failed = assertions.length - passed;
   const summary = {
@@ -182,6 +191,11 @@ async function main() {
       attempts: attemptRepo.count(),
       fills: fillRepo.count(),
       openPositions: positionRepo.countOpenPositions(),
+      feeImpact: {
+        grossPnlBeforeFees,
+        netPnlAfterFees: netRealizedPnl,
+        totalFees,
+      },
     },
   };
 
