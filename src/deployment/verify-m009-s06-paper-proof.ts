@@ -581,7 +581,7 @@ async function main(): Promise<void> {
 
   const exec2 = await fetchJson(handles.server, '/health/execution');
   assert('Phase2: execution endpoint returns 200', exec2.status === 200, `status=${exec2.status}`);
-  assert('Phase2: totalAttempts unchanged after halt refusal', exec2.body.totalAttempts === phase1TotalAttempts, `before=${phase1TotalAttempts}, after=${exec2.body.totalAttempts}`);
+  assert('Phase2: totalAttempts increases by one persisted refusal', exec2.body.totalAttempts === phase1TotalAttempts + 1, `before=${phase1TotalAttempts}, after=${exec2.body.totalAttempts}`);
   assert('Phase2: totalOrders unchanged after halt refusal', exec2.body.totalOrders === phase1TotalOrders, `before=${phase1TotalOrders}, after=${exec2.body.totalOrders}`);
   assert('Phase2: totalFills unchanged after halt refusal', exec2.body.totalFills === phase1TotalFills, `before=${phase1TotalFills}, after=${exec2.body.totalFills}`);
 
@@ -657,7 +657,8 @@ async function main(): Promise<void> {
         source: 'operator',
         haltState: 'active_halt',
         attemptedSymbol: 'INFY',
-        consumptionPrevented: true,
+        refusalPersisted: true,
+        downstreamOrdersPrevented: true,
       },
     },
   };
