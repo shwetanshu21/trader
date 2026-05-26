@@ -123,7 +123,8 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
     }
   };
   const dashboardPayloadAssembler = new DashboardPayloadAssembler();
-  const buildShellStatusForRequest = (): OperatorShellStatusViewModel => buildOperatorShellStatus(
+  const buildShellStatusForPayload = (payload: DashboardPayload): OperatorShellStatusViewModel => buildOperatorShellStatus(payload);
+  const buildShellStatusForRequest = (): OperatorShellStatusViewModel => buildShellStatusForPayload(
     dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError),
   );
   const corsOrigin = `http://${config.host === '0.0.0.0' ? '127.0.0.1' : config.host}`;
@@ -165,14 +166,14 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/strategies': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, payload => renderStrategiesPage(payload, readModel?.getStrategyExposure() ?? []));
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, (payload, pageOptions) => renderStrategiesPage(payload, readModel?.getStrategyExposure() ?? [], pageOptions), buildShellStatusForRequest());
           return;
         }
 
         case '/decisions': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderDecisionsPage);
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderDecisionsPage, buildShellStatusForRequest());
           return;
         }
 
@@ -186,7 +187,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/system-health': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleSystemHealthHtml(res, config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap);
+          handleSystemHealthHtml(res, config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap, buildShellStatusForRequest());
           return;
         }
 
@@ -198,35 +199,35 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
             res.end(JSON.stringify({ error: 'Method not allowed', allowed: ['POST'] }));
             return;
           }
-          void handleUpstoxTokenRefreshHtml(res, upstoxTokenRefreshCoordinator);
+          void handleUpstoxTokenRefreshHtml(res, upstoxTokenRefreshCoordinator, buildShellStatusForRequest());
           return;
         }
 
         case '/decision': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleDecisionDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError);
+          handleDecisionDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError, buildShellStatusForRequest());
           return;
         }
 
         case '/strategy': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleStrategyDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError);
+          handleStrategyDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError, buildShellStatusForRequest());
           return;
         }
 
         case '/backtest': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleBacktestDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError);
+          handleBacktestDetail(res, url, getDetailReadModel(), dbError ?? detailReadModelInitError, buildShellStatusForRequest());
           return;
         }
 
         case '/api/refresh': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleApiRefresh(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs);
+          handleApiRefresh(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs, buildShellStatusForPayload);
           return;
         }
 
@@ -440,7 +441,7 @@ function buildOperatorShellStatus(payload: DashboardPayload): OperatorShellStatu
         ? 'Historical execution attempts exist, but the standalone operator UI cannot prove the current runtime execution mode.'
         : 'No persisted execution attempts exist yet, so current execution posture cannot be proven from operator evidence.',
     evidence: recentExecutionStatuses.length > 0 ? 'decision performance + execution attempts' : 'execution attempt summary card',
-    asOf: payload.decisionPerformance.lastFetchedAt ?? executionAttempts?.provenance ? new Date((executionAttempts as any)?.provenance?.asOf ?? Date.now()).toISOString() : payload.assembledAt,
+    asOf: payload.decisionPerformance.lastFetchedAt ?? (executionAttempts?.provenance ? new Date(executionAttempts.provenance.asOf).toISOString() : payload.assembledAt),
   };
 
   const market: OperatorStatusItem = {
@@ -575,6 +576,7 @@ function handleDecisionDetail(
       detail: parsed.message,
       statusLabel: '400 Bad Request',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
@@ -585,6 +587,7 @@ function handleDecisionDetail(
       detail: dbError ?? 'Operator database is unavailable, so persisted decision detail cannot be loaded.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
@@ -597,17 +600,19 @@ function handleDecisionDetail(
         detail: `No persisted decision detail exists for id=${parsed.value}.`,
         statusLabel: '404 Not Found',
         actions: '<a href="/">Back to dashboard</a>',
+        shellStatus,
       }));
       return;
     }
 
-    respondHtml(res, 200, renderDecisionDetailPage(detail));
+    respondHtml(res, 200, renderDecisionDetailPage(detail, { shellStatus }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Decision Detail Unavailable',
       detail: describeDetailError('decision', err),
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
   }
 }
@@ -626,6 +631,7 @@ function handleStrategyDetail(
       detail: strategyId.message,
       statusLabel: '400 Bad Request',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
@@ -637,6 +643,7 @@ function handleStrategyDetail(
       detail: strategyVersion.message,
       statusLabel: '400 Bad Request',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
@@ -647,6 +654,7 @@ function handleStrategyDetail(
       detail: dbError ?? 'Operator database is unavailable, so persisted strategy detail cannot be loaded.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
@@ -659,17 +667,19 @@ function handleStrategyDetail(
         detail: `No persisted strategy detail exists for ${strategyId.value}@${strategyVersion.value}.`,
         statusLabel: '404 Not Found',
         actions: '<a href="/">Back to dashboard</a>',
+        shellStatus,
       }));
       return;
     }
 
-    respondHtml(res, 200, renderStrategyDetailPage(detail));
+    respondHtml(res, 200, renderStrategyDetailPage(detail, { shellStatus }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Strategy Detail Unavailable',
       detail: describeDetailError('strategy', err),
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
   }
 }
@@ -688,6 +698,7 @@ function handleBacktestDetail(
       detail: parsed.message,
       statusLabel: '400 Bad Request',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
@@ -698,6 +709,7 @@ function handleBacktestDetail(
       detail: dbError ?? 'Operator database is unavailable, so persisted backtest detail cannot be loaded.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
@@ -710,17 +722,19 @@ function handleBacktestDetail(
         detail: `No persisted backtest run detail exists for runId=${parsed.value}.`,
         statusLabel: '404 Not Found',
         actions: '<a href="/">Back to dashboard</a>',
+        shellStatus,
       }));
       return;
     }
 
-    respondHtml(res, 200, renderBacktestDetailPage(detail));
+    respondHtml(res, 200, renderBacktestDetailPage(detail, { shellStatus }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Backtest Detail Unavailable',
       detail: describeDetailError('backtest', err),
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
   }
 }
@@ -731,9 +745,11 @@ function handleApiRefresh(
   readModel: OperatorReadModel | null,
   dbError: string | null,
   pollIntervalMs: number,
+  buildShellStatus: (payload: DashboardPayload) => OperatorShellStatusViewModel,
 ): void {
   try {
     const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
+    const shellStatus = buildShellStatus(payload);
     const sectionHtml = renderDashboardSectionHtml(payload);
     res.writeHead(payload.dbAvailable ? 200 : 503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -742,6 +758,7 @@ function handleApiRefresh(
       dbError: payload.dbError,
       pollIntervalMs,
       error: payload.dbAvailable ? null : 'Database unavailable',
+      shellStatus,
       heroHtml: renderOverviewHero(payload),
       sections: {
         summaryCards: serializeDashboardSection(payload.summaryCards, sectionHtml.summaryCards),
@@ -889,8 +906,9 @@ function handleSystemHealthHtml(
   readModel: OperatorReadModel | null,
   dbOpenBootstrap: DbOpenBootstrapState,
   detailReadModelBootstrap: unknown,
+  shellStatus: OperatorShellStatusViewModel | null,
 ): void {
-  respondHtml(res, 200, renderSystemHealthPage(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap)));
+  respondHtml(res, 200, renderSystemHealthPage(buildOperatorHealthPayload(config, db, dbError, authenticator, readModel, dbOpenBootstrap, detailReadModelBootstrap), { shellStatus }));
 }
 
 function handleApiHealth(
@@ -926,6 +944,7 @@ async function handleUpstoxTokenRefreshApi(
 async function handleUpstoxTokenRefreshHtml(
   res: http.ServerResponse,
   coordinator: UpstoxTokenRefreshCoordinator,
+  shellStatus: OperatorShellStatusViewModel | null,
 ): Promise<void> {
   try {
     const result = await coordinator.triggerRequest('operator-ui');
@@ -941,6 +960,7 @@ async function handleUpstoxTokenRefreshHtml(
       detail: result.status.message ?? 'Upstox token refresh request processed.',
       statusLabel: `${statusCode}`,
       actions: '<a href="/system-health">Back to system health</a><a href="/api/health">Raw JSON</a>',
+      shellStatus,
     }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
@@ -948,6 +968,7 @@ async function handleUpstoxTokenRefreshHtml(
       detail: err instanceof Error ? err.message : String(err),
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/system-health">Back to system health</a>',
+      shellStatus,
     }));
   }
 }
@@ -988,8 +1009,5 @@ function describeDetailError(operation: 'decision' | 'strategy' | 'backtest', er
 
 function respondHtml(res: http.ServerResponse, statusCode: number, body: string): void {
   res.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(body);
-}
-
   res.end(body);
 }

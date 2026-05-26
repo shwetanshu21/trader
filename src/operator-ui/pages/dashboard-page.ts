@@ -39,6 +39,7 @@ import {
   renderSummaryGrid,
   renderResearchLineageBoundedEvidenceNote,
 } from '../render-utils.js';
+import { renderOperatorStatusStrip, type OperatorShellStatusViewModel } from '../components/status-strip.js';
 
 const DASHBOARD_SECTION_ORDER = [
   'summaryCards',
@@ -77,6 +78,7 @@ function defaultOvernightResearchSection(): DashboardSection<OperatorOvernightSu
 
 export interface DashboardPageOptions {
   pollIntervalMs?: number;
+  shellStatus?: OperatorShellStatusViewModel | null;
 }
 
 function findSummaryCard(cards: OperatorSummaryCard[], key: string): OperatorSummaryCard | null {
@@ -295,6 +297,20 @@ export function renderDashboardPage(
   .summary-toolbar a:hover { background: rgba(23, 38, 59, 0.9); }
   .stack-grid { display: grid; gap: 1rem; }
   .page-actions { margin-top: 0.9rem; display: flex; gap: 0.85rem; flex-wrap: wrap; font-size: 0.9rem; }
+  .console-status-strip { margin-bottom: 1rem; padding: 0.95rem 1rem; background: linear-gradient(180deg, rgba(19,32,51,0.98), rgba(11,20,34,0.98)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.9rem; box-shadow: 0 16px 40px rgba(0,0,0,0.18); }
+  .console-status-strip-header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 0.8rem; }
+  .console-status-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; font-weight: 700; }
+  .console-status-headline { margin-top: 0.2rem; color: #eef4fb; font-size: 0.98rem; font-weight: 650; }
+  .console-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 0.75rem; }
+  .console-status-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.75rem; padding: 0.75rem; min-width: 0; }
+  .console-status-label { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+  .console-status-summary { margin-top: 0.3rem; color: #f8fafc; font-size: 1rem; font-weight: 700; }
+  .console-status-detail { margin-top: 0.28rem; color: #c7d3e1; font-size: 0.8rem; }
+  .console-status-meta { margin-top: 0.42rem; color: #8fa4bc; font-size: 0.74rem; }
+  .console-status-healthy { border-color: rgba(52, 211, 153, 0.45); box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.14); }
+  .console-status-warning { border-color: rgba(251, 191, 36, 0.45); box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.14); }
+  .console-status-critical { border-color: rgba(248, 113, 113, 0.45); box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.14); }
+  .console-status-unavailable { border-color: rgba(148, 163, 184, 0.4); box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12); }
   @media (max-width: 1080px) {
     .console-shell { grid-template-columns: 1fr; }
     .console-sidebar { position: static; }
@@ -323,6 +339,8 @@ export function renderDashboardPage(
     </div>
 
     <div class="page-refresh-banner" id="dashboard-refresh-banner" data-visible="false" data-kind="warn" role="status" aria-live="polite"></div>
+
+    ${renderOperatorStatusStrip(options.shellStatus)}
 
     ${overviewHero}
 

@@ -18,7 +18,7 @@ import {
   strategyDetailHref,
 } from '../render-utils.js';
 
-export function renderBacktestDetailPage(detail: OperatorBacktestDetail): string {
+export function renderBacktestDetailPage(detail: OperatorBacktestDetail, options: { shellStatus?: import('../components/status-strip.js').OperatorShellStatusViewModel | null } = {}): string {
   const strategyHref = strategyDetailHref(detail.strategyId, detail.strategyVersion);
   const actions = [
     renderLink('/', '← Back to dashboard'),
@@ -152,5 +152,6 @@ export function renderBacktestDetailPage(detail: OperatorBacktestDetail): string
     actions,
     body,
     navActive: 'governance',
+    shellStatus: options.shellStatus ?? null,
   });
 }

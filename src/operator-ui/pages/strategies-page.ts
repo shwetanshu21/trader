@@ -122,7 +122,7 @@ function renderStrategySummarySection(payload: DashboardPayload, exposure: Opera
   );
 }
 
-export function renderStrategiesPage(payload: DashboardPayload, exposure: OperatorStrategyExposure[]): string {
+export function renderStrategiesPage(payload: DashboardPayload, exposure: OperatorStrategyExposure[], options: { shellStatus?: import('../components/status-strip.js').OperatorShellStatusViewModel | null } = {}): string {
   const sectionHtml = renderDashboardSectionHtml(payload);
 
   return renderPageLayout({
@@ -132,6 +132,7 @@ export function renderStrategiesPage(payload: DashboardPayload, exposure: Operat
     meta: `Assembled ${escapeHtml(payload.assembledAt)}`,
     actions: '<a href="/">Back to overview</a><a href="/positions">Positions & exposure</a><a href="/governance">Governance</a>',
     navActive: 'strategies',
+    shellStatus: options.shellStatus ?? null,
     body: [
       renderStrategySummarySection(payload, exposure),
       renderStrategyExposureSection(payload, exposure),

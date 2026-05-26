@@ -14,7 +14,7 @@ export interface OperatorSystemHealthViewModel {
   sections: Record<string, unknown>;
 }
 
-export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel): string {
+export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel, options: { shellStatus?: import('../components/status-strip.js').OperatorShellStatusViewModel | null } = {}): string {
   const cards = [
     { label: 'Service', value: payload.service, meta: payload.version },
     { label: 'Status', value: payload.status, meta: payload.dbConnected ? 'DB connected' : 'DB degraded' },
@@ -97,6 +97,7 @@ export function renderSystemHealthPage(payload: OperatorSystemHealthViewModel): 
     meta: payload.dbConnected ? 'Healthy operator database connection.' : `Degraded: ${payload.dbError ?? 'database unavailable'}`,
     actions: '<a href="/">Back to overview</a><a href="/api/health">Raw JSON</a><a href="/positions">Positions & exposure</a>',
     navActive: 'system-health',
+    shellStatus: options.shellStatus ?? null,
     body: [summary, dbOpen, detailBootstrap, upstoxTokenRefresh, sections, authState].join('\n'),
   });
 }

@@ -27,7 +27,7 @@ import {
   strategyDetailHref,
 } from '../render-utils.js';
 
-export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string {
+export function renderStrategyDetailPage(detail: OperatorStrategyDetail, options: { shellStatus?: import('../components/status-strip.js').OperatorShellStatusViewModel | null } = {}): string {
   const selfHref = strategyDetailHref(detail.strategyId, detail.strategyVersion);
   const actions = [
     renderLink('/', '← Back to dashboard'),
@@ -157,6 +157,7 @@ export function renderStrategyDetailPage(detail: OperatorStrategyDetail): string
     actions,
     body,
     navActive: 'strategies',
+    shellStatus: options.shellStatus ?? null,
   });
 }
 

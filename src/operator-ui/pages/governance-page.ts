@@ -2,7 +2,7 @@ import type { DashboardPayload } from '../dashboard-data.js';
 import { renderDashboardSectionHtml, renderResearchLineageSection } from './dashboard-page.js';
 import { escapeHtml, renderPageLayout } from '../render-utils.js';
 
-export function renderGovernancePage(payload: DashboardPayload): string {
+export function renderGovernancePage(payload: DashboardPayload, options: { shellStatus?: import('../components/status-strip.js').OperatorShellStatusViewModel | null } = {}): string {
   const sectionHtml = renderDashboardSectionHtml(payload);
   const governanceResearchLineage = renderResearchLineageSection(payload.researchLineage, {
     emphasizeTotals: true,
@@ -16,6 +16,7 @@ export function renderGovernancePage(payload: DashboardPayload): string {
     meta: `Assembled ${escapeHtml(payload.assembledAt)}`,
     actions: '<a href="/">Back to overview</a><a href="/strategies">Strategies</a><a href="/decisions">Decision ledger</a>',
     navActive: 'governance',
+    shellStatus: options.shellStatus ?? null,
     body: [
       sectionHtml.lifecycleStates,
       sectionHtml.governanceHistory,

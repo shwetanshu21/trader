@@ -183,22 +183,32 @@ describe('operator-ui server detail routes', () => {
     expect(dashboardHtml).toContain('data-dashboard-section="summaryCards"');
     expect(dashboardHtml).toContain('data-dashboard-section="strategyPerformance"');
     expect(dashboardHtml).toContain('Upstox Auth');
+    expect(dashboardHtml).toContain('data-shell-status-strip');
+    expect(dashboardHtml).toContain('data-shell-status-key="market"');
 
     const positionsResponse = await fetch(`${baseUrl}/positions`, { headers: { Authorization: 'Basic ok' } });
     expect(positionsResponse.status).toBe(200);
-    expect(await positionsResponse.text()).toContain('Positions &amp; Exposure');
+    const positionsHtml = await positionsResponse.text();
+    expect(positionsHtml).toContain('Positions &amp; Exposure');
+    expect(positionsHtml).toContain('data-shell-status-strip');
 
     const strategiesPageResponse = await fetch(`${baseUrl}/strategies`, { headers: { Authorization: 'Basic ok' } });
     expect(strategiesPageResponse.status).toBe(200);
-    expect(await strategiesPageResponse.text()).toContain('Attributed Open Exposure');
+    const strategiesHtml = await strategiesPageResponse.text();
+    expect(strategiesHtml).toContain('Attributed Open Exposure');
+    expect(strategiesHtml).toContain('data-shell-status-strip');
 
     const decisionsPageResponse = await fetch(`${baseUrl}/decisions`, { headers: { Authorization: 'Basic ok' } });
     expect(decisionsPageResponse.status).toBe(200);
-    expect(await decisionsPageResponse.text()).toContain('Decision Ledger');
+    const decisionsHtml = await decisionsPageResponse.text();
+    expect(decisionsHtml).toContain('Decision Ledger');
+    expect(decisionsHtml).toContain('data-shell-status-strip');
 
     const governancePageResponse = await fetch(`${baseUrl}/governance`, { headers: { Authorization: 'Basic ok' } });
     expect(governancePageResponse.status).toBe(200);
-    expect(await governancePageResponse.text()).toContain('Governance &amp; Backtests');
+    const governanceHtml = await governancePageResponse.text();
+    expect(governanceHtml).toContain('Governance &amp; Backtests');
+    expect(governanceHtml).toContain('data-shell-status-strip');
 
     const healthPageResponse = await fetch(`${baseUrl}/system-health`, { headers: { Authorization: 'Basic ok' } });
     expect(healthPageResponse.status).toBe(200);
@@ -206,18 +216,25 @@ describe('operator-ui server detail routes', () => {
     expect(healthPageHtml).toContain('System Health');
     expect(healthPageHtml).toContain('Database Open Bootstrap');
     expect(healthPageHtml).toContain('Detail Read Model Bootstrap');
+    expect(healthPageHtml).toContain('data-shell-status-strip');
 
     const decisionResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
     expect(decisionResponse.status).toBe(200);
-    expect(await decisionResponse.text()).toContain('Decision #7');
+    const decisionHtml = await decisionResponse.text();
+    expect(decisionHtml).toContain('Decision #7');
+    expect(decisionHtml).toContain('data-shell-status-strip');
 
     const strategyResponse = await fetch(`${baseUrl}/strategy?strategyId=alpha&strategyVersion=1.0.0`, { headers: { Authorization: 'Basic ok' } });
     expect(strategyResponse.status).toBe(200);
-    expect(await strategyResponse.text()).toContain('Operator Strategy Detail');
+    const strategyHtml = await strategyResponse.text();
+    expect(strategyHtml).toContain('Operator Strategy Detail');
+    expect(strategyHtml).toContain('data-shell-status-strip');
 
     const backtestResponse = await fetch(`${baseUrl}/backtest?runId=42`, { headers: { Authorization: 'Basic ok' } });
     expect(backtestResponse.status).toBe(200);
-    expect(await backtestResponse.text()).toContain('Operator Backtest Detail');
+    const backtestHtml = await backtestResponse.text();
+    expect(backtestHtml).toContain('Operator Backtest Detail');
+    expect(backtestHtml).toContain('data-shell-status-strip');
   });
 
   it('exposes manual Upstox token refresh routes and reports refresh status in health surfaces', async () => {
@@ -443,6 +460,11 @@ describe('operator-ui server refresh API', () => {
     expect(secondPayload.sections.summaryCards.html).toContain('Showing last known data');
     expect(secondPayload.sections.summaryCards.html).toContain('data-section-state="stale"');
     expect(secondPayload.sections.strategyPerformance.state).toBe('ok');
+    expect(secondPayload.shellStatus.headline).toContain('Operator');
+    expect(secondPayload.shellStatus.items).toHaveLength(5);
+    expect(secondPayload.shellStatus.items.map((item: { key: string }) => item.key)).toEqual(['market', 'execution', 'broker', 'risk', 'freshness']);
+    expect(secondPayload.shellStatus.items.find((item: { key: string }) => item.key === 'market')).toMatchObject({ tone: 'unavailable', summary: 'Unavailable' });
+    expect(secondPayload.shellStatus.items.find((item: { key: string }) => item.key === 'freshness')).toMatchObject({ tone: 'warning' });
   });
 
   it('returns 503 with unavailable section metadata when the DB/read model is absent', async () => {
@@ -473,5 +495,7 @@ describe('operator-ui server refresh API', () => {
       isCachedData: false,
     });
     expect(payload.sections.summaryCards.html).toContain('data-section-state="unavailable"');
+    expect(payload.shellStatus.items.find((item: { key: string }) => item.key === 'freshness')).toMatchObject({ tone: 'unavailable', summary: 'Unavailable' });
+    expect(payload.shellStatus.items.find((item: { key: string }) => item.key === 'broker')).toBeTruthy();
   });
 });

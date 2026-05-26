@@ -9,6 +9,7 @@ import { renderDecisionsPage } from '../src/operator-ui/pages/decisions-page.js'
 import { renderGovernancePage } from '../src/operator-ui/pages/governance-page.js';
 import { renderSystemHealthPage } from '../src/operator-ui/pages/system-health-page.js';
 import type { DashboardPayload, DashboardSection } from '../src/operator-ui/dashboard-data.js';
+import type { OperatorShellStatusViewModel } from '../src/operator-ui/components/status-strip.js';
 import type {
   OperatorBacktestDetail,
   OperatorDecisionDetail,
@@ -31,6 +32,20 @@ const testProvenance: OperatorProvenance = {
   asOf: Date.now(),
   sourceLabel: 'test',
 };
+
+function sampleShellStatus(): OperatorShellStatusViewModel {
+  return {
+    assembledAt: '2025-01-11T10:00:00.000Z',
+    headline: 'Operator attention required: one or more global surfaces are degraded.',
+    items: [
+      { key: 'market', label: 'Market', tone: 'unavailable', summary: 'Unavailable', detail: 'No scheduler proof is persisted on operator routes.', evidence: 'no persisted scheduler phase', asOf: '2025-01-11T10:00:00.000Z' },
+      { key: 'execution', label: 'Execution', tone: 'warning', summary: 'pending', detail: 'Historical attempts exist but current mode is not proven.', evidence: 'decision performance', asOf: '2025-01-11T09:59:30.000Z' },
+      { key: 'broker', label: 'Broker', tone: 'critical', summary: 'Refresh failed', detail: 'Broker auth is degraded.', evidence: 'upstox auth summary card', asOf: '2025-01-11T09:59:00.000Z' },
+      { key: 'risk', label: 'Risk', tone: 'unavailable', summary: 'Unavailable', detail: 'No global risk halt surface is wired yet.', evidence: 'no persisted global risk posture', asOf: '2025-01-11T10:00:00.000Z' },
+      { key: 'freshness', label: 'Freshness', tone: 'warning', summary: '1 stale section(s)', detail: 'Showing last-known cached data for one or more sections.', evidence: 'dashboard section refresh metadata', asOf: '2025-01-11T09:59:15.000Z' },
+    ],
+  };
+}
 
 function ok<T>(data: T): DashboardSection<T> {
   return {
@@ -314,6 +329,27 @@ function sampleBacktestDetail(): OperatorBacktestDetail {
     diagnostics: [], provenance: testProvenance,
   };
 }
+
+describe('Shared shell status contract', () => {
+  it('renders the shared shell-status strip across dashboard, list, and detail pages', () => {
+    const shellStatus = sampleShellStatus();
+    const payload = buildPayload();
+
+    const dashboardHtml = renderDashboardPage(payload, { pollIntervalMs: 1_500, shellStatus });
+    expect(dashboardHtml).toContain('data-shell-status-strip');
+    expect(dashboardHtml).toContain('data-shell-status-key="market"');
+    expect(dashboardHtml).toContain('data-shell-status-tone="critical"');
+    expect(dashboardHtml).toContain('Refresh failed');
+
+    const positionsHtml = renderPositionsPage(payload, sampleStrategyExposure(), { shellStatus });
+    expect(positionsHtml).toContain('data-shell-status-strip');
+    expect(positionsHtml).toContain('data-shell-status-key="freshness"');
+
+    const decisionHtml = renderDecisionDetailPage(sampleDecisionDetail(), { shellStatus });
+    expect(decisionHtml).toContain('data-shell-status-strip');
+    expect(decisionHtml).toContain('data-shell-status-key="risk"');
+  });
+});
 
 describe('Top-level operator pages', () => {
   it('renders dedicated positions and strategies pages with truthful exposure language', () => {
