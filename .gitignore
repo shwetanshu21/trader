@@ -1,4 +1,12 @@
 
+# ── Database files (NEVER track — causes production data loss on deploy) ──
+*.db
+*.db-wal
+*.db-shm
+
+# ── Deployment witness artifacts ──
+witness-test-*/
+
 # ── GSD baseline (auto-generated) ──
 .gsd
 .gsd-id
