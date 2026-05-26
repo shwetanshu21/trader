@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { DatabaseManager } from '../persistence/sqlite.js';
 import { MarketClock } from '../runtime/market-clock.js';
 import { INDIA_NSE_EQ_MARKET, resolveIndiaMarketConfigPath } from '../market/india-profile.js';
@@ -59,6 +60,33 @@ export interface OvernightCliOptions {
   stopAfterPhase: PhaseStop;
 }
 
+export function parseIndiaWallClock(value: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
+  if (!match) {
+    throw new Error(`Invalid --now-ist value "${value}". Expected YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss in Asia/Kolkata.`);
+  }
+
+  const [, yearStr, monthStr, dayStr, hourStr, minuteStr, secondStr] = match;
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  const second = Number(secondStr ?? '0');
+
+  if (
+    month < 1 || month > 12 ||
+    day < 1 || day > 31 ||
+    hour < 0 || hour > 23 ||
+    minute < 0 || minute > 59 ||
+    second < 0 || second > 59
+  ) {
+    throw new Error(`Invalid --now-ist value "${value}". Components are out of range.`);
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, hour - 5, minute - 30, second));
+}
+
 export function parseArgs(argv: string[]): OvernightCliOptions {
   const stamp = Date.now();
   const options: OvernightCliOptions = {
@@ -86,6 +114,7 @@ export function parseArgs(argv: string[]): OvernightCliOptions {
       case '--workspace-path': options.workspacePath = value; i++; break;
       case '--label': options.label = value; i++; break;
       case '--now': options.now = new Date(Number(value)); i++; break;
+      case '--now-ist': options.now = parseIndiaWallClock(value); i++; break;
       case '--simulate-phases': options.simulatePhases = !(value === 'false' || value === '0'); i++; break;
       case '--simulate-gen-count': options.simulateGenCount = Number(value); i++; break;
       case '--simulate-eval-count': options.simulateEvalCount = Number(value); i++; break;
@@ -901,7 +930,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(err => {
-  console.error(JSON.stringify({ status: 'error', error: err instanceof Error ? err.message : String(err), timestamp: new Date().toISOString() }, null, 2));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(err => {
+    console.error(JSON.stringify({ status: 'error', error: err instanceof Error ? err.message : String(err), timestamp: new Date().toISOString() }, null, 2));
+    process.exit(1);
+  });
+}

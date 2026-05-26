@@ -68,6 +68,21 @@ function indiaTime(
   return new Date(Date.UTC(year, month - 1, day, hours - 5, minutes - 30, seconds));
 }
 
+function formatIndiaWallClock(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find(part => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
+}
+
 const REGULAR_TIME = indiaTime(2025, 1, 6, 11, 30, 0);
 const CLOSED_TIME = indiaTime(2025, 1, 6, 16, 30, 0);
 
@@ -186,7 +201,7 @@ async function main(): Promise<void> {
           '--research-db-path', researchDbPath,
           '--workspace-path', closedWorkspace,
           '--label', input.label,
-          '--now', String(input.now.getTime()),
+          '--now-ist', formatIndiaWallClock(input.now),
         ];
         fs.writeFileSync(launchArtifactPath, JSON.stringify({
           schemaVersion: 1,
