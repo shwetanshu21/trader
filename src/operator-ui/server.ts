@@ -12,8 +12,10 @@ import {
 } from './auth.js';
 import type { OperatorReadModel } from '../operator/operator-read-model.js';
 import { OperatorDetailReadModel, OperatorDetailReadModelError } from '../operator/operator-detail-read-model.js';
-import { DashboardPayloadAssembler } from './dashboard-data.js';
+import { DashboardPayloadAssembler, type DashboardPayload } from './dashboard-data.js';
 import { renderStatusPage } from './render-utils.js';
+import type { OperatorShellStatusViewModel, OperatorStatusItem, OperatorStatusTone } from './components/status-strip.js';
+import { getBridgeAuthSummaryCard } from './bridge-auth-status.js';
 import { renderBacktestDetailPage } from './pages/backtest-detail-page.js';
 import { renderDashboardPage, renderDashboardSectionHtml, renderOverviewHero } from './pages/dashboard-page.js';
 import { renderDecisionDetailPage } from './pages/decision-detail-page.js';
@@ -121,6 +123,9 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
     }
   };
   const dashboardPayloadAssembler = new DashboardPayloadAssembler();
+  const buildShellStatusForRequest = (): OperatorShellStatusViewModel => buildOperatorShellStatus(
+    dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError),
+  );
   const corsOrigin = `http://${config.host === '0.0.0.0' ? '127.0.0.1' : config.host}`;
   const upstoxTokenRefreshCoordinator = options.upstoxTokenRefreshCoordinator ?? new UpstoxTokenRefreshCoordinator();
 
@@ -146,14 +151,14 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs);
+          handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs, buildShellStatusForRequest());
           return;
         }
 
         case '/positions': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, payload => renderPositionsPage(payload, readModel?.getStrategyExposure() ?? []));
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, (payload, options) => renderPositionsPage(payload, readModel?.getStrategyExposure() ?? [], options), buildShellStatusForRequest());
           return;
         }
 
@@ -174,7 +179,7 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/governance': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderGovernancePage);
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderGovernancePage, buildShellStatusForRequest());
           return;
         }
 
@@ -283,6 +288,198 @@ function verifyAuth(
   return result;
 }
 
+function toneSeverity(tone: OperatorStatusTone): number {
+  switch (tone) {
+    case 'critical':
+      return 3;
+    case 'warning':
+      return 2;
+    case 'healthy':
+      return 1;
+    case 'unavailable':
+    default:
+      return 0;
+  }
+}
+
+function latestKnownFetch(payload: DashboardPayload): string | null {
+  const timestamps = [
+    payload.summaryCards.lastFetchedAt,
+    payload.strategyPerformance.lastFetchedAt,
+    payload.tickerPerformance.lastFetchedAt,
+    payload.decisionPerformance.lastFetchedAt,
+    payload.lifecycleStates.lastFetchedAt,
+    payload.governanceHistory.lastFetchedAt,
+    payload.promotionHistory.lastFetchedAt,
+    payload.walkForwardLeaderboard.lastFetchedAt,
+    payload.researchLineage.lastFetchedAt,
+    payload.overnightResearch.lastFetchedAt,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  if (timestamps.length === 0) return null;
+  return timestamps.sort().at(-1) ?? null;
+}
+
+function buildOperatorShellStatus(payload: DashboardPayload): OperatorShellStatusViewModel {
+  const summaryCards = payload.summaryCards.data;
+  const bridgeCard = summaryCards.find(card => card.key === 'upstox_auth') ?? getBridgeAuthSummaryCard();
+  const executionAttempts = summaryCards.find(card => card.key === 'total_execution_attempts');
+  const latestFetch = latestKnownFetch(payload);
+
+  const staleCount = [
+    payload.summaryCards,
+    payload.strategyPerformance,
+    payload.tickerPerformance,
+    payload.decisionPerformance,
+    payload.lifecycleStates,
+    payload.governanceHistory,
+    payload.promotionHistory,
+    payload.walkForwardLeaderboard,
+    payload.researchLineage,
+    payload.overnightResearch,
+  ].filter(section => section.state === 'stale').length;
+  const unavailableCount = [
+    payload.summaryCards,
+    payload.strategyPerformance,
+    payload.tickerPerformance,
+    payload.decisionPerformance,
+    payload.lifecycleStates,
+    payload.governanceHistory,
+    payload.promotionHistory,
+    payload.walkForwardLeaderboard,
+    payload.researchLineage,
+    payload.overnightResearch,
+  ].filter(section => section.state === 'error' || section.state === 'unavailable').length;
+
+  const freshness: OperatorStatusItem = !payload.dbAvailable
+    ? {
+        key: 'freshness',
+        label: 'Freshness',
+        tone: 'unavailable',
+        summary: 'Unavailable',
+        detail: payload.dbError ?? 'Operator database is unavailable, so no refresh freshness can be proven.',
+        evidence: 'dashboard payload',
+        asOf: payload.assembledAt,
+      }
+    : staleCount > 0
+      ? {
+          key: 'freshness',
+          label: 'Freshness',
+          tone: 'warning',
+          summary: `${staleCount} stale section(s)`,
+          detail: unavailableCount > 0
+            ? `${unavailableCount} section(s) also failed or are unavailable.`
+            : 'Showing last-known cached data for one or more sections.',
+          evidence: 'dashboard section refresh metadata',
+          asOf: latestFetch,
+        }
+      : unavailableCount > 0
+        ? {
+            key: 'freshness',
+            label: 'Freshness',
+            tone: 'critical',
+            summary: `${unavailableCount} refresh issue(s)`,
+            detail: 'One or more sections failed to refresh and no cached replacement was available.',
+            evidence: 'dashboard section refresh metadata',
+            asOf: latestFetch,
+          }
+        : {
+            key: 'freshness',
+            label: 'Freshness',
+            tone: 'healthy',
+            summary: 'Current',
+            detail: 'All rendered dashboard sections refreshed without stale or unavailable flags.',
+            evidence: 'dashboard section refresh metadata',
+            asOf: latestFetch ?? payload.assembledAt,
+          };
+
+  const brokerDisplay = String(bridgeCard.display ?? 'Unknown');
+  const brokerTone: OperatorStatusTone = brokerDisplay === 'Healthy'
+    ? 'healthy'
+    : brokerDisplay === 'Refresh pending' || brokerDisplay === 'Token present'
+      ? 'warning'
+      : brokerDisplay === 'Approval needed' || brokerDisplay === 'Refresh failed' || brokerDisplay === 'Token expired' || brokerDisplay === 'Token rejected'
+        ? 'critical'
+        : 'unavailable';
+  const broker: OperatorStatusItem = {
+    key: 'broker',
+    label: 'Broker',
+    tone: brokerTone,
+    summary: brokerDisplay,
+    detail: brokerTone === 'healthy'
+      ? 'Upstox bridge authentication evidence is healthy.'
+      : brokerTone === 'warning'
+        ? 'Broker auth exists but operator intervention or refresh completion may still be required.'
+        : brokerTone === 'critical'
+          ? 'Broker authentication is degraded and may block live broker-backed activity.'
+          : 'No trustworthy broker session proof is available from the operator surfaces.',
+    evidence: bridgeCard.provenance?.sourceLabel ?? 'upstox auth summary card',
+    asOf: bridgeCard.provenance ? new Date(bridgeCard.provenance.asOf).toISOString() : payload.assembledAt,
+  };
+
+  const recentExecutionStatuses = (payload.decisionPerformance.state === 'ok' || payload.decisionPerformance.state === 'stale')
+    ? payload.decisionPerformance.data.map(row => row.executionStatus).filter((value): value is string => Boolean(value))
+    : [];
+  const totalExecutionAttempts = typeof executionAttempts?.value === 'number' ? executionAttempts.value : 0;
+  const executionTone: OperatorStatusTone = recentExecutionStatuses.some(status => ['failed', 'error', 'rejected', 'cancelled'].includes(status))
+    ? 'critical'
+    : recentExecutionStatuses.some(status => ['pending', 'blocked', 'refused', 'skipped'].includes(status))
+      ? 'warning'
+      : recentExecutionStatuses.some(status => ['completed', 'filled'].includes(status))
+        ? 'healthy'
+        : totalExecutionAttempts > 0
+          ? 'warning'
+          : 'unavailable';
+  const execution: OperatorStatusItem = {
+    key: 'execution',
+    label: 'Execution',
+    tone: executionTone,
+    summary: recentExecutionStatuses[0] ?? (totalExecutionAttempts > 0 ? `${totalExecutionAttempts} attempt(s) recorded` : 'Unavailable'),
+    detail: recentExecutionStatuses.length > 0
+      ? 'Execution posture is derived from persisted recent decision and execution outcome evidence, not an in-memory runtime mode flag.'
+      : totalExecutionAttempts > 0
+        ? 'Historical execution attempts exist, but the standalone operator UI cannot prove the current runtime execution mode.'
+        : 'No persisted execution attempts exist yet, so current execution posture cannot be proven from operator evidence.',
+    evidence: recentExecutionStatuses.length > 0 ? 'decision performance + execution attempts' : 'execution attempt summary card',
+    asOf: payload.decisionPerformance.lastFetchedAt ?? executionAttempts?.provenance ? new Date((executionAttempts as any)?.provenance?.asOf ?? Date.now()).toISOString() : payload.assembledAt,
+  };
+
+  const market: OperatorStatusItem = {
+    key: 'market',
+    label: 'Market',
+    tone: 'unavailable',
+    summary: 'Unavailable',
+    detail: 'This SSR operator UI does not persist the current scheduler market phase, so live market-state truth cannot be proven here yet.',
+    evidence: 'no persisted scheduler phase on operator routes',
+    asOf: payload.assembledAt,
+  };
+
+  const risk: OperatorStatusItem = {
+    key: 'risk',
+    label: 'Risk',
+    tone: 'unavailable',
+    summary: 'Unavailable',
+    detail: 'No global execution-risk halt or guard surface is currently wired into the standalone operator UI payloads.',
+    evidence: 'no persisted global risk posture on operator routes',
+    asOf: payload.assembledAt,
+  };
+
+  const items: OperatorStatusItem[] = [market, execution, broker, risk, freshness];
+  const worst = items.reduce((max, item) => Math.max(max, toneSeverity(item.tone)), 0);
+  const headline = worst >= 3
+    ? 'Operator attention required: one or more global surfaces are degraded.'
+    : worst === 2
+      ? 'Operator caution: some global surfaces are degraded or partially stale.'
+      : worst === 1
+        ? 'Operator status is healthy where proof exists.'
+        : 'Global status is explicitly unavailable where this SSR UI lacks proof.';
+
+  return {
+    assembledAt: payload.assembledAt,
+    headline,
+    items,
+  };
+}
+
 function handleLiveness(
   res: http.ServerResponse,
   db: Database.Database | null,
@@ -304,6 +501,7 @@ function handleDashboardHtml(
   readModel: OperatorReadModel | null,
   dbError: string | null,
   pollIntervalMs: number,
+  shellStatus: OperatorShellStatusViewModel | null,
 ): void {
   if (readModel === null) {
     respondHtml(res, 503, renderStatusPage({
@@ -311,19 +509,21 @@ function handleDashboardHtml(
       detail: dbError ?? 'Failed to open operator database.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to dashboard</a>',
+      shellStatus,
     }));
     return;
   }
 
   try {
     const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
-    respondHtml(res, 200, renderDashboardPage(payload, { pollIntervalMs }));
+    respondHtml(res, 200, renderDashboardPage(payload, { pollIntervalMs, shellStatus }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Dashboard Render Failed',
       detail: err instanceof Error ? err.message : 'Unknown error while assembling dashboard payload.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Retry dashboard</a>',
+      shellStatus,
     }));
   }
 }
@@ -333,7 +533,8 @@ function handleTopLevelDashboardPage(
   dashboardPayloadAssembler: DashboardPayloadAssembler,
   readModel: OperatorReadModel | null,
   dbError: string | null,
-  renderPage: (payload: ReturnType<DashboardPayloadAssembler['fetchDashboardPayload']>) => string,
+  renderPage: (payload: ReturnType<DashboardPayloadAssembler['fetchDashboardPayload']>, options?: { shellStatus?: OperatorShellStatusViewModel | null }) => string,
+  shellStatus: OperatorShellStatusViewModel | null,
 ): void {
   if (readModel === null) {
     respondHtml(res, 503, renderStatusPage({
@@ -341,19 +542,21 @@ function handleTopLevelDashboardPage(
       detail: dbError ?? 'Failed to open operator database.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to overview</a>',
+      shellStatus,
     }));
     return;
   }
 
   try {
     const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
-    respondHtml(res, 200, renderPage(payload));
+    respondHtml(res, 200, renderPage(payload, { shellStatus }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Operator Page Unavailable',
       detail: err instanceof Error ? err.message : 'Unknown error while assembling operator payload.',
       statusLabel: '503 Service Unavailable',
       actions: '<a href="/">Back to overview</a>',
+      shellStatus,
     }));
   }
 }
@@ -363,6 +566,7 @@ function handleDecisionDetail(
   url: URL,
   detailReadModel: OperatorDetailReadModel | null,
   dbError: string | null,
+  shellStatus: OperatorShellStatusViewModel | null,
 ): void {
   const parsed = parseRequiredInt(url, 'id', 'decision id');
   if (!parsed.ok) {
@@ -413,6 +617,7 @@ function handleStrategyDetail(
   url: URL,
   detailReadModel: OperatorDetailReadModel | null,
   dbError: string | null,
+  shellStatus: OperatorShellStatusViewModel | null,
 ): void {
   const strategyId = parseRequiredString(url, 'strategyId', 'strategyId');
   if (!strategyId.ok) {
@@ -474,6 +679,7 @@ function handleBacktestDetail(
   url: URL,
   detailReadModel: OperatorDetailReadModel | null,
   dbError: string | null,
+  shellStatus: OperatorShellStatusViewModel | null,
 ): void {
   const parsed = parseRequiredInt(url, 'runId', 'runId');
   if (!parsed.ok) {
@@ -782,5 +988,8 @@ function describeDetailError(operation: 'decision' | 'strategy' | 'backtest', er
 
 function respondHtml(res: http.ServerResponse, statusCode: number, body: string): void {
   res.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(body);
+}
+
   res.end(body);
 }

@@ -4,6 +4,10 @@
 // Zero external dependencies — uses Node built-ins only.
 
 import type { OperatorProvenance } from '../types/runtime.js';
+import {
+  renderOperatorStatusStrip,
+  type OperatorShellStatusViewModel,
+} from './components/status-strip.js';
 
 // ---------------------------------------------------------------------------
 // HTML escaping
@@ -400,6 +404,20 @@ const PAGE_STYLES = `
   .page-subtitle { color: #a6b7cc; max-width: 75rem; text-wrap: pretty; }
   .page-meta { margin-top: 0.55rem; color: var(--muted-2); font-size: 0.85rem; }
   .page-actions { margin-top: 0.9rem; display: flex; flex-wrap: wrap; gap: 0.85rem; font-size: 0.9rem; }
+  .console-status-strip { margin-bottom: 1rem; padding: 0.95rem 1rem; background: linear-gradient(180deg, rgba(19,32,51,0.98), rgba(11,20,34,0.98)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.9rem; box-shadow: 0 16px 40px rgba(0,0,0,0.18); }
+  .console-status-strip-header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 0.8rem; }
+  .console-status-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; font-weight: 700; }
+  .console-status-headline { margin-top: 0.2rem; color: #eef4fb; font-size: 0.98rem; font-weight: 650; }
+  .console-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 0.75rem; }
+  .console-status-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.75rem; padding: 0.75rem; min-width: 0; }
+  .console-status-label { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+  .console-status-summary { margin-top: 0.3rem; color: #f8fafc; font-size: 1rem; font-weight: 700; }
+  .console-status-detail { margin-top: 0.28rem; color: #c7d3e1; font-size: 0.8rem; }
+  .console-status-meta { margin-top: 0.42rem; color: #8fa4bc; font-size: 0.74rem; }
+  .console-status-healthy { border-color: rgba(52, 211, 153, 0.45); box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.14); }
+  .console-status-warning { border-color: rgba(251, 191, 36, 0.45); box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.14); }
+  .console-status-critical { border-color: rgba(248, 113, 113, 0.45); box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.14); }
+  .console-status-unavailable { border-color: rgba(148, 163, 184, 0.4); box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12); }
   .section { background: linear-gradient(180deg, rgba(19,32,51,0.96), rgba(15,27,45,0.97)); border: 1px solid var(--border); border-radius: 0.85rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14); }
   .section-subtitle { font-size: 0.75rem; color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: normal; }
   .section-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; color: #9eb0c7; font-size: 0.76rem; }
@@ -448,6 +466,7 @@ export function renderPageLayout(options: {
   actions?: string;
   body: string;
   navActive?: OperatorConsoleNavKey;
+  shellStatus?: OperatorShellStatusViewModel | null;
 }): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -468,6 +487,7 @@ export function renderPageLayout(options: {
         ${options.meta ? `<div class="page-meta">${options.meta}</div>` : ''}
         ${options.actions ? `<div class="page-actions">${options.actions}</div>` : ''}
       </div>
+      ${renderOperatorStatusStrip(options.shellStatus)}
       ${options.body}
     </main>
   </div>
@@ -480,12 +500,14 @@ export function renderStatusPage(options: {
   detail: string;
   statusLabel: string;
   actions?: string;
+  shellStatus?: OperatorShellStatusViewModel | null;
 }): string {
   return renderPageLayout({
     title: options.title,
     kicker: options.statusLabel,
     subtitle: options.detail,
     actions: options.actions,
+    shellStatus: options.shellStatus,
     body: renderSection('Route Status', `<p>${escapeHtml(options.detail)}</p>`),
   });
 }
