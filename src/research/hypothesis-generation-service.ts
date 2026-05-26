@@ -650,14 +650,15 @@ export class HypothesisGenerationService {
     providerModel: string;
     modelAttempts: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }>;
   }> {
-    const models = [
+    // ── Primary provider ──
+    const primaryModels = [
       this._config.providerModel ?? 'default',
       this._config.fallbackProviderModel,
       ...(this._config.fallbackProviderModels ?? []),
     ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 
     const modelAttempts: Array<{ model: string; status: 'succeeded' | 'failed'; detail: string }> = [];
-    for (const model of models) {
+    for (const model of primaryModels) {
       try {
         const text = await this._sendOpenAiRequestWithModel(payload, model);
         modelAttempts.push({ model, status: 'succeeded', detail: 'Provider request succeeded.' });
@@ -665,6 +666,31 @@ export class HypothesisGenerationService {
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         modelAttempts.push({ model, status: 'failed', detail: errorMessage });
+      }
+    }
+
+    // ── Fallback provider (cross-provider failover) ──
+    if (this._config.fallbackProviderUrl && this._config.fallbackProviderModel) {
+      try {
+        const text = await this._sendOpenAiRequestWithModel(
+          payload,
+          this._config.fallbackProviderModel,
+          this._config.fallbackProviderUrl,
+          this._config.fallbackApiKey,
+        );
+        modelAttempts.push({
+          model: this._config.fallbackProviderModel,
+          status: 'succeeded',
+          detail: 'Fallback provider request succeeded.',
+        });
+        return { text, providerModel: this._config.fallbackProviderModel, modelAttempts };
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        modelAttempts.push({
+          model: this._config.fallbackProviderModel,
+          status: 'failed',
+          detail: `Fallback provider error: ${errorMessage}`,
+        });
       }
     }
 
@@ -682,7 +708,12 @@ export class HypothesisGenerationService {
     throw error;
   }
 
-  private async _sendOpenAiRequestWithModel(payload: Record<string, unknown>, model: string): Promise<string> {
+  private async _sendOpenAiRequestWithModel(
+    payload: Record<string, unknown>,
+    model: string,
+    url?: string,
+    apiKey?: string,
+  ): Promise<string> {
     // Build an OpenAI-compatible chat completions payload
     const openAiPayload: Record<string, unknown> = {
       model,
@@ -706,11 +737,12 @@ export class HypothesisGenerationService {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
-      if (this._config.apiKey) {
-        headers['Authorization'] = `Bearer ${this._config.apiKey}`;
+      const effectiveKey = apiKey ?? this._config.apiKey;
+      if (effectiveKey) {
+        headers['Authorization'] = `Bearer ${effectiveKey}`;
       }
 
-      const response = await fetch(this._config.providerUrl, {
+      const response = await fetch(url ?? this._config.providerUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(openAiPayload),

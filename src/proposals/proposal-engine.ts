@@ -285,7 +285,11 @@ export class ProposalEngine {
    * POST a JSON payload to the configured provider URL.
    * Handles timeout via AbortController.
    */
-  private async _postJson(payload: Record<string, unknown>): Promise<Response> {
+  private async _postJson(
+    payload: Record<string, unknown>,
+    url?: string,
+    apiKey?: string,
+  ): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this._config.timeoutMs);
 
@@ -293,11 +297,12 @@ export class ProposalEngine {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
-      if (this._config.apiKey) {
-        headers['Authorization'] = `Bearer ${this._config.apiKey}`;
+      const effectiveKey = apiKey ?? this._config.apiKey;
+      if (effectiveKey) {
+        headers['Authorization'] = `Bearer ${effectiveKey}`;
       }
 
-      return await fetch(this._config.providerUrl, {
+      return await fetch(url ?? this._config.providerUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
@@ -309,27 +314,50 @@ export class ProposalEngine {
   }
 
   private async _sendOpenAiCompatiblePayload(payload: Record<string, unknown>): Promise<ProviderProposalResponse> {
-    const models = [
+    // ── Primary provider ──
+    const primaryModels = [
       this._config.providerModel,
       this._config.fallbackProviderModel,
       ...(this._config.fallbackProviderModels ?? []),
     ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 
-    if (models.length === 0) {
-      return this._parseOpenAiCompatibleResponseFromResponse(await this._postJson(payload));
-    }
-
-    const failures: string[] = [];
-    for (const model of models) {
+    const primaryFailures: string[] = [];
+    if (primaryModels.length === 0) {
       try {
-        const response = await this._postJson({ ...payload, model });
-        return await this._parseOpenAiCompatibleResponseFromResponse(response);
+        return await this._parseOpenAiCompatibleResponseFromResponse(await this._postJson(payload));
       } catch (err) {
-        failures.push(err instanceof Error ? `${model}: ${err.message}` : `${model}: ${String(err)}`);
+        primaryFailures.push(err instanceof Error ? err.message : String(err));
+      }
+    } else {
+      for (const model of primaryModels) {
+        try {
+          const response = await this._postJson({ ...payload, model });
+          return await this._parseOpenAiCompatibleResponseFromResponse(response);
+        } catch (err) {
+          primaryFailures.push(err instanceof Error ? `${model}: ${err.message}` : `${model}: ${String(err)}`);
+        }
       }
     }
 
-    throw new Error(`All configured OpenAI-compatible models failed. ${failures.join(' | ')}`);
+    // ── Fallback provider (cross-provider failover) ──
+    if (this._config.fallbackProviderUrl && this._config.fallbackProviderModel) {
+      try {
+        const response = await this._postJson(
+          { ...payload, model: this._config.fallbackProviderModel },
+          this._config.fallbackProviderUrl,
+          this._config.fallbackApiKey,
+        );
+        return await this._parseOpenAiCompatibleResponseFromResponse(response);
+      } catch (err) {
+        const fallbackError = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Primary provider failed (${primaryFailures.join(' | ')}). ` +
+          `Fallback provider ${this._config.fallbackProviderModel} also failed: ${fallbackError}`,
+        );
+      }
+    }
+
+    throw new Error(`All configured OpenAI-compatible models failed. ${primaryFailures.join(' | ')}`);
   }
 
   private async _parseDirectProviderResponse(response: Response): Promise<ProviderProposalResponse> {

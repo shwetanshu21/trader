@@ -360,8 +360,24 @@ function parseProposalEngineConfig(
     return null;
   }
 
-  // Optional: API key
+  // Optional: fallback provider URL (cross-provider failover)
+  const fallbackProviderUrl = env.TRADER_PROPOSAL_FALLBACK_PROVIDER_URL?.trim() || undefined;
+  if (fallbackProviderUrl) {
+    try {
+      new URL(fallbackProviderUrl);
+    } catch {
+      errors.push({
+        field: 'TRADER_PROPOSAL_FALLBACK_PROVIDER_URL',
+        message: `Invalid URL: "${fallbackProviderUrl}".`,
+        provided: fallbackProviderUrl,
+      });
+      return null;
+    }
+  }
+
+  // Optional: API keys
   const apiKey = env.TRADER_PROPOSAL_API_KEY?.trim() || undefined;
+  const fallbackApiKey = env.TRADER_PROPOSAL_FALLBACK_API_KEY?.trim() || undefined;
 
   // Optional: timeout (default 30s)
   const timeoutRaw = env.TRADER_PROPOSAL_TIMEOUT_MS ?? '30000';
@@ -393,6 +409,8 @@ function parseProposalEngineConfig(
     providerModel,
     fallbackProviderModel,
     fallbackProviderModels: fallbackProviderModels.length > 0 ? fallbackProviderModels : undefined,
+    fallbackProviderUrl,
+    fallbackApiKey,
     timeoutMs,
     maxProposalsPerTick,
     apiKey,
