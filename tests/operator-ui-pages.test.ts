@@ -417,6 +417,8 @@ describe('Dashboard page', () => {
     expect(html).toContain('id="dashboard-bootstrap"');
     expect(html).toContain('"pollIntervalMs":1500');
     expect(html).toContain('window.setTimeout(pollOnce, pollIntervalMs);');
+    expect(html).toContain(`replaceFragment('[data-shell-status-strip]', payload.shellStatusHtml);`);
+    expect(html).toContain('<div class="page-kicker">Overview</div>');
     expect(html).toContain('Recent hybrid LLM status in this bounded decision window');
     expect(html).toContain('LLM Status');
     expect(html).toContain('degraded 1');

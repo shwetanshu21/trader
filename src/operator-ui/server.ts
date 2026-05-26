@@ -14,7 +14,7 @@ import type { OperatorReadModel } from '../operator/operator-read-model.js';
 import { OperatorDetailReadModel, OperatorDetailReadModelError } from '../operator/operator-detail-read-model.js';
 import { DashboardPayloadAssembler, type DashboardPayload } from './dashboard-data.js';
 import { renderStatusPage } from './render-utils.js';
-import type { OperatorShellStatusViewModel, OperatorStatusItem, OperatorStatusTone } from './components/status-strip.js';
+import { renderOperatorStatusStrip, type OperatorShellStatusViewModel, type OperatorStatusItem, type OperatorStatusTone } from './components/status-strip.js';
 import { getBridgeAuthSummaryCard } from './bridge-auth-status.js';
 import { renderBacktestDetailPage } from './pages/backtest-detail-page.js';
 import { renderDashboardPage, renderDashboardSectionHtml, renderOverviewHero } from './pages/dashboard-page.js';
@@ -152,35 +152,35 @@ export function createOperatorUIServer(options: OperatorUIServerOptions): http.S
         case '/': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs, buildShellStatusForRequest());
+          handleDashboardHtml(res, dashboardPayloadAssembler, readModel, dbError, config.pollIntervalMs, buildShellStatusForPayload);
           return;
         }
 
         case '/positions': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, (payload, options) => renderPositionsPage(payload, readModel?.getStrategyExposure() ?? [], options), buildShellStatusForRequest());
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, (payload, options) => renderPositionsPage(payload, readModel?.getStrategyExposure() ?? [], options), buildShellStatusForPayload);
           return;
         }
 
         case '/strategies': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, (payload, pageOptions) => renderStrategiesPage(payload, readModel?.getStrategyExposure() ?? [], pageOptions), buildShellStatusForRequest());
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, (payload, pageOptions) => renderStrategiesPage(payload, readModel?.getStrategyExposure() ?? [], pageOptions), buildShellStatusForPayload);
           return;
         }
 
         case '/decisions': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderDecisionsPage, buildShellStatusForRequest());
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderDecisionsPage, buildShellStatusForPayload);
           return;
         }
 
         case '/governance': {
           const auth = verifyAuth(req, authenticator, res);
           if (!auth.ok) return;
-          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderGovernancePage, buildShellStatusForRequest());
+          handleTopLevelDashboardPage(res, dashboardPayloadAssembler, readModel, dbError, renderGovernancePage, buildShellStatusForPayload);
           return;
         }
 
@@ -502,8 +502,11 @@ function handleDashboardHtml(
   readModel: OperatorReadModel | null,
   dbError: string | null,
   pollIntervalMs: number,
-  shellStatus: OperatorShellStatusViewModel | null,
+  buildShellStatus: (payload: DashboardPayload) => OperatorShellStatusViewModel,
 ): void {
+  const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
+  const shellStatus = buildShellStatus(payload);
+
   if (readModel === null) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Database Unavailable',
@@ -516,7 +519,6 @@ function handleDashboardHtml(
   }
 
   try {
-    const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
     respondHtml(res, 200, renderDashboardPage(payload, { pollIntervalMs, shellStatus }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
@@ -535,8 +537,11 @@ function handleTopLevelDashboardPage(
   readModel: OperatorReadModel | null,
   dbError: string | null,
   renderPage: (payload: ReturnType<DashboardPayloadAssembler['fetchDashboardPayload']>, options?: { shellStatus?: OperatorShellStatusViewModel | null }) => string,
-  shellStatus: OperatorShellStatusViewModel | null,
+  buildShellStatus: (payload: DashboardPayload) => OperatorShellStatusViewModel,
 ): void {
+  const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
+  const shellStatus = buildShellStatus(payload);
+
   if (readModel === null) {
     respondHtml(res, 503, renderStatusPage({
       title: 'Database Unavailable',
@@ -549,7 +554,6 @@ function handleTopLevelDashboardPage(
   }
 
   try {
-    const payload = dashboardPayloadAssembler.fetchDashboardPayload(readModel, dbError);
     respondHtml(res, 200, renderPage(payload, { shellStatus }));
   } catch (err) {
     respondHtml(res, 503, renderStatusPage({
@@ -759,6 +763,7 @@ function handleApiRefresh(
       pollIntervalMs,
       error: payload.dbAvailable ? null : 'Database unavailable',
       shellStatus,
+      shellStatusHtml: renderOperatorStatusStrip(shellStatus),
       heroHtml: renderOverviewHero(payload),
       sections: {
         summaryCards: serializeDashboardSection(payload.summaryCards, sectionHtml.summaryCards),

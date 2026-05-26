@@ -35,11 +35,11 @@ import {
   decisionDetailHref,
   renderLink,
   strategyDetailHref,
-  renderOperatorConsoleNav,
+  renderPageLayout,
   renderSummaryGrid,
   renderResearchLineageBoundedEvidenceNote,
 } from '../render-utils.js';
-import { renderOperatorStatusStrip, type OperatorShellStatusViewModel } from '../components/status-strip.js';
+import type { OperatorShellStatusViewModel } from '../components/status-strip.js';
 
 const DASHBOARD_SECTION_ORDER = [
   'summaryCards',
@@ -79,6 +79,195 @@ function defaultOvernightResearchSection(): DashboardSection<OperatorOvernightSu
 export interface DashboardPageOptions {
   pollIntervalMs?: number;
   shellStatus?: OperatorShellStatusViewModel | null;
+}
+
+const DASHBOARD_PAGE_STYLES = `
+  .page-refresh-banner { display: none; align-items: center; gap: 0.6rem; padding: 0.75rem 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border: 1px solid #475569; background: #1e293b; color: #cbd5e1; }
+  .page-refresh-banner[data-visible="true"] { display: flex; }
+  .page-refresh-banner[data-kind="warn"] { border-color: #78350f; background: #713f1222; color: #fcd34d; }
+  .page-refresh-banner[data-kind="error"] { border-color: #7f1d1d; background: #7f1d1d22; color: #fecaca; }
+  .page-refresh-banner[data-kind="ok"] { border-color: #14532d; background: #14532d22; color: #86efac; }
+  .hero-shell { margin-bottom: 1rem; padding: 1rem 1.1rem; background: linear-gradient(180deg, rgba(19,32,51,0.98), rgba(11,20,34,0.98)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.9rem; box-shadow: 0 18px 48px rgba(0,0,0,0.18); }
+  .hero-command-strip { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.85rem; }
+  .hero-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em; }
+  .hero-chip-ok { background: rgba(20, 83, 45, 0.92); color: #b6f5d3; }
+  .hero-chip-warn { background: rgba(120, 53, 15, 0.92); color: #fde68a; }
+  .hero-chip-err { background: rgba(127, 29, 29, 0.92); color: #fecaca; }
+  .hero-chip-neutral { background: rgba(23, 38, 59, 0.96); color: #d3deeb; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 1rem; }
+  .hero-eyebrow { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.7rem; font-weight: 700; margin-bottom: 0.3rem; }
+  .hero-copy { color: #a8b8ca; max-width: 52rem; margin-top: 0.2rem; }
+  .hero-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin-top: 0.9rem; }
+  .hero-metric-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.7rem; padding: 0.8rem; }
+  .hero-metric-label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+  .hero-metric-value { margin-top: 0.35rem; font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .hero-metric-meta { margin-top: 0.35rem; }
+  .hero-metric-footnote { margin-top: 0.4rem; color: #8da3bd; font-size: 0.74rem; }
+  .hero-secondary { background: rgba(8,17,31,0.42); border: 1px solid rgba(54, 80, 109, 0.45); border-radius: 0.75rem; padding: 0.9rem; }
+  .hero-secondary-title { font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #d5deea; }
+  .hero-exception-list { margin-top: 0.75rem; padding-left: 1rem; color: #d6dfeb; }
+  .hero-secondary-actions { margin-top: 0.85rem; display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.84rem; }
+  .section-note { margin-bottom: 0.7rem; color: #9eb0c7; font-size: 0.8rem; }
+  .summary-toolbar { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-bottom: 0.8rem; }
+  .summary-toolbar a { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.28rem 0.6rem; border-radius: 999px; border: 1px solid rgba(54, 80, 109, 0.6); background: rgba(10, 20, 36, 0.45); color: #dce7f4; font-size: 0.76rem; text-decoration: none; }
+  .summary-toolbar a:hover { background: rgba(23, 38, 59, 0.9); }
+  .stack-grid { display: grid; gap: 1rem; }
+  @media (max-width: 1080px) {
+    .hero-grid { grid-template-columns: 1fr; }
+  }
+`;
+
+function buildDashboardRefreshScript(): string {
+  return `<script>
+(() => {
+  const bootstrapNode = document.getElementById('dashboard-bootstrap');
+  const refreshBanner = document.getElementById('dashboard-refresh-banner');
+  const dashboardMeta = document.getElementById('dashboard-meta');
+
+  function setBanner(kind, message) {
+    if (!refreshBanner) return;
+    if (!message) {
+      refreshBanner.textContent = '';
+      refreshBanner.setAttribute('data-visible', 'false');
+      refreshBanner.setAttribute('data-kind', kind || 'warn');
+      return;
+    }
+    refreshBanner.textContent = message;
+    refreshBanner.setAttribute('data-visible', 'true');
+    refreshBanner.setAttribute('data-kind', kind || 'warn');
+  }
+
+  function formatTimestamp(iso) {
+    if (!iso || typeof iso !== 'string') return '—';
+    return iso.replace('T', ' ').replace(/\.\d{3}Z$/, '').replace(/\.\d{3}\+.*$/, '').slice(0, 19);
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderHeaderMeta(payload) {
+    if (!dashboardMeta) return;
+    const dbStatus = payload && payload.dbAvailable
+      ? 'Connected'
+      : '<span style="color:#ef4444;">Disconnected</span>';
+    const dbError = payload && payload.dbError
+      ? '&mdash; <span style="color:#ef4444;">' + escapeHtml(payload.dbError) + '</span>'
+      : '';
+    dashboardMeta.innerHTML = 'Assembled: ' + formatTimestamp(payload && payload.assembledAt) + ' &mdash; DB: ' + dbStatus + ' ' + dbError;
+  }
+
+  function replaceFragment(selector, nextHtml) {
+    if (typeof nextHtml !== 'string' || nextHtml.trim().length === 0) return false;
+    const current = document.querySelector(selector);
+    if (!current) return false;
+    const template = document.createElement('template');
+    template.innerHTML = nextHtml.trim();
+    const next = template.content.firstElementChild;
+    if (!next) return false;
+    current.replaceWith(next);
+    return true;
+  }
+
+  function replaceSection(sectionKey, nextHtml) {
+    return replaceFragment('[data-dashboard-section="' + sectionKey + '"]', nextHtml);
+  }
+
+  function applyRefreshPayload(payload) {
+    if (!payload || typeof payload !== 'object' || !payload.sections || typeof payload.sections !== 'object') {
+      setBanner('warn', 'Live refresh degraded: malformed refresh payload. Keeping the last known dashboard view.');
+      return;
+    }
+
+    let malformedSection = false;
+    for (const [sectionKey, sectionPayload] of Object.entries(payload.sections)) {
+      if (!sectionPayload || typeof sectionPayload !== 'object' || typeof sectionPayload.html !== 'string') {
+        malformedSection = true;
+        continue;
+      }
+      replaceSection(sectionKey, sectionPayload.html);
+    }
+
+    replaceFragment('[data-dashboard-hero]', payload.heroHtml);
+    replaceFragment('[data-shell-status-strip]', payload.shellStatusHtml);
+    renderHeaderMeta(payload);
+
+    if (malformedSection) {
+      setBanner('warn', 'Live refresh skipped one or more malformed section updates. Existing dashboard content was preserved.');
+      return;
+    }
+
+    if (payload.dbAvailable === false) {
+      setBanner('warn', 'Live refresh reports the operator database as unavailable. Existing dashboard content remains visible.');
+      return;
+    }
+
+    setBanner('', '');
+  }
+
+  let bootstrap;
+  try {
+    bootstrap = JSON.parse(bootstrapNode && bootstrapNode.textContent ? bootstrapNode.textContent : '{}');
+  } catch (_error) {
+    setBanner('warn', 'Live refresh bootstrap could not be parsed. The dashboard will remain static until reload.');
+    return;
+  }
+
+  const pollIntervalMs = Number(bootstrap.pollIntervalMs);
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1000) {
+    setBanner('warn', 'Live refresh is disabled because the poll interval is invalid.');
+    return;
+  }
+
+  const refreshUrl = typeof bootstrap.refreshUrl === 'string' ? bootstrap.refreshUrl : '/api/refresh';
+  const timeoutMs = Math.max(1000, Math.min(10000, Math.floor(pollIntervalMs * 0.9)));
+  let stopped = false;
+
+  async function pollOnce() {
+    if (stopped) return;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
+    try {
+      const response = await fetch(refreshUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: controller ? controller.signal : undefined,
+      });
+      const rawBody = await response.text();
+      let payload;
+      try {
+        payload = JSON.parse(rawBody);
+      } catch (_error) {
+        setBanner('warn', 'Live refresh returned malformed JSON. Keeping the last known dashboard view.');
+        return;
+      }
+      applyRefreshPayload(payload);
+    } catch (error) {
+      const message = error && typeof error === 'object' && 'name' in error && error.name === 'AbortError'
+        ? 'Live refresh timed out. Keeping the last known dashboard view until the next poll.'
+        : 'Live refresh failed. Keeping the last known dashboard view until the next poll.';
+      setBanner('warn', message);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (!stopped) {
+        window.setTimeout(pollOnce, pollIntervalMs);
+      }
+    }
+  }
+
+  window.setTimeout(pollOnce, pollIntervalMs);
+  window.addEventListener('beforeunload', () => {
+    stopped = true;
+  }, { once: true });
+})();
+</script>`;
 }
 
 function findSummaryCard(cards: OperatorSummaryCard[], key: string): OperatorSummaryCard | null {
@@ -180,324 +369,27 @@ export function renderDashboardPage(
   const bootstrapJson = buildDashboardBootstrapJson(payload, pollIntervalMs);
   const overviewHero = renderOverviewHero(payload);
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Operator Console</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    color-scheme: dark;
-    --bg: #08111f;
-    --bg-elevated: #0f1b2d;
-    --bg-panel: #132033;
-    --border: #24364d;
-    --text: #e6edf6;
-    --muted: #8ba0ba;
-    --ok: #34d399;
-    --warn: #fbbf24;
-    --err: #f87171;
-    --info: #60a5fa;
-  }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: radial-gradient(circle at top left, #10223b 0%, var(--bg) 42%), var(--bg);
-    color: var(--text);
-    padding: 1.25rem;
-    line-height: 1.5;
-    -webkit-font-smoothing: antialiased;
-  }
-  a { color: #8cc0ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  h1 { font-size: 1.55rem; font-weight: 700; margin-bottom: 0.25rem; letter-spacing: -0.02em; }
-  h2 { font-size: 1rem; font-weight: 650; margin-bottom: 0.5rem; color: #d5deea; }
-  .console-shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; align-items: start; }
-  .console-sidebar { position: sticky; top: 1.25rem; background: linear-gradient(180deg, rgba(19,32,51,0.94), rgba(12,20,34,0.98)); border: 1px solid var(--border); border-radius: 0.9rem; padding: 1rem; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22); }
-  .console-brand { padding-bottom: 0.9rem; margin-bottom: 0.9rem; border-bottom: 1px solid rgba(54,80,109,0.35); }
-  .console-brand-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; font-weight: 700; }
-  .console-brand-title { margin-top: 0.2rem; font-size: 1rem; font-weight: 700; color: #f8fbff; }
-  .console-brand-subtitle { margin-top: 0.25rem; color: var(--muted); font-size: 0.82rem; }
-  .console-nav { display: grid; gap: 0.45rem; }
-  .console-nav-link { display: block; padding: 0.7rem 0.8rem; border-radius: 0.75rem; border: 1px solid transparent; background: rgba(10, 20, 36, 0.28); transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease; }
-  .console-nav-link:hover { text-decoration: none; background: rgba(23, 38, 59, 0.9); border-color: rgba(54, 80, 109, 0.7); transform: translateY(-1px); }
-  .console-nav-link[data-active="true"] { background: rgba(24, 42, 65, 0.96); border-color: rgba(96, 165, 250, 0.55); box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.18); }
-  .console-nav-label { display: block; color: #eef4fb; font-weight: 600; font-size: 0.9rem; }
-  .console-nav-description { display: block; margin-top: 0.18rem; color: var(--muted); font-size: 0.76rem; line-height: 1.35; }
-  .console-main { min-width: 0; }
-  .page-header { margin-bottom: 1.2rem; padding: 1rem 1.1rem; background: linear-gradient(180deg, rgba(19,32,51,0.96), rgba(14,25,41,0.96)); border: 1px solid var(--border); border-radius: 0.9rem; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18); }
-  .page-meta { margin-top: 0.55rem; color: #8ba0ba; font-size: 0.85rem; }
-  .page-subtitle { color: #a6b7cc; max-width: 75rem; }
-  .section { background: linear-gradient(180deg, rgba(19,32,51,0.96), rgba(15,27,45,0.97)); border: 1px solid var(--border); border-radius: 0.85rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14); }
-  .section h2 { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-  .section-subtitle { font-size: 0.75rem; color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: normal; }
-  .section-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.75rem; color: #9eb0c7; font-size: 0.76rem; }
-  .section-state-pill { display: inline-flex; align-items: center; padding: 0.12rem 0.5rem; border-radius: 999px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.66rem; }
-  .section-state-ok { background: rgba(20, 83, 45, 0.9); color: #9cf4c7; }
-  .section-state-stale { background: rgba(120, 53, 15, 0.92); color: #fde68a; }
-  .section-state-error { background: rgba(127, 29, 29, 0.92); color: #fecaca; }
-  .section-state-unavailable { background: #334155; color: #d8e3ef; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
-  th { text-align: left; padding: 0.5rem 0.5rem; background: transparent; color: #9eb0c7; font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  td { padding: 0.45rem 0.5rem; border-bottom: 1px solid rgba(36, 54, 77, 0.65); vertical-align: top; }
-  td:first-child { white-space: nowrap; }
-  .empty-state { text-align: center; color: var(--muted); font-style: italic; padding: 1.5rem 0; }
-  .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
-  .summary-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.7rem; padding: 0.8rem; }
-  .summary-card .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
-  .summary-card .value { font-size: 1.18rem; font-weight: 700; margin-top: 0.25rem; color: #f1f5f9; font-variant-numeric: tabular-nums; }
-  .summary-card .provenance { margin-top: 0.25rem; }
-  .status-ok { color: var(--ok); font-weight: 650; }
-  .status-warn { color: var(--warn); font-weight: 650; }
-  .status-err { color: var(--err); font-weight: 650; }
-  .status-skip { color: #64748b; }
-  .status-default { color: #94a3b8; }
-  .page-refresh-banner { display: none; align-items: center; gap: 0.6rem; padding: 0.75rem 1rem; border-radius: 0.5rem; margin-bottom: 1rem; border: 1px solid #475569; background: #1e293b; color: #cbd5e1; }
-  .page-refresh-banner[data-visible="true"] { display: flex; }
-  .page-refresh-banner[data-kind="warn"] { border-color: #78350f; background: #713f1222; color: #fcd34d; }
-  .page-refresh-banner[data-kind="error"] { border-color: #7f1d1d; background: #7f1d1d22; color: #fecaca; }
-  .page-refresh-banner[data-kind="ok"] { border-color: #14532d; background: #14532d22; color: #86efac; }
-  .section-error-banner { display: flex; align-items: center; gap: 0.5rem; background: rgba(127, 29, 29, 0.16); border: 1px solid rgba(248, 113, 113, 0.45); border-radius: 0.55rem; padding: 0.55rem 0.75rem; margin-bottom: 0.75rem; }
-  .section-error-icon { color: var(--err); font-size: 1rem; }
-  .section-error-text { color: #fecaca; font-size: 0.8125rem; }
-  .section-stale-banner { display: flex; align-items: center; gap: 0.5rem; background: rgba(113, 63, 18, 0.18); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 0.55rem; padding: 0.55rem 0.75rem; margin-bottom: 0.75rem; }
-  .section-stale-icon { color: var(--warn); font-size: 1rem; }
-  .section-stale-text { color: #fde68a; font-size: 0.8125rem; }
-  .section-unavailable-banner { display: flex; align-items: center; gap: 0.5rem; background: rgba(17, 24, 39, 0.45); border: 1px solid #475569; border-radius: 0.55rem; padding: 0.55rem 0.75rem; margin-bottom: 0.75rem; }
-  .section-unavailable-icon { color: #cbd5e1; font-size: 1rem; }
-  .section-unavailable-text { color: #dbe4ee; font-size: 0.8125rem; }
-  .provenance { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
-  code { background: #0a1424; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.75rem; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  th.num { text-align: right; }
-  .hero-shell { margin-bottom: 1rem; padding: 1rem 1.1rem; background: linear-gradient(180deg, rgba(19,32,51,0.98), rgba(11,20,34,0.98)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.9rem; box-shadow: 0 18px 48px rgba(0,0,0,0.18); }
-  .hero-command-strip { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.85rem; }
-  .hero-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.2rem 0.6rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em; }
-  .hero-chip-ok { background: rgba(20, 83, 45, 0.92); color: #b6f5d3; }
-  .hero-chip-warn { background: rgba(120, 53, 15, 0.92); color: #fde68a; }
-  .hero-chip-err { background: rgba(127, 29, 29, 0.92); color: #fecaca; }
-  .hero-chip-neutral { background: rgba(23, 38, 59, 0.96); color: #d3deeb; }
-  .hero-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 1rem; }
-  .hero-eyebrow { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.7rem; font-weight: 700; margin-bottom: 0.3rem; }
-  .hero-copy { color: #a8b8ca; max-width: 52rem; margin-top: 0.2rem; }
-  .hero-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin-top: 0.9rem; }
-  .hero-metric-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.7rem; padding: 0.8rem; }
-  .hero-metric-label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
-  .hero-metric-value { margin-top: 0.35rem; font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .hero-metric-meta { margin-top: 0.35rem; }
-  .hero-metric-footnote { margin-top: 0.4rem; color: #8da3bd; font-size: 0.74rem; }
-  .hero-secondary { background: rgba(8,17,31,0.42); border: 1px solid rgba(54, 80, 109, 0.45); border-radius: 0.75rem; padding: 0.9rem; }
-  .hero-secondary-title { font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #d5deea; }
-  .hero-exception-list { margin-top: 0.75rem; padding-left: 1rem; color: #d6dfeb; }
-  .hero-secondary-actions { margin-top: 0.85rem; display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.84rem; }
-  .section-note { margin-bottom: 0.7rem; color: #9eb0c7; font-size: 0.8rem; }
-  .summary-toolbar { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-bottom: 0.8rem; }
-  .summary-toolbar a { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.28rem 0.6rem; border-radius: 999px; border: 1px solid rgba(54, 80, 109, 0.6); background: rgba(10, 20, 36, 0.45); color: #dce7f4; font-size: 0.76rem; text-decoration: none; }
-  .summary-toolbar a:hover { background: rgba(23, 38, 59, 0.9); }
-  .stack-grid { display: grid; gap: 1rem; }
-  .page-actions { margin-top: 0.9rem; display: flex; gap: 0.85rem; flex-wrap: wrap; font-size: 0.9rem; }
-  .console-status-strip { margin-bottom: 1rem; padding: 0.95rem 1rem; background: linear-gradient(180deg, rgba(19,32,51,0.98), rgba(11,20,34,0.98)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.9rem; box-shadow: 0 16px 40px rgba(0,0,0,0.18); }
-  .console-status-strip-header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 0.8rem; }
-  .console-status-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.68rem; font-weight: 700; }
-  .console-status-headline { margin-top: 0.2rem; color: #eef4fb; font-size: 0.98rem; font-weight: 650; }
-  .console-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 0.75rem; }
-  .console-status-card { background: linear-gradient(180deg, rgba(8,17,31,0.92), rgba(11,22,37,0.95)); border: 1px solid rgba(54, 80, 109, 0.65); border-radius: 0.75rem; padding: 0.75rem; min-width: 0; }
-  .console-status-label { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
-  .console-status-summary { margin-top: 0.3rem; color: #f8fafc; font-size: 1rem; font-weight: 700; }
-  .console-status-detail { margin-top: 0.28rem; color: #c7d3e1; font-size: 0.8rem; }
-  .console-status-meta { margin-top: 0.42rem; color: #8fa4bc; font-size: 0.74rem; }
-  .console-status-healthy { border-color: rgba(52, 211, 153, 0.45); box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.14); }
-  .console-status-warning { border-color: rgba(251, 191, 36, 0.45); box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.14); }
-  .console-status-critical { border-color: rgba(248, 113, 113, 0.45); box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.14); }
-  .console-status-unavailable { border-color: rgba(148, 163, 184, 0.4); box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12); }
-  @media (max-width: 1080px) {
-    .console-shell { grid-template-columns: 1fr; }
-    .console-sidebar { position: static; }
-    .hero-grid { grid-template-columns: 1fr; }
-  }
-</style>
-</head>
-<body>
-<div class="console-shell">
-  ${renderOperatorConsoleNav('overview')}
-  <main class="console-main">
-    <div class="page-header">
-      <div class="hero-eyebrow">Overview</div>
-      <h1>Operator Console</h1>
-      <p class="page-subtitle">Authenticated operator surface for persisted trading evidence, execution outcomes, lifecycle governance, and walk-forward backing data.</p>
-      <div class="page-meta" id="dashboard-meta" data-dashboard-meta>
-        Assembled: ${escapeHtml(formatTimestamp(payload.assembledAt))} &mdash;
+  return renderPageLayout({
+    title: 'Operator Console',
+    kicker: 'Overview',
+    subtitle: 'Authenticated operator surface for persisted trading evidence, execution outcomes, lifecycle governance, and walk-forward backing data.',
+    meta: `Assembled: ${escapeHtml(formatTimestamp(payload.assembledAt))} &mdash;
         DB: ${payload.dbAvailable ? 'Connected' : `<span style="color:#ef4444;">Disconnected</span>`}
-        ${payload.dbError ? `&mdash; <span style="color:#ef4444;">${escapeHtml(payload.dbError)}</span>` : ''}
-      </div>
-      <div class="page-actions">
-        <a href="/api/health">System Health</a>
-        <a href="#dashboard-section-decisionPerformance">Recent Decisions</a>
-        <a href="#dashboard-section-governanceHistory">Governance</a>
-      </div>
-    </div>
-
-    <div class="page-refresh-banner" id="dashboard-refresh-banner" data-visible="false" data-kind="warn" role="status" aria-live="polite"></div>
-
-    ${renderOperatorStatusStrip(options.shellStatus)}
-
-    ${overviewHero}
-
-    <div id="dashboard-root" class="stack-grid" data-poll-interval-ms="${escapeHtml(String(pollIntervalMs))}">
-    ${sections}
-    </div>
-
-    <script type="application/json" id="dashboard-bootstrap">${bootstrapJson}</script>
-    <script>
-(() => {
-  const bootstrapNode = document.getElementById('dashboard-bootstrap');
-  const refreshBanner = document.getElementById('dashboard-refresh-banner');
-  const dashboardMeta = document.getElementById('dashboard-meta');
-  const overviewHero = document.getElementById('dashboard-hero');
-
-  function setBanner(kind, message) {
-    if (!refreshBanner) return;
-    if (!message) {
-      refreshBanner.textContent = '';
-      refreshBanner.setAttribute('data-visible', 'false');
-      refreshBanner.setAttribute('data-kind', kind || 'warn');
-      return;
-    }
-    refreshBanner.textContent = message;
-    refreshBanner.setAttribute('data-visible', 'true');
-    refreshBanner.setAttribute('data-kind', kind || 'warn');
-  }
-
-  function formatTimestamp(iso) {
-    if (!iso || typeof iso !== 'string') return '—';
-    return iso.replace('T', ' ').replace(/\\.\\d{3}Z$/, '').replace(/\\.\\d{3}\\+.*$/, '').slice(0, 19);
-  }
-
-  function renderHeaderMeta(payload) {
-    if (!dashboardMeta) return;
-    const dbStatus = payload && payload.dbAvailable
-      ? 'Connected'
-      : '<span style="color:#ef4444;">Disconnected</span>';
-    const dbError = payload && payload.dbError
-      ? '&mdash; <span style="color:#ef4444;">' + String(payload.dbError).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') + '</span>'
-      : '';
-    dashboardMeta.innerHTML = 'Assembled: ' + formatTimestamp(payload && payload.assembledAt) + ' &mdash; DB: ' + dbStatus + ' ' + dbError;
-  }
-
-  function replaceSection(sectionKey, nextHtml) {
-    if (typeof nextHtml !== 'string' || nextHtml.trim().length === 0) {
-      return false;
-    }
-    const current = document.querySelector('[data-dashboard-section="' + sectionKey + '"]');
-    if (!current) {
-      return false;
-    }
-    const template = document.createElement('template');
-    template.innerHTML = nextHtml.trim();
-    const next = template.content.firstElementChild;
-    if (!next) {
-      return false;
-    }
-    current.replaceWith(next);
-    return true;
-  }
-
-  function applyRefreshPayload(payload) {
-    if (!payload || typeof payload !== 'object' || !payload.sections || typeof payload.sections !== 'object') {
-      setBanner('warn', 'Live refresh degraded: malformed refresh payload. Keeping the last known dashboard view.');
-      return;
-    }
-
-    let malformedSection = false;
-    for (const [sectionKey, sectionPayload] of Object.entries(payload.sections)) {
-      if (!sectionPayload || typeof sectionPayload !== 'object' || typeof sectionPayload.html !== 'string') {
-        malformedSection = true;
-        continue;
-      }
-      replaceSection(sectionKey, sectionPayload.html);
-    }
-
-    if (overviewHero && typeof payload.heroHtml === 'string') {
-      overviewHero.outerHTML = payload.heroHtml.trim();
-    }
-    renderHeaderMeta(payload);
-
-    if (malformedSection) {
-      setBanner('warn', 'Live refresh skipped one or more malformed section updates. Existing dashboard content was preserved.');
-      return;
-    }
-
-    if (payload.dbAvailable === false) {
-      setBanner('warn', 'Live refresh reports the operator database as unavailable. Existing dashboard content remains visible.');
-      return;
-    }
-
-    setBanner('', '');
-  }
-
-  let bootstrap;
-  try {
-    bootstrap = JSON.parse(bootstrapNode && bootstrapNode.textContent ? bootstrapNode.textContent : '{}');
-  } catch (_error) {
-    setBanner('warn', 'Live refresh bootstrap could not be parsed. The dashboard will remain static until reload.');
-    return;
-  }
-
-  const pollIntervalMs = Number(bootstrap.pollIntervalMs);
-  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 1000) {
-    setBanner('warn', 'Live refresh is disabled because the poll interval is invalid.');
-    return;
-  }
-
-  const refreshUrl = typeof bootstrap.refreshUrl === 'string' ? bootstrap.refreshUrl : '/api/refresh';
-  const timeoutMs = Math.max(1000, Math.min(10000, Math.floor(pollIntervalMs * 0.9)));
-  let stopped = false;
-
-  async function pollOnce() {
-    if (stopped) return;
-    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-
-    try {
-      const response = await fetch(refreshUrl, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        cache: 'no-store',
-        signal: controller ? controller.signal : undefined,
-      });
-      const rawBody = await response.text();
-      let payload;
-      try {
-        payload = JSON.parse(rawBody);
-      } catch (_error) {
-        setBanner('warn', 'Live refresh returned malformed JSON. Keeping the last known dashboard view.');
-        return;
-      }
-      applyRefreshPayload(payload);
-    } catch (error) {
-      const message = error && typeof error === 'object' && 'name' in error && error.name === 'AbortError'
-        ? 'Live refresh timed out. Keeping the last known dashboard view until the next poll.'
-        : 'Live refresh failed. Keeping the last known dashboard view until the next poll.';
-      setBanner('warn', message);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-      if (!stopped) {
-        window.setTimeout(pollOnce, pollIntervalMs);
-      }
-    }
-  }
-
-  window.setTimeout(pollOnce, pollIntervalMs);
-  window.addEventListener('beforeunload', () => {
-    stopped = true;
-  }, { once: true });
-})();
-</script>
-  </main>
-</div>
-</body>
-</html>`;
+        ${payload.dbError ? `&mdash; <span style="color:#ef4444;">${escapeHtml(payload.dbError)}</span>` : ''}`,
+    actions: '<a href="/api/health">System Health</a><a href="#dashboard-section-decisionPerformance">Recent Decisions</a><a href="#dashboard-section-governanceHistory">Governance</a>',
+    navActive: 'overview',
+    shellStatus: options.shellStatus ?? null,
+    extraStyles: DASHBOARD_PAGE_STYLES,
+    body: [
+      '<div class="page-refresh-banner" id="dashboard-refresh-banner" data-visible="false" data-kind="warn" role="status" aria-live="polite"></div>',
+      overviewHero,
+      `<div id="dashboard-root" class="stack-grid" data-poll-interval-ms="${escapeHtml(String(pollIntervalMs))}">
+${sections}
+</div>`,
+      `<script type="application/json" id="dashboard-bootstrap">${bootstrapJson}</script>`,
+    ].join('\n'),
+    bodySuffix: buildDashboardRefreshScript(),
+  });
 }
 
 export function renderDashboardSectionHtml(payload: DashboardPayload): DashboardSectionHtmlMap {

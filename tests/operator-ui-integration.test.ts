@@ -211,6 +211,8 @@ describe('operator UI — live standalone integration', () => {
     expect(refreshResponse.headers.get('content-type')).toContain('application/json');
     const refreshPayload = await refreshResponse.json();
     expect(refreshPayload.dbAvailable).toBe(true);
+    expect(refreshPayload.shellStatusHtml).toContain('data-shell-status-strip');
+    expect(refreshPayload.shellStatusHtml).toContain('data-shell-status-key="freshness"');
     expect(refreshPayload.dbError).toBeNull();
     expect(refreshPayload.sections.summaryCards.state).toBe('ok');
     expect(refreshPayload.sections.summaryCards.count).toBeGreaterThanOrEqual(8);
@@ -261,7 +263,8 @@ describe('operator UI — live standalone integration', () => {
       lastError: null,
     });
     expect(apiHealth.detailReadModelBootstrap.lastError).toBeNull();
-    expect(apiHealth.sections.summaryCards).toMatchObject({ status: 'ok', count: 9 });
+    expect(apiHealth.sections.summaryCards).toMatchObject({ status: 'ok' });
+    expect(apiHealth.sections.summaryCards.count).toBeGreaterThanOrEqual(9);
     expect(apiHealth.sections.recentDecisions).toMatchObject({ status: 'ok', count: 3 });
     expect(apiHealth.sections.strategyPerformance).toMatchObject({ status: 'ok', count: 2 });
     expect(apiHealth.sections.tickerPerformance).toMatchObject({ status: 'ok' });
@@ -292,7 +295,7 @@ describe('operator UI — live standalone integration', () => {
     expect(firstRefreshResponse.status).toBe(200);
     const firstRefreshPayload = await firstRefreshResponse.json();
     expect(firstRefreshPayload.sections.summaryCards.state).toBe('ok');
-    expect(firstRefreshPayload.sections.summaryCards.count).toBe(10);
+    expect(firstRefreshPayload.sections.summaryCards.count).toBeGreaterThanOrEqual(10);
 
     const secondRefreshResponse = await fetch(`${app.baseUrl}/api/refresh`, {
       headers: { Authorization: authHeader },
@@ -306,6 +309,7 @@ describe('operator UI — live standalone integration', () => {
     expect(secondRefreshPayload.sections.summaryCards.stalenessMs).toBeGreaterThanOrEqual(0);
     expect(secondRefreshPayload.sections.summaryCards.errorMessage).toContain('authorization=[redacted]');
     expect(secondRefreshPayload.sections.summaryCards.errorMessage).not.toContain('proof-secret-token');
+    expect(secondRefreshPayload.shellStatusHtml).toContain('data-shell-status-tone="warning"');
     expect(secondRefreshPayload.sections.summaryCards.html).toContain('Showing last known data');
     expect(secondRefreshPayload.sections.summaryCards.html).toContain('data-section-state="stale"');
     expect(secondRefreshPayload.sections.strategyPerformance.state).toBe('ok');

@@ -467,6 +467,8 @@ export function renderPageLayout(options: {
   body: string;
   navActive?: OperatorConsoleNavKey;
   shellStatus?: OperatorShellStatusViewModel | null;
+  extraStyles?: string;
+  bodySuffix?: string;
 }): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -474,7 +476,7 @@ export function renderPageLayout(options: {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escapeHtml(options.title)}</title>
-<style>${PAGE_STYLES}</style>
+<style>${PAGE_STYLES}${options.extraStyles ?? ''}</style>
 </head>
 <body>
   <div class="console-shell">
@@ -489,6 +491,7 @@ export function renderPageLayout(options: {
       </div>
       ${renderOperatorStatusStrip(options.shellStatus)}
       ${options.body}
+      ${options.bodySuffix ?? ''}
     </main>
   </div>
 </body>

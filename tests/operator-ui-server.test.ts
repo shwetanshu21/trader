@@ -461,6 +461,8 @@ describe('operator-ui server refresh API', () => {
     expect(secondPayload.sections.summaryCards.html).toContain('data-section-state="stale"');
     expect(secondPayload.sections.strategyPerformance.state).toBe('ok');
     expect(secondPayload.shellStatus.headline).toContain('Operator');
+    expect(secondPayload.shellStatusHtml).toContain('data-shell-status-strip');
+    expect(secondPayload.shellStatusHtml).toContain('data-shell-status-key="freshness"');
     expect(secondPayload.shellStatus.items).toHaveLength(5);
     expect(secondPayload.shellStatus.items.map((item: { key: string }) => item.key)).toEqual(['market', 'execution', 'broker', 'risk', 'freshness']);
     expect(secondPayload.shellStatus.items.find((item: { key: string }) => item.key === 'market')).toMatchObject({ tone: 'unavailable', summary: 'Unavailable' });
@@ -495,6 +497,8 @@ describe('operator-ui server refresh API', () => {
       isCachedData: false,
     });
     expect(payload.sections.summaryCards.html).toContain('data-section-state="unavailable"');
+    expect(payload.shellStatusHtml).toContain('data-shell-status-strip');
+    expect(payload.shellStatusHtml).toContain('data-shell-status-tone="unavailable"');
     expect(payload.shellStatus.items.find((item: { key: string }) => item.key === 'freshness')).toMatchObject({ tone: 'unavailable', summary: 'Unavailable' });
     expect(payload.shellStatus.items.find((item: { key: string }) => item.key === 'broker')).toBeTruthy();
   });
