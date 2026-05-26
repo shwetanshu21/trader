@@ -512,6 +512,8 @@ function handleDashboardHtml(
       title: 'Database Unavailable',
       detail: dbError ?? 'Failed to open operator database.',
       statusLabel: '503 Service Unavailable',
+      kicker: 'Operator Console',
+      navActive: 'overview',
       actions: '<a href="/">Back to dashboard</a>',
       shellStatus,
     }));
@@ -525,6 +527,8 @@ function handleDashboardHtml(
       title: 'Dashboard Render Failed',
       detail: err instanceof Error ? err.message : 'Unknown error while assembling dashboard payload.',
       statusLabel: '503 Service Unavailable',
+      kicker: 'Operator Console',
+      navActive: 'overview',
       actions: '<a href="/">Retry dashboard</a>',
       shellStatus,
     }));
@@ -547,6 +551,8 @@ function handleTopLevelDashboardPage(
       title: 'Database Unavailable',
       detail: dbError ?? 'Failed to open operator database.',
       statusLabel: '503 Service Unavailable',
+      kicker: 'Operator Console',
+      navActive: 'overview',
       actions: '<a href="/">Back to overview</a>',
       shellStatus,
     }));
@@ -560,6 +566,8 @@ function handleTopLevelDashboardPage(
       title: 'Operator Page Unavailable',
       detail: err instanceof Error ? err.message : 'Unknown error while assembling operator payload.',
       statusLabel: '503 Service Unavailable',
+      kicker: 'Operator Console',
+      navActive: 'overview',
       actions: '<a href="/">Back to overview</a>',
       shellStatus,
     }));
@@ -579,7 +587,9 @@ function handleDecisionDetail(
       title: 'Malformed Decision Request',
       detail: parsed.message,
       statusLabel: '400 Bad Request',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Decision Detail',
+      navActive: 'decisions',
+      actions: '<a href="/decisions">Back to decision ledger</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
     return;
@@ -590,7 +600,9 @@ function handleDecisionDetail(
       title: 'Decision Detail Unavailable',
       detail: dbError ?? 'Operator database is unavailable, so persisted decision detail cannot be loaded.',
       statusLabel: '503 Service Unavailable',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Decision Detail',
+      navActive: 'decisions',
+      actions: '<a href="/decisions">Back to decision ledger</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
     return;
@@ -603,7 +615,9 @@ function handleDecisionDetail(
         title: 'Decision Not Found',
         detail: `No persisted decision detail exists for id=${parsed.value}.`,
         statusLabel: '404 Not Found',
-        actions: '<a href="/">Back to dashboard</a>',
+        kicker: 'Operator Decision Detail',
+        navActive: 'decisions',
+        actions: '<a href="/decisions">Back to decision ledger</a><a href="/">Back to dashboard</a>',
         shellStatus,
       }));
       return;
@@ -615,7 +629,9 @@ function handleDecisionDetail(
       title: 'Decision Detail Unavailable',
       detail: describeDetailError('decision', err),
       statusLabel: '503 Service Unavailable',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Decision Detail',
+      navActive: 'decisions',
+      actions: '<a href="/decisions">Back to decision ledger</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
   }
@@ -634,7 +650,9 @@ function handleStrategyDetail(
       title: 'Malformed Strategy Request',
       detail: strategyId.message,
       statusLabel: '400 Bad Request',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Strategy Detail',
+      navActive: 'strategies',
+      actions: '<a href="/strategies">Back to strategies</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
     return;
@@ -646,7 +664,9 @@ function handleStrategyDetail(
       title: 'Malformed Strategy Request',
       detail: strategyVersion.message,
       statusLabel: '400 Bad Request',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Strategy Detail',
+      navActive: 'strategies',
+      actions: '<a href="/strategies">Back to strategies</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
     return;
@@ -657,7 +677,9 @@ function handleStrategyDetail(
       title: 'Strategy Detail Unavailable',
       detail: dbError ?? 'Operator database is unavailable, so persisted strategy detail cannot be loaded.',
       statusLabel: '503 Service Unavailable',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Strategy Detail',
+      navActive: 'strategies',
+      actions: '<a href="/strategies">Back to strategies</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
     return;
@@ -670,7 +692,9 @@ function handleStrategyDetail(
         title: 'Strategy Not Found',
         detail: `No persisted strategy detail exists for ${strategyId.value}@${strategyVersion.value}.`,
         statusLabel: '404 Not Found',
-        actions: '<a href="/">Back to dashboard</a>',
+        kicker: 'Operator Strategy Detail',
+        navActive: 'strategies',
+        actions: '<a href="/strategies">Back to strategies</a><a href="/">Back to dashboard</a>',
         shellStatus,
       }));
       return;
@@ -682,7 +706,9 @@ function handleStrategyDetail(
       title: 'Strategy Detail Unavailable',
       detail: describeDetailError('strategy', err),
       statusLabel: '503 Service Unavailable',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Strategy Detail',
+      navActive: 'strategies',
+      actions: '<a href="/strategies">Back to strategies</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
   }
@@ -701,7 +727,9 @@ function handleBacktestDetail(
       title: 'Malformed Backtest Request',
       detail: parsed.message,
       statusLabel: '400 Bad Request',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Backtest Detail',
+      navActive: 'governance',
+      actions: '<a href="/governance">Back to governance</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
     return;
@@ -712,7 +740,9 @@ function handleBacktestDetail(
       title: 'Backtest Detail Unavailable',
       detail: dbError ?? 'Operator database is unavailable, so persisted backtest detail cannot be loaded.',
       statusLabel: '503 Service Unavailable',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Backtest Detail',
+      navActive: 'governance',
+      actions: '<a href="/governance">Back to governance</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
     return;
@@ -725,7 +755,9 @@ function handleBacktestDetail(
         title: 'Backtest Run Not Found',
         detail: `No persisted backtest run detail exists for runId=${parsed.value}.`,
         statusLabel: '404 Not Found',
-        actions: '<a href="/">Back to dashboard</a>',
+        kicker: 'Operator Backtest Detail',
+        navActive: 'governance',
+        actions: '<a href="/governance">Back to governance</a><a href="/">Back to dashboard</a>',
         shellStatus,
       }));
       return;
@@ -737,7 +769,9 @@ function handleBacktestDetail(
       title: 'Backtest Detail Unavailable',
       detail: describeDetailError('backtest', err),
       statusLabel: '503 Service Unavailable',
-      actions: '<a href="/">Back to dashboard</a>',
+      kicker: 'Operator Backtest Detail',
+      navActive: 'governance',
+      actions: '<a href="/governance">Back to governance</a><a href="/">Back to dashboard</a>',
       shellStatus,
     }));
   }
@@ -964,6 +998,8 @@ async function handleUpstoxTokenRefreshHtml(
       title: 'Upstox Token Refresh',
       detail: result.status.message ?? 'Upstox token refresh request processed.',
       statusLabel: `${statusCode}`,
+      kicker: 'Operator System Health',
+      navActive: 'system-health',
       actions: '<a href="/system-health">Back to system health</a><a href="/api/health">Raw JSON</a>',
       shellStatus,
     }));
@@ -972,6 +1008,8 @@ async function handleUpstoxTokenRefreshHtml(
       title: 'Upstox Token Refresh Failed',
       detail: err instanceof Error ? err.message : String(err),
       statusLabel: '503 Service Unavailable',
+      kicker: 'Operator System Health',
+      navActive: 'system-health',
       actions: '<a href="/system-health">Back to system health</a>',
       shellStatus,
     }));

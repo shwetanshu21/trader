@@ -15,6 +15,20 @@ type StartedProcess = StartedOperatorUIProcess;
 const tempDirs: string[] = [];
 const startedProcesses: StartedProcess[] = [];
 
+function expectSharedShellHtml(html: string, activeHref?: string): void {
+  expect(html).toContain('class="console-shell"');
+  expect(html).toContain('data-shell-status-strip');
+  expect(html).toContain('data-shell-status-key="market"');
+  expect(html).toContain('data-shell-status-key="execution"');
+  expect(html).toContain('data-shell-status-key="broker"');
+  expect(html).toContain('data-shell-status-key="risk"');
+  expect(html).toContain('data-shell-status-key="freshness"');
+  expect(html).toContain('Operator Console Navigation');
+  if (activeHref) {
+    expect(html).toContain(`href="${activeHref}" data-active="true" aria-current="page"`);
+  }
+}
+
 function makeTempDir(): string {
   const dir = makeOperatorUiTempDir('operator-ui-e2e-');
   tempDirs.push(dir);
@@ -49,7 +63,7 @@ describe('operator UI — live standalone integration', () => {
     const dbPath = path.join(tmpDir, 'operator-ui.db');
     seedOperatorUiDatabase(dbPath);
 
-    const app = await startTrackedOperatorUiProcess({ dbPath });
+    const app = await startTrackedOperatorUiProcess({ dbPath, rateLimitMax: 50 });
     const authHeader = basicAuthHeader(app.username, app.password);
 
     const livenessResponse = await fetch(`${app.baseUrl}/health`);
@@ -83,6 +97,7 @@ describe('operator UI — live standalone integration', () => {
     const html = await htmlResponse.text();
     expect(htmlResponse.status).toBe(200);
     expect(htmlResponse.headers.get('content-type')).toContain('text/html');
+    expectSharedShellHtml(html, '/');
     expect(html).toContain('Operator Console');
     expect(html).toContain('Summary');
     expect(html).toContain('Strategy Performance');
@@ -101,11 +116,28 @@ describe('operator UI — live standalone integration', () => {
     expect(html).toContain('/api/refresh');
     expect(html).toContain('/api/health');
 
+    for (const [route, activeHref, expectedCopy] of [
+      ['/positions', '/positions', 'Positions &amp; Exposure'],
+      ['/strategies', '/strategies', 'Strategies'],
+      ['/decisions', '/decisions', 'Decision Ledger'],
+      ['/governance', '/governance', 'Governance &amp; Backtests'],
+      ['/system-health', '/system-health', 'System Health'],
+    ] as const) {
+      const response = await fetch(`${app.baseUrl}${route}`, {
+        headers: { Authorization: authHeader },
+      });
+      const routeHtml = await response.text();
+      expect(response.status).toBe(200);
+      expectSharedShellHtml(routeHtml, activeHref);
+      expect(routeHtml).toContain(expectedCopy);
+    }
+
     const decisionResponse = await fetch(`${app.baseUrl}/decision?id=1`, {
       headers: { Authorization: authHeader },
     });
     const decisionHtml = await decisionResponse.text();
     expect(decisionResponse.status).toBe(200);
+    expectSharedShellHtml(decisionHtml, '/decisions');
     expect(decisionHtml).toContain('Operator Decision Detail');
     expect(decisionHtml).toContain('trend_alignment');
     expect(decisionHtml).toContain('risk_budget_ok');
@@ -122,6 +154,7 @@ describe('operator UI — live standalone integration', () => {
     });
     const noReasonDecisionHtml = await noReasonDecisionResponse.text();
     expect(noReasonDecisionResponse.status).toBe(200);
+    expectSharedShellHtml(noReasonDecisionHtml, '/decisions');
     expect(noReasonDecisionHtml).toContain('No decision reasons were persisted for this decision.');
 
     const strategyResponse = await fetch(`${app.baseUrl}/strategy?strategyId=strat-a&strategyVersion=1.0.0`, {
@@ -129,6 +162,7 @@ describe('operator UI — live standalone integration', () => {
     });
     const strategyHtml = await strategyResponse.text();
     expect(strategyResponse.status).toBe(200);
+    expectSharedShellHtml(strategyHtml, '/strategies');
     expect(strategyHtml).toContain('Operator Strategy Detail');
     expect(strategyHtml).toContain('Strategy A passed walk-forward thresholds');
     expect(strategyHtml).toContain('Evidence JSON');
@@ -143,6 +177,7 @@ describe('operator UI — live standalone integration', () => {
     });
     const noWinnerStrategyHtml = await noWinnerStrategyResponse.text();
     expect(noWinnerStrategyResponse.status).toBe(200);
+    expectSharedShellHtml(noWinnerStrategyHtml, '/strategies');
     expect(noWinnerStrategyHtml).toContain('Insufficient out-of-sample performance');
     expect(noWinnerStrategyHtml).toContain('No trial met the minimum merged-score threshold for promotion.');
 
@@ -151,6 +186,7 @@ describe('operator UI — live standalone integration', () => {
     });
     const backtestHtml = await backtestResponse.text();
     expect(backtestResponse.status).toBe(200);
+    expectSharedShellHtml(backtestHtml, '/governance');
     expect(backtestHtml).toContain('Operator Backtest Detail');
     expect(backtestHtml).toContain('Trial-A has the best risk-adjusted out-of-sample result and cleared promotion gates.');
     expect(backtestHtml).toContain('Trial #1');
@@ -164,6 +200,7 @@ describe('operator UI — live standalone integration', () => {
     });
     const noWinnerBacktestHtml = await noWinnerBacktestResponse.text();
     expect(noWinnerBacktestResponse.status).toBe(200);
+    expectSharedShellHtml(noWinnerBacktestHtml, '/governance');
     expect(noWinnerBacktestHtml).toContain('No winner selected for this run.');
     expect(noWinnerBacktestHtml).toContain('No selected trial evidence was persisted because this run has no winner context.');
     expect(noWinnerBacktestHtml).toContain('Trial-C');
@@ -172,37 +209,49 @@ describe('operator UI — live standalone integration', () => {
       headers: { Authorization: authHeader },
     });
     expect(malformedDecisionResponse.status).toBe(400);
-    expect(await malformedDecisionResponse.text()).toContain('Invalid decision id. Expected a positive integer.');
+    const malformedDecisionHtml = await malformedDecisionResponse.text();
+    expectSharedShellHtml(malformedDecisionHtml, '/decisions');
+    expect(malformedDecisionHtml).toContain('Invalid decision id. Expected a positive integer.');
 
     const malformedStrategyResponse = await fetch(`${app.baseUrl}/strategy?strategyId=strat-a&strategyVersion=%20%20`, {
       headers: { Authorization: authHeader },
     });
     expect(malformedStrategyResponse.status).toBe(400);
-    expect(await malformedStrategyResponse.text()).toContain('Invalid strategyVersion. Expected a non-empty string.');
+    const malformedStrategyHtml = await malformedStrategyResponse.text();
+    expectSharedShellHtml(malformedStrategyHtml, '/strategies');
+    expect(malformedStrategyHtml).toContain('Invalid strategyVersion. Expected a non-empty string.');
 
     const malformedBacktestResponse = await fetch(`${app.baseUrl}/backtest?runId=not-a-number`, {
       headers: { Authorization: authHeader },
     });
     expect(malformedBacktestResponse.status).toBe(400);
-    expect(await malformedBacktestResponse.text()).toContain('Invalid runId. Expected a positive integer.');
+    const malformedBacktestHtml = await malformedBacktestResponse.text();
+    expectSharedShellHtml(malformedBacktestHtml, '/governance');
+    expect(malformedBacktestHtml).toContain('Invalid runId. Expected a positive integer.');
 
     const missingDecisionResponse = await fetch(`${app.baseUrl}/decision?id=9999`, {
       headers: { Authorization: authHeader },
     });
     expect(missingDecisionResponse.status).toBe(404);
-    expect(await missingDecisionResponse.text()).toContain('No persisted decision detail exists for id=9999.');
+    const missingDecisionHtml = await missingDecisionResponse.text();
+    expectSharedShellHtml(missingDecisionHtml, '/decisions');
+    expect(missingDecisionHtml).toContain('No persisted decision detail exists for id=9999.');
 
     const missingStrategyResponse = await fetch(`${app.baseUrl}/strategy?strategyId=missing&strategyVersion=9.9.9`, {
       headers: { Authorization: authHeader },
     });
     expect(missingStrategyResponse.status).toBe(404);
-    expect(await missingStrategyResponse.text()).toContain('No persisted strategy detail exists for missing@9.9.9.');
+    const missingStrategyHtml = await missingStrategyResponse.text();
+    expectSharedShellHtml(missingStrategyHtml, '/strategies');
+    expect(missingStrategyHtml).toContain('No persisted strategy detail exists for missing@9.9.9.');
 
     const missingBacktestResponse = await fetch(`${app.baseUrl}/backtest?runId=9999`, {
       headers: { Authorization: authHeader },
     });
     expect(missingBacktestResponse.status).toBe(404);
-    expect(await missingBacktestResponse.text()).toContain('No persisted backtest run detail exists for runId=9999.');
+    const missingBacktestHtml = await missingBacktestResponse.text();
+    expectSharedShellHtml(missingBacktestHtml, '/governance');
+    expect(missingBacktestHtml).toContain('No persisted backtest run detail exists for runId=9999.');
 
     const refreshResponse = await fetch(`${app.baseUrl}/api/refresh`, {
       headers: { Authorization: authHeader },
@@ -353,18 +402,19 @@ describe('operator UI — live standalone integration', () => {
       error: 'Database unavailable',
     });
 
-    for (const route of [
-      '/decision?id=1',
-      '/strategy?strategyId=strat-a&strategyVersion=1.0.0',
-      '/backtest?runId=1',
-    ]) {
+    for (const [route, activeHref, expectedAction] of [
+      ['/decision?id=1', '/decisions', 'Back to decision ledger'],
+      ['/strategy?strategyId=strat-a&strategyVersion=1.0.0', '/strategies', 'Back to strategies'],
+      ['/backtest?runId=1', '/governance', 'Back to governance'],
+    ] as const) {
       const response = await fetch(`${app.baseUrl}${route}`, {
         headers: { Authorization: authHeader },
       });
       const body = await response.text();
       expect(response.status).toBe(503);
+      expectSharedShellHtml(body, activeHref);
       expect(body).toContain('Unavailable');
-      expect(body).toContain('Back to dashboard');
+      expect(body).toContain(expectedAction);
     }
 
     const apiHealthResponse = await fetch(`${app.baseUrl}/api/health`, {

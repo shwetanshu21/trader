@@ -8,6 +8,7 @@ import { renderStrategiesPage } from '../src/operator-ui/pages/strategies-page.j
 import { renderDecisionsPage } from '../src/operator-ui/pages/decisions-page.js';
 import { renderGovernancePage } from '../src/operator-ui/pages/governance-page.js';
 import { renderSystemHealthPage } from '../src/operator-ui/pages/system-health-page.js';
+import { renderStatusPage } from '../src/operator-ui/render-utils.js';
 import type { DashboardPayload, DashboardSection } from '../src/operator-ui/dashboard-data.js';
 import type { OperatorShellStatusViewModel } from '../src/operator-ui/components/status-strip.js';
 import type {
@@ -45,6 +46,20 @@ function sampleShellStatus(): OperatorShellStatusViewModel {
       { key: 'freshness', label: 'Freshness', tone: 'warning', summary: '1 stale section(s)', detail: 'Showing last-known cached data for one or more sections.', evidence: 'dashboard section refresh metadata', asOf: '2025-01-11T09:59:15.000Z' },
     ],
   };
+}
+
+function expectSharedShell(html: string, activeHref?: string): void {
+  expect(html).toContain('class="console-shell"');
+  expect(html).toContain('data-shell-status-strip');
+  expect(html).toContain('data-shell-status-key="market"');
+  expect(html).toContain('data-shell-status-key="execution"');
+  expect(html).toContain('data-shell-status-key="broker"');
+  expect(html).toContain('data-shell-status-key="risk"');
+  expect(html).toContain('data-shell-status-key="freshness"');
+  expect(html).toContain('Operator Console Navigation');
+  if (activeHref) {
+    expect(html).toContain(`href="${activeHref}" data-active="true" aria-current="page"`);
+  }
 }
 
 function ok<T>(data: T): DashboardSection<T> {
@@ -331,23 +346,61 @@ function sampleBacktestDetail(): OperatorBacktestDetail {
 }
 
 describe('Shared shell status contract', () => {
-  it('renders the shared shell-status strip across dashboard, list, and detail pages', () => {
+  it('renders the shared shell-status strip across dashboard, list, detail, and status pages', () => {
     const shellStatus = sampleShellStatus();
     const payload = buildPayload();
 
     const dashboardHtml = renderDashboardPage(payload, { pollIntervalMs: 1_500, shellStatus });
-    expect(dashboardHtml).toContain('data-shell-status-strip');
-    expect(dashboardHtml).toContain('data-shell-status-key="market"');
+    expectSharedShell(dashboardHtml, '/');
     expect(dashboardHtml).toContain('data-shell-status-tone="critical"');
     expect(dashboardHtml).toContain('Refresh failed');
 
     const positionsHtml = renderPositionsPage(payload, sampleStrategyExposure(), { shellStatus });
-    expect(positionsHtml).toContain('data-shell-status-strip');
-    expect(positionsHtml).toContain('data-shell-status-key="freshness"');
+    expectSharedShell(positionsHtml, '/positions');
+
+    const strategiesHtml = renderStrategiesPage(payload, sampleStrategyExposure(), { shellStatus });
+    expectSharedShell(strategiesHtml, '/strategies');
+
+    const decisionsHtml = renderDecisionsPage(payload, { shellStatus });
+    expectSharedShell(decisionsHtml, '/decisions');
+
+    const governanceHtml = renderGovernancePage(payload, { shellStatus });
+    expectSharedShell(governanceHtml, '/governance');
+
+    const systemHealthHtml = renderSystemHealthPage({
+      status: 'healthy',
+      version: '0.1.0',
+      service: 'operator-ui',
+      dbConnected: true,
+      dbError: null,
+      pollIntervalMs: 1000,
+      authClients: [],
+      dbOpenBootstrap: { status: 'ready', lastError: null },
+      detailReadModelBootstrap: { status: 'ready', lastError: null },
+      upstoxTokenRefresh: { refresh: { state: 'awaiting_approval' } },
+      sections: { summaryCards: { status: 'ok', count: 3 } },
+    }, { shellStatus });
+    expectSharedShell(systemHealthHtml, '/system-health');
 
     const decisionHtml = renderDecisionDetailPage(sampleDecisionDetail(), { shellStatus });
-    expect(decisionHtml).toContain('data-shell-status-strip');
-    expect(decisionHtml).toContain('data-shell-status-key="risk"');
+    expectSharedShell(decisionHtml, '/decisions');
+
+    const strategyHtml = renderStrategyDetailPage(sampleStrategyDetail(), { shellStatus });
+    expectSharedShell(strategyHtml, '/strategies');
+
+    const backtestHtml = renderBacktestDetailPage(sampleBacktestDetail(), { shellStatus });
+    expectSharedShell(backtestHtml, '/governance');
+
+    const statusHtml = renderStatusPage({
+      title: 'Decision Not Found',
+      detail: 'No persisted decision detail exists for id=9999.',
+      statusLabel: '404 Not Found',
+      kicker: 'Operator Decision Detail',
+      navActive: 'decisions',
+      actions: '<a href="/decisions">Back to decision ledger</a>',
+      shellStatus,
+    });
+    expectSharedShell(statusHtml, '/decisions');
   });
 });
 

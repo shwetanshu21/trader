@@ -503,13 +503,16 @@ export function renderStatusPage(options: {
   detail: string;
   statusLabel: string;
   actions?: string;
+  kicker?: string;
+  navActive?: OperatorConsoleNavKey;
   shellStatus?: OperatorShellStatusViewModel | null;
 }): string {
   return renderPageLayout({
     title: options.title,
-    kicker: options.statusLabel,
+    kicker: options.kicker ?? options.statusLabel,
     subtitle: options.detail,
     actions: options.actions,
+    navActive: options.navActive,
     shellStatus: options.shellStatus,
     body: renderSection('Route Status', `<p>${escapeHtml(options.detail)}</p>`),
   });
