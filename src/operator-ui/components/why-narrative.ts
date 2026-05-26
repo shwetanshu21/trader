@@ -1,113 +1,129 @@
-// ── Why Narrative Card (Explanation Component) ──
-// Plain-English explanation for a trade, block, promotion, or selection.
-// Source evidence must exist; otherwise show MissingEvidenceCallout.
+import type {
+  OperatorDecisionDetail,
+  OperatorDecisionReasonDetail,
+  OperatorExecutionAttemptDetail,
+} from '../../types/runtime.js';
+import {
+  renderExplainabilityEvidenceChecklist,
+  renderExplainabilityStack,
+  renderExplainabilityWhat,
+  renderExplainabilityWhyNarrative,
+  type ExplainabilityEvidenceItem,
+} from './explainability.js';
 
-import type { TradeDecisionExplanation } from '../types/contracts.js';
+export interface WhyNarrativeInput {
+  decisionId: OperatorDecisionDetail['decisionId'];
+  decisionStatus: OperatorDecisionDetail['decisionStatus'];
+  strategyId: OperatorDecisionDetail['strategyId'];
+  strategyVersion: OperatorDecisionDetail['strategyVersion'];
+  trade: Pick<OperatorDecisionDetail['trade'], 'exchange' | 'tradingsymbol' | 'side'>;
+  reasons: OperatorDecisionReasonDetail[];
+  executionAttempt: Pick<OperatorExecutionAttemptDetail, 'executionMode' | 'status' | 'outcomeCode' | 'refusalReasons'> | null;
+}
 
-/**
- * Render a WhyNarrativeCard component.
- * Shows the plain English reason, reason bullets, evidence pills, and source links.
- */
-export function renderWhyNarrativeCard(
-  explanation: TradeDecisionExplanation | null,
-): string {
-  if (!explanation) {
-    return `<div class="oc-card">
-      <div class="oc-card-header">
-        <h3 class="oc-card-title">Why Narrative</h3>
-      </div>
-      <div class="oc-card-body">
-        <p class="empty-state">No explanation available.</p>
-      </div>
-    </div>`;
+function buildNarrativeSummary(explanation: WhyNarrativeInput): string | null {
+  if (explanation.reasons.length > 0) {
+    return explanation.reasons[0]?.reasonMessage ?? null;
   }
 
-  const {
-    decisionId,
-    symbol,
-    side,
-    strategyId,
-    strategyVersion,
-    executionMode,
-    primaryReason,
-    riskResult,
-    executionResult,
-    validatorResult,
-    orderId,
-    fillId,
-    fillPrice,
-    realizedPnl,
-    unrealizedPnl,
-  } = explanation;
+  if (explanation.executionAttempt?.outcomeCode) {
+    return `Decision ${explanation.decisionStatus} with downstream outcome ${explanation.executionAttempt.outcomeCode}.`;
+  }
 
-  // Build title based on execution context
-  const titlePrefix = executionMode === 'blocked'
-    ? 'Why this order was blocked'
-    : executionMode === 'paper'
-    ? 'Paper execution reason'
-    : 'Why this decision happened';
+  return null;
+}
 
-  const title = `${titlePrefix} for ${escapeHtml(symbol)} ${side}`;
+function buildEvidenceItems(explanation: WhyNarrativeInput): ExplainabilityEvidenceItem[] {
+  const items: ExplainabilityEvidenceItem[] = [
+    {
+      label: 'Decision status',
+      verdict: explanation.decisionStatus === 'approved' ? 'pass' : 'warn',
+      observedValue: explanation.decisionStatus,
+      expectedValue: 'approved or refused',
+      note: 'Persisted decision state from the operator detail read model.',
+    },
+  ];
 
-  // Build summary sentence
-  let summary: string;
-  if (!primaryReason) {
-    summary = 'Evidence not captured yet. Add the reason field to the read model before showing this narrative.';
+  if (explanation.executionAttempt) {
+    items.push(
+      {
+        label: 'Execution mode',
+        verdict: explanation.executionAttempt.executionMode === 'blocked' ? 'warn' : 'pass',
+        observedValue: explanation.executionAttempt.executionMode,
+        expectedValue: 'blocked, paper, or live',
+        note: 'Recorded on the linked execution attempt.',
+      },
+      {
+        label: 'Execution status',
+        verdict: explanation.executionAttempt.status === 'failed'
+          ? 'fail'
+          : explanation.executionAttempt.status === 'refused'
+            ? 'warn'
+            : 'pass',
+        observedValue: explanation.executionAttempt.status,
+        expectedValue: 'pending, completed, refused, or failed',
+        note: explanation.executionAttempt.outcomeCode
+          ? `Outcome ${explanation.executionAttempt.outcomeCode}.`
+          : 'No outcome code persisted.',
+      },
+      {
+        label: 'Refusal reasons',
+        verdict: explanation.executionAttempt.refusalReasons.length > 0 ? 'warn' : 'missing',
+        observedValue: explanation.executionAttempt.refusalReasons.length,
+        expectedValue: '0 or more persisted refusal reasons',
+        note: explanation.executionAttempt.refusalReasons.length > 0
+          ? explanation.executionAttempt.refusalReasons.map(reason => `${reason.reasonCode}: ${reason.reasonMessage}`).join(' | ')
+          : 'No refusal reasons were recorded for this execution attempt.',
+      },
+    );
   } else {
-    summary = primaryReason;
+    items.push({
+      label: 'Execution evidence',
+      verdict: 'missing',
+      observedValue: 'unconsumed',
+      expectedValue: 'linked execution attempt',
+      note: 'No execution attempt has been recorded for this decision yet.',
+    });
   }
 
-  // Build reason bullets from primaryReason if available
-  let reasonBullets: string[] = [];
-  if (primaryReason) {
-    reasonBullets = [escapeHtml(primaryReason)];
+  return items;
+}
+
+export function renderWhyNarrativeCard(explanation: WhyNarrativeInput | null): string {
+  if (!explanation) {
+    return renderExplainabilityWhyNarrative({
+      title: 'Why Narrative',
+      summary: null,
+      emptyMessage: 'No explainability narrative is available for this decision.',
+    });
   }
 
-  // Build evidence pills
-  const evidencePills: string[] = [];
-  if (executionResult === 'sent') evidencePills.push('Live order sent');
-  if (executionResult === 'paper_filled') evidencePills.push('Paper fill recorded');
-  if (executionResult === 'blocked') evidencePills.push('Order blocked');
-  if (executionResult === 'failed') evidencePills.push('Execution failed');
+  const summary = buildNarrativeSummary(explanation);
+  const bullets = explanation.reasons.map(reason => `${reason.reasonCode}: ${reason.reasonMessage}`);
+  const evidenceItems = buildEvidenceItems(explanation);
 
-  if (riskResult === 'allowed') evidencePills.push('Risk allowed');
-  if (riskResult === 'blocked') evidencePills.push('Risk blocked');
-  if (riskResult === 'warn') evidencePills.push('Risk warned');
-  if (validatorResult === 'pass') evidencePills.push('Validator passed');
-  if (validatorResult === 'fail') evidencePills.push('Validator failed');
-
-  // Build source links
-  const sourceLinks: string[] = [];
-  if (decisionId) sourceLinks.push(`/decision?id=${decisionId}`);
-  if (orderId) sourceLinks.push(`Order: ${orderId}`);
-  if (fillId) sourceLinks.push(`Fill: ${fillId}`);
-
-  const pillHtml = evidencePills.length > 0
-    ? `<div class="oc-evidence-list">
-        ${evidencePills.map(pill => `<li class="oc-evidence-item">
-          <span class="oc-evidence-label">Evidence:</span>
-          <span>${escapeHtml(pill)}</span>
-        </li>`).join('')}
-      </div>`
-    : '';
-
-  const linksHtml = sourceLinks.length > 0
-    ? `<div class="oc-source-links">
-        ${sourceLinks.map(link => `<a href="${escapeHtml(link)}" class="oc-link">Source</a>`).join('')}
-      </div>`
-    : '';
-
-  return `<div class="oc-card">
-    <div class="oc-card-header">
-      <h3 class="oc-card-title">${title}</h3>
-    </div>
-    <div class="oc-card-body">
-      <p class="oc-reason">${summary}</p>
-      ${reasonBullets.length > 0 ? `<ul class="oc-reason-bullets">
-        ${reasonBullets.map(bullet => `<li>${escapeHtml(bullet)}</li>`).join('')}
-      </ul>` : ''}
-      ${pillHtml}
-      ${linksHtml}
-    </div>
-  </div>`;
+  return renderExplainabilityStack([
+    renderExplainabilityWhat([
+      { label: 'Decision', value: `#${explanation.decisionId}` },
+      { label: 'Instrument', value: `${explanation.trade.exchange}:${explanation.trade.tradingsymbol}` },
+      { label: 'Side', value: explanation.trade.side },
+      { label: 'Strategy', value: `${explanation.strategyId}@${explanation.strategyVersion}` },
+      {
+        label: 'Execution',
+        value: explanation.executionAttempt?.status ?? 'unconsumed',
+        meta: explanation.executionAttempt?.outcomeCode ?? null,
+      },
+    ], 'No decision summary evidence was persisted.'),
+    renderExplainabilityWhyNarrative({
+      title: 'Why Narrative',
+      summary,
+      bullets,
+      emptyMessage: 'No decision reasons were persisted for this decision.',
+    }),
+    renderExplainabilityEvidenceChecklist({
+      title: 'Evidence',
+      items: evidenceItems,
+      emptyMessage: 'No explainability evidence was persisted for this decision.',
+    }),
+  ]);
 }

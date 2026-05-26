@@ -8,6 +8,8 @@ import { renderStrategiesPage } from '../src/operator-ui/pages/strategies-page.j
 import { renderDecisionsPage } from '../src/operator-ui/pages/decisions-page.js';
 import { renderGovernancePage } from '../src/operator-ui/pages/governance-page.js';
 import { renderSystemHealthPage } from '../src/operator-ui/pages/system-health-page.js';
+import { renderEvidenceChecklist } from '../src/operator-ui/components/evidence-checklist.js';
+import { renderWhyNarrativeCard } from '../src/operator-ui/components/why-narrative.js';
 import { renderStatusPage } from '../src/operator-ui/render-utils.js';
 import type { DashboardPayload, DashboardSection } from '../src/operator-ui/dashboard-data.js';
 import type { OperatorShellStatusViewModel } from '../src/operator-ui/components/status-strip.js';
@@ -344,6 +346,72 @@ function sampleBacktestDetail(): OperatorBacktestDetail {
     diagnostics: [], provenance: testProvenance,
   };
 }
+
+describe('Shared explainability components', () => {
+  it('render bounded empty evidence states with truthful recent-window wording', () => {
+    const html = renderEvidenceChecklist({
+      title: 'Recent evidence window',
+      criteria: [],
+      emptyMessage: 'No recent <script> lineage evidence was persisted.',
+      boundedWindow: { count: 0, noun: 'lineage row' },
+    });
+
+    expect(html).toContain('Recent evidence below is intentionally bounded to the newest 0 lineage rows for operator readability.');
+    expect(html).toContain('No recent &lt;script&gt; lineage evidence was persisted.');
+  });
+
+  it('render escaped why narratives with explicit missing execution evidence states', () => {
+    const html = renderWhyNarrativeCard({
+      decisionId: 7,
+      decisionStatus: 'approved',
+      strategyId: 'alpha<script>',
+      strategyVersion: '1.0.0',
+      trade: {
+        exchange: 'NSE',
+        tradingsymbol: 'RELIANCE<script>',
+        side: 'buy',
+      },
+      reasons: [
+        {
+          reasonCode: 'policy_constraint',
+          reasonMessage: 'Trend <strong>passed</strong>.',
+        },
+      ],
+      executionAttempt: null,
+    });
+
+    expect(html).toContain('Trend &lt;strong&gt;passed&lt;/strong&gt;.');
+    expect(html).toContain('alpha&lt;script&gt;@1.0.0');
+    expect(html).toContain('RELIANCE&lt;script&gt;');
+    expect(html).toContain('No execution attempt has been recorded for this decision yet.');
+    expect(html).not.toContain('Trend <strong>passed</strong>.');
+  });
+
+  it('render escaped checklist criteria details without leaking unsafe HTML', () => {
+    const html = renderEvidenceChecklist({
+      criteria: [
+        {
+          name: 'Research freshness <img>',
+          result: 'warn',
+          observedValue: '<60m',
+          threshold: '≤15m',
+          note: 'Latest summary came from <script>alert(1)</script>.',
+          source: {
+            label: 'Decision <b>detail</b>',
+            href: '/decision?id=7&source=<script>',
+          },
+        },
+      ],
+    });
+
+    expect(html).toContain('Research freshness &lt;img&gt;');
+    expect(html).toContain('Latest summary came from &lt;script&gt;alert(1)&lt;/script&gt;.');
+    expect(html).toContain('Decision &lt;b&gt;detail&lt;/b&gt;');
+    expect(html).toContain('/decision?id=7&amp;source=&lt;script&gt;');
+    expect(html).not.toContain('<img>');
+    expect(html).not.toContain('<script>alert(1)</script>');
+  });
+});
 
 describe('Shared shell status contract', () => {
   it('renders the shared shell-status strip across dashboard, list, detail, and status pages', () => {
