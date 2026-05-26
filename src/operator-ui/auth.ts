@@ -177,7 +177,7 @@ export class Authenticator {
       const remaining = this.config.lockoutThreshold - state.failures;
       return {
         ok: false,
-        status: 403,
+        status: 401,
         message: `Invalid credentials. ${remaining} attempt(s) remaining before lockout.`,
         clientIp,
       };
