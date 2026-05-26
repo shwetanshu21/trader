@@ -280,7 +280,7 @@ function verifyAuth(
 
   if (!result.ok) {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (result.status === 401) headers[WWW_AUTHENTICATE_HEADER] = 'Basic realm="Operator Console"';
+    if (result.status === 401 || result.status === 403) headers[WWW_AUTHENTICATE_HEADER] = 'Basic realm="Operator Console"';
     if (result.status === 429) headers[RETRY_AFTER_HEADER] = '120';
     res.writeHead(result.status, headers);
     res.end(JSON.stringify({ error: result.message, status: result.status }));
