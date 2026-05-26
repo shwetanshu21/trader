@@ -29,6 +29,12 @@ function expectSharedShellHtml(html: string, activeHref?: string): void {
   }
 }
 
+function expectExplainabilityHierarchy(html: string): void {
+  expect(html).toContain('<h3>What</h3>');
+  expect(html).toContain('<h3>Why</h3>');
+  expect(html).toContain('<h3>Evidence</h3>');
+}
+
 function makeTempDir(): string {
   const dir = makeOperatorUiTempDir('operator-ui-e2e-');
   tempDirs.push(dir);
@@ -115,6 +121,7 @@ describe('operator UI — live standalone integration', () => {
     expect(html).toContain('/backtest?runId=2');
     expect(html).toContain('/api/refresh');
     expect(html).toContain('/api/health');
+    expectExplainabilityHierarchy(html);
 
     for (const [route, activeHref, expectedCopy] of [
       ['/positions', '/positions', 'Positions &amp; Exposure'],
@@ -129,7 +136,15 @@ describe('operator UI — live standalone integration', () => {
       const routeHtml = await response.text();
       expect(response.status).toBe(200);
       expectSharedShellHtml(routeHtml, activeHref);
+      expectExplainabilityHierarchy(routeHtml);
       expect(routeHtml).toContain(expectedCopy);
+      if (route === '/system-health') {
+        expect(routeHtml).toContain('Health Summary');
+        expect(routeHtml).toContain('Broker Token and Refresh Recovery');
+        expect(routeHtml).toContain('Subsystem Evidence');
+        expect(routeHtml).toContain('Operator Auth');
+        expect(routeHtml).toContain('Request Upstox Token Refresh');
+      }
     }
 
     const decisionResponse = await fetch(`${app.baseUrl}/decision?id=1`, {
@@ -318,6 +333,20 @@ describe('operator UI — live standalone integration', () => {
     expect(apiHealth.sections.strategyPerformance).toMatchObject({ status: 'ok', count: 2 });
     expect(apiHealth.sections.tickerPerformance).toMatchObject({ status: 'ok' });
     expect(apiHealth.sections.lifecycle).toMatchObject({ status: 'ok', count: 2 });
+
+    const systemHealthResponse = await fetch(`${app.baseUrl}/system-health`, {
+      headers: { Authorization: authHeader },
+    });
+    expect(systemHealthResponse.status).toBe(200);
+    const systemHealthHtml = await systemHealthResponse.text();
+    expectSharedShellHtml(systemHealthHtml, '/system-health');
+    expectExplainabilityHierarchy(systemHealthHtml);
+    expect(systemHealthHtml).toContain('Health Summary');
+    expect(systemHealthHtml).toContain('Broker Token and Refresh Recovery');
+    expect(systemHealthHtml).toContain('Subsystem Evidence');
+    expect(systemHealthHtml).toContain('Operator Auth');
+    expect(systemHealthHtml).toContain('Database Open Bootstrap');
+    expect(systemHealthHtml).toContain('Detail Read Model Bootstrap');
   });
 
   it('preserves last-known dashboard rows as stale after a later live refresh failure', async () => {
@@ -401,6 +430,18 @@ describe('operator UI — live standalone integration', () => {
     expect(await refreshResponse.json()).toMatchObject({
       error: 'Database unavailable',
     });
+
+    const systemHealthResponse = await fetch(`${app.baseUrl}/system-health`, {
+      headers: { Authorization: authHeader },
+    });
+    expect(systemHealthResponse.status).toBe(200);
+    const systemHealthHtml = await systemHealthResponse.text();
+    expectSharedShellHtml(systemHealthHtml, '/system-health');
+    expectExplainabilityHierarchy(systemHealthHtml);
+    expect(systemHealthHtml).toContain('Degraded:');
+    expect(systemHealthHtml).toContain('Health Summary');
+    expect(systemHealthHtml).toContain('data-section-state="error"');
+    expect(systemHealthHtml).toContain('Request Upstox Token Refresh');
 
     for (const [route, activeHref, expectedAction] of [
       ['/decision?id=1', '/decisions', 'Back to decision ledger'],

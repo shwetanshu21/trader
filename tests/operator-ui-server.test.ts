@@ -96,12 +96,19 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
 });
 
-async function listen(server: http.Server): Promise<string> {
+function listen(server: http.Server): Promise<string> {
   servers.push(server);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Failed to bind test server');
-  return `http://127.0.0.1:${address.port}`;
+  return new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve())).then(() => {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Failed to bind test server');
+    return `http://127.0.0.1:${address.port}`;
+  });
+}
+
+function expectExplainabilityHierarchy(html: string): void {
+  expect(html).toContain('<h3>What</h3>');
+  expect(html).toContain('<h3>Why</h3>');
+  expect(html).toContain('<h3>Evidence</h3>');
 }
 
 function createRefreshReadModel() {
@@ -185,38 +192,49 @@ describe('operator-ui server detail routes', () => {
     expect(dashboardHtml).toContain('Upstox Auth');
     expect(dashboardHtml).toContain('data-shell-status-strip');
     expect(dashboardHtml).toContain('data-shell-status-key="market"');
+    expectExplainabilityHierarchy(dashboardHtml);
 
     const positionsResponse = await fetch(`${baseUrl}/positions`, { headers: { Authorization: 'Basic ok' } });
     expect(positionsResponse.status).toBe(200);
     const positionsHtml = await positionsResponse.text();
     expect(positionsHtml).toContain('Positions &amp; Exposure');
     expect(positionsHtml).toContain('data-shell-status-strip');
+    expectExplainabilityHierarchy(positionsHtml);
 
     const strategiesPageResponse = await fetch(`${baseUrl}/strategies`, { headers: { Authorization: 'Basic ok' } });
     expect(strategiesPageResponse.status).toBe(200);
     const strategiesHtml = await strategiesPageResponse.text();
     expect(strategiesHtml).toContain('Attributed Open Exposure');
     expect(strategiesHtml).toContain('data-shell-status-strip');
+    expectExplainabilityHierarchy(strategiesHtml);
 
     const decisionsPageResponse = await fetch(`${baseUrl}/decisions`, { headers: { Authorization: 'Basic ok' } });
     expect(decisionsPageResponse.status).toBe(200);
     const decisionsHtml = await decisionsPageResponse.text();
     expect(decisionsHtml).toContain('Decision Ledger');
     expect(decisionsHtml).toContain('data-shell-status-strip');
+    expectExplainabilityHierarchy(decisionsHtml);
 
     const governancePageResponse = await fetch(`${baseUrl}/governance`, { headers: { Authorization: 'Basic ok' } });
     expect(governancePageResponse.status).toBe(200);
     const governanceHtml = await governancePageResponse.text();
     expect(governanceHtml).toContain('Governance &amp; Backtests');
     expect(governanceHtml).toContain('data-shell-status-strip');
+    expectExplainabilityHierarchy(governanceHtml);
 
     const healthPageResponse = await fetch(`${baseUrl}/system-health`, { headers: { Authorization: 'Basic ok' } });
     expect(healthPageResponse.status).toBe(200);
     const healthPageHtml = await healthPageResponse.text();
     expect(healthPageHtml).toContain('System Health');
+    expect(healthPageHtml).toContain('Health Summary');
+    expect(healthPageHtml).toContain('Broker Token and Refresh Recovery');
+    expect(healthPageHtml).toContain('Subsystem Evidence');
+    expect(healthPageHtml).toContain('Operator Auth');
     expect(healthPageHtml).toContain('Database Open Bootstrap');
     expect(healthPageHtml).toContain('Detail Read Model Bootstrap');
+    expect(healthPageHtml).toContain('Request Upstox Token Refresh');
     expect(healthPageHtml).toContain('data-shell-status-strip');
+    expectExplainabilityHierarchy(healthPageHtml);
 
     const decisionResponse = await fetch(`${baseUrl}/decision?id=7`, { headers: { Authorization: 'Basic ok' } });
     expect(decisionResponse.status).toBe(200);

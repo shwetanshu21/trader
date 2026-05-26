@@ -64,6 +64,12 @@ function expectSharedShell(html: string, activeHref?: string): void {
   }
 }
 
+function expectExplainabilityHierarchy(html: string): void {
+  expect(html).toContain('<h3>What</h3>');
+  expect(html).toContain('<h3>Why</h3>');
+  expect(html).toContain('<h3>Evidence</h3>');
+}
+
 function ok<T>(data: T): DashboardSection<T> {
   return {
     state: 'ok',
@@ -476,6 +482,7 @@ describe('Top-level operator pages', () => {
   it('renders dedicated positions and strategies pages with truthful exposure language', () => {
     const payload = buildPayload();
     const positionsHtml = renderPositionsPage(payload, sampleStrategyExposure());
+    expectExplainabilityHierarchy(positionsHtml);
     expect(positionsHtml).toContain('Positions &amp; Exposure');
     expect(positionsHtml).toContain('Exposure Summary');
     expect(positionsHtml).toContain('Exposure by Strategy');
@@ -485,6 +492,7 @@ describe('Top-level operator pages', () => {
     expect(positionsHtml).toContain('/positions');
 
     const strategiesHtml = renderStrategiesPage(payload, sampleStrategyExposure());
+    expectExplainabilityHierarchy(strategiesHtml);
     expect(strategiesHtml).toContain('Strategy Summary');
     expect(strategiesHtml).toContain('Attributed Open Exposure');
     expect(strategiesHtml).toContain('Invested Capital');
@@ -498,10 +506,12 @@ describe('Top-level operator pages', () => {
   it('renders dedicated decisions, governance, and system-health pages', () => {
     const payload = buildPayload();
     const decisionsHtml = renderDecisionsPage(payload);
+    expectExplainabilityHierarchy(decisionsHtml);
     expect(decisionsHtml).toContain('Decision Ledger');
     expect(decisionsHtml).toContain('Decision Explainability');
     expect(decisionsHtml).toContain('This page stays within the existing persisted decision window');
     const governanceHtml = renderGovernancePage(payload);
+    expectExplainabilityHierarchy(governanceHtml);
     expect(governanceHtml).toContain('Governance &amp; Backtests');
     expect(governanceHtml).toContain('Governance Explainability');
     expect(governanceHtml).toContain('Research Lineage');
@@ -520,13 +530,50 @@ describe('Top-level operator pages', () => {
       authClients: [],
       dbOpenBootstrap: { status: 'ready', lastError: null },
       detailReadModelBootstrap: { status: 'ready', lastError: null },
-      upstoxTokenRefresh: { refresh: { state: 'awaiting_approval' } },
+      upstoxTokenRefresh: { exists: true, statusPath: './tmp/upstox/notifier/refresh-status.json', refresh: { state: 'awaiting_approval' }, token: { exists: true, expiresAt: '2025-01-11T12:00:00.000Z', isExpired: false } },
       sections: { summaryCards: { status: 'ok', count: 3 } },
     });
+    expectExplainabilityHierarchy(healthHtml);
     expect(healthHtml).toContain('System Health');
     expect(healthHtml).toContain('/api/health');
-    expect(healthHtml).toContain('Section Health');
-    expect(healthHtml).toContain('Upstox Token Refresh');
+    expect(healthHtml).toContain('Health Summary');
+    expect(healthHtml).toContain('Broker Token and Refresh Recovery');
+    expect(healthHtml).toContain('Subsystem Evidence');
+    expect(healthHtml).toContain('Operator Auth');
+    expect(healthHtml).toContain('Database Open Bootstrap');
+    expect(healthHtml).toContain('Detail Read Model Bootstrap');
+    expect(healthHtml).toContain('Request Upstox Token Refresh');
+  });
+
+  it('renders degraded system-health states with explicit bootstrap and refresh failure evidence', () => {
+    const healthHtml = renderSystemHealthPage({
+      status: 'degraded',
+      version: '0.1.0',
+      service: 'operator-ui',
+      dbConnected: false,
+      dbError: 'open failed',
+      pollIntervalMs: 1000,
+      authClients: [{ clientIp: '127.0.0.1', failures: 2, lockedUntilTimestamp: Date.now() + 60_000, activeRequestsInWindow: 4 }],
+      dbOpenBootstrap: { status: 'failed', lastError: 'unable to open database file' },
+      detailReadModelBootstrap: { status: 'retrying', lastError: 'detail read model retry pending' },
+      upstoxTokenRefresh: {
+        exists: true,
+        statusPath: './tmp/upstox/notifier/refresh-status.json',
+        refresh: { state: 'request_failed', lastError: 'notifier timeout', message: 'Notifier timed out.' },
+        token: { exists: false, expiresAt: null, isExpired: false },
+      },
+      sections: {
+        summaryCards: { status: 'unavailable', error: 'open failed' },
+        recentDecisions: { status: 'error', error: 'query failed' },
+      },
+    });
+
+    expect(healthHtml).toContain('Degraded: open failed');
+    expect(healthHtml).toContain('data-section-state="error"');
+    expect(healthHtml).toContain('data-section-state="stale"');
+    expect(healthHtml).toContain('unable to open database file');
+    expect(healthHtml).toContain('detail read model retry pending');
+    expect(healthHtml).toContain('Notifier timed out.');
     expect(healthHtml).toContain('Request Upstox Token Refresh');
   });
 
