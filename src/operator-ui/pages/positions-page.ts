@@ -1,5 +1,11 @@
 import type { DashboardPayload } from '../dashboard-data.js';
 import type { OperatorStrategyExposure, OperatorTickerPerformance } from '../../types/runtime.js';
+import {
+  renderExplainabilityEvidenceChecklist,
+  renderExplainabilityStack,
+  renderExplainabilityWhat,
+  renderExplainabilityWhyNarrative,
+} from '../components/explainability.js';
 import { renderDashboardSectionHtml } from './dashboard-page.js';
 import {
   escapeHtml,
@@ -38,20 +44,59 @@ function renderExposureSummarySection(payload: DashboardPayload, exposure: Opera
     .filter(row => row.bucketType === 'unattributed')
     .reduce((sum, row) => sum + row.grossOpenMarketValue, 0);
 
-  const cards = [
-    { label: 'Gross Open Cost Basis', value: usableTickerRows.length > 0 ? formatCurrency(grossOpenCostBasis) : 'Unavailable', meta: 'Proxy from open positions' },
-    { label: 'Gross Open Market Value', value: usableTickerRows.length > 0 ? formatCurrency(grossOpenMarketValue) : 'Unavailable', meta: 'Proxy from latest mark/entry prices' },
-    { label: 'Largest Position', value: grossOpenMarketValue > 0 ? formatPercent(largestPositionValue / grossOpenMarketValue) : '—', meta: 'Share of gross open market value' },
-    { label: 'Top 3 Concentration', value: grossOpenMarketValue > 0 ? formatPercent(topThreeValue / grossOpenMarketValue) : '—', meta: 'Largest three open positions' },
-    { label: 'Unattributed Exposure', value: unattributedValue > 0 ? formatCurrency(unattributedValue) : '—', meta: 'Withheld rather than guessed' },
-  ];
-
-  const grid = `<div class="summary-grid">${cards.map(card => `<div class="summary-card"><div class="label">${escapeHtml(card.label)}</div><div class="value">${card.value}</div><div class="meta">${escapeHtml(card.meta)}</div></div>`).join('')}</div>`;
-  const note = '<p class="page-subtitle" style="margin-top:0.85rem;">All values on this page are exposure proxies derived from persisted paper positions. They are not broker cash, NAV, or account equity.</p>';
-
   return renderSection(
     'Exposure Summary',
-    `${grid}${note}`,
+    renderExplainabilityStack([
+      renderExplainabilityWhat([
+        { label: 'Gross Open Cost Basis', value: usableTickerRows.length > 0 ? formatCurrency(grossOpenCostBasis) : null, meta: 'Proxy from open positions' },
+        { label: 'Gross Open Market Value', value: usableTickerRows.length > 0 ? formatCurrency(grossOpenMarketValue) : null, meta: 'Proxy from latest mark or entry prices' },
+        { label: 'Largest Position', value: grossOpenMarketValue > 0 ? formatPercent(largestPositionValue / grossOpenMarketValue) : null, meta: 'Share of gross open market value' },
+        { label: 'Top 3 Concentration', value: grossOpenMarketValue > 0 ? formatPercent(topThreeValue / grossOpenMarketValue) : null, meta: 'Largest three open positions' },
+        { label: 'Unattributed Exposure', value: unattributedValue > 0 ? formatCurrency(unattributedValue) : null, meta: 'Withheld rather than guessed' },
+      ], 'No open-position evidence is available to summarize exposure on this host.'),
+      renderExplainabilityWhyNarrative({
+        summary: 'This page reports exposure only from persisted paper positions and keeps the values clearly labeled as open-position proxies rather than broker cash, NAV, or account equity.',
+        bullets: [
+          'Concentration is derived from the current open-position set, not from historical closed trades.',
+          unattributedValue > 0
+            ? 'Some open market value remains unattributed because persisted evidence does not prove a unique strategy owner.'
+            : 'All current open market value is attributable to a unique persisted strategy bucket.',
+        ],
+        emptyMessage: 'No exposure narrative is available because no open-position evidence was persisted.',
+      }),
+      renderExplainabilityEvidenceChecklist({
+        items: [
+          {
+            label: 'Open position evidence',
+            verdict: usableTickerRows.length > 0 ? 'pass' : 'missing',
+            observedValue: usableTickerRows.length,
+            expectedValue: '1 or more open positions',
+            note: usableTickerRows.length > 0
+              ? 'Exposure proxies are derived directly from persisted open ticker rows.'
+              : 'No open position rows are available for exposure calculations.',
+          },
+          {
+            label: 'Attribution certainty',
+            verdict: unattributedValue > 0 ? 'warn' : 'pass',
+            observedValue: unattributedValue > 0 ? formatCurrency(unattributedValue) : 'fully attributed',
+            expectedValue: 'Unique strategy mapping when provable',
+            note: unattributedValue > 0
+              ? 'Ambiguous or unlinked positions are withheld from strategy buckets instead of guessed.'
+              : 'Every open position currently maps to a unique persisted strategy bucket.',
+          },
+          {
+            label: 'Exposure freshness',
+            verdict: tickerSection.state === 'stale' ? 'warn' : tickerSection.state === 'ok' ? 'pass' : tickerSection.state === 'error' ? 'fail' : 'missing',
+            observedValue: tickerSection.state,
+            expectedValue: 'Live or bounded last-known ticker performance data',
+            note: tickerSection.state === 'stale'
+              ? 'Concentration metrics are derived from the last successful ticker snapshot.'
+              : 'This summary follows the same truthful section-state semantics as the ticker evidence below.',
+          },
+        ],
+        emptyMessage: 'No exposure evidence is available for this operator view.',
+      }),
+    ]),
     tickerSection.state,
     tickerSection.errorMessage,
     tickerSection.stalenessMs,
@@ -70,6 +115,8 @@ function renderExposureBreakdownSection(payload: DashboardPayload, exposure: Ope
   let content: string;
   if ((state === 'ok' || state === 'stale') && exposure.length > 0) {
     const totalMarketValue = exposure.reduce((sum, row) => sum + row.grossOpenMarketValue, 0);
+    const attributedRows = exposure.filter(row => row.bucketType === 'strategy');
+    const unattributedRows = exposure.filter(row => row.bucketType === 'unattributed');
     const rows = exposure.map(row => {
       const share = totalMarketValue > 0 ? formatPercent(row.grossOpenMarketValue / totalMarketValue) : '—';
       const label = row.bucketType === 'strategy' && row.strategyId && row.strategyVersion
@@ -87,8 +134,47 @@ function renderExposureBreakdownSection(payload: DashboardPayload, exposure: Ope
       </tr>`;
     }).join('');
 
-    content = `<div class="section-note">Exposure is only attributed when the open position maps to exactly one persisted strategy. Ambiguous or unlinked positions stay explicit.</div>
-      <table>
+    content = `${renderExplainabilityStack([
+      renderExplainabilityWhat([
+        { label: 'Exposure Buckets', value: exposure.length, meta: 'Attributed plus unattributed rows' },
+        { label: 'Attributed Buckets', value: attributedRows.length, meta: 'Unique strategy mapping only' },
+        { label: 'Unattributed Buckets', value: unattributedRows.length, meta: 'Explicitly withheld rows' },
+        { label: 'Total Open Market Value', value: totalMarketValue > 0 ? formatCurrency(totalMarketValue) : null, meta: 'Across all exposure buckets' },
+      ], 'No exposure buckets are available for breakdown.'),
+      renderExplainabilityWhyNarrative({
+        summary: 'Exposure is attributed only when the current open position maps to one persisted strategy without ambiguity.',
+        bullets: [
+          unattributedRows.length > 0
+            ? 'Unattributed rows stay visible with their attribution note so operators can see what was withheld and why.'
+            : 'No unattributed rows are currently present in the exposure breakdown.',
+          'Share-of-book percentages are derived from the same bounded open-position evidence shown elsewhere on this route.',
+        ],
+        emptyMessage: 'No attribution narrative is available for the current exposure breakdown.',
+      }),
+      renderExplainabilityEvidenceChecklist({
+        items: [
+          {
+            label: 'Unique strategy attribution',
+            verdict: attributedRows.length > 0 ? 'pass' : 'missing',
+            observedValue: attributedRows.length,
+            expectedValue: '1 or more uniquely attributable buckets',
+            note: attributedRows.length > 0
+              ? 'Attributed rows appear only when persisted evidence identifies one strategy owner.'
+              : 'No open position currently has a unique persisted strategy attribution.',
+          },
+          {
+            label: 'Unattributed exposure',
+            verdict: unattributedRows.length > 0 ? 'warn' : 'pass',
+            observedValue: unattributedRows.length,
+            expectedValue: '0 when every open position is provably attributable',
+            note: unattributedRows.length > 0
+              ? 'Unattributed buckets remain explicit so the operator can inspect withheld exposure instead of inferred ownership.'
+              : 'There are no withheld exposure buckets in the current snapshot.',
+          },
+        ],
+        emptyMessage: 'No attribution evidence is available for this operator view.',
+      }),
+    ])}<table>
         <thead><tr>
           <th>Exposure Bucket</th>
           <th class="num">Open Positions</th>

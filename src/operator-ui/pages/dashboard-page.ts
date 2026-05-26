@@ -40,6 +40,12 @@ import {
   renderResearchLineageBoundedEvidenceNote,
 } from '../render-utils.js';
 import type { OperatorShellStatusViewModel } from '../components/status-strip.js';
+import {
+  renderExplainabilityEvidenceChecklist,
+  renderExplainabilityStack,
+  renderExplainabilityWhat,
+  renderExplainabilityWhyNarrative,
+} from '../components/explainability.js';
 
 const DASHBOARD_SECTION_ORDER = [
   'summaryCards',
@@ -495,7 +501,61 @@ function renderSummaryCardsSection(
         ${footnote}
       </div>`;
     }).join('\n');
-    content = `${toolbar}<div class="summary-grid">${cards}</div>`;
+    const primaryCards = ['net_pnl', 'invested_capital', 'current_value', 'open_positions']
+      .map(key => section.data.find(card => card.key === key))
+      .filter((card): card is OperatorSummaryCard => card !== undefined)
+      .map(card => ({
+        label: card.label,
+        value: card.display ?? (card.unit === 'INR' ? formatCurrency(card.value, card.unit) : formatNumber(card.value, 0)),
+        meta: card.key === 'invested_capital' || card.key === 'current_value'
+          ? 'Paper-ledger aggregate only'
+          : 'Persisted summary-card evidence',
+      }));
+
+    content = `${renderExplainabilityStack([
+      renderExplainabilityWhat(
+        primaryCards,
+        'No persisted overview summary cards are available.',
+      ),
+      renderExplainabilityWhyNarrative({
+        summary: 'Overview prioritizes persisted paper-ledger aggregates and refresh health so operators can see current capital and open-book state without inferring broker cash or account NAV.',
+        bullets: [
+          'Invested capital and current value describe the open paper ledger only, not broker account balances.',
+          'The full summary-card grid below stays visible so operators can inspect the exact persisted surface that powers the overview route.',
+        ],
+        emptyMessage: 'No overview narrative summary is available.',
+      }),
+      renderExplainabilityEvidenceChecklist({
+        items: [
+          {
+            label: 'Persisted summary cards',
+            verdict: section.data.length > 0 ? 'pass' : 'missing',
+            observedValue: section.data.length,
+            expectedValue: '1 or more summary cards',
+            note: section.data.length > 0
+              ? 'Overview metrics are read directly from the persisted summary-card surface.'
+              : 'No summary-card evidence was persisted for this snapshot.',
+          },
+          {
+            label: 'Open-book capital semantics',
+            verdict: 'pass',
+            observedValue: 'paper-ledger aggregates',
+            expectedValue: 'Not broker cash or NAV',
+            note: 'Overview copy keeps invested capital and current value explicitly scoped to open paper positions.',
+          },
+          {
+            label: 'Overview freshness',
+            verdict: section.state === 'stale' ? 'warn' : 'pass',
+            observedValue: section.state,
+            expectedValue: 'Live or bounded last-known data',
+            note: section.state === 'stale'
+              ? 'The overview is using the last successful summary-card snapshot.'
+              : 'Summary cards reflect the latest persisted snapshot for this route.',
+          },
+        ],
+        emptyMessage: 'No overview evidence is available for this operator view.',
+      }),
+    ])}${toolbar}<div class="summary-grid">${cards}</div>`;
   } else if (section.state === 'unavailable') {
     content = renderEmptyState('Database unavailable — summary cards cannot be loaded.');
   } else if (section.state === 'error') {

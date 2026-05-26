@@ -477,24 +477,33 @@ describe('Top-level operator pages', () => {
     const payload = buildPayload();
     const positionsHtml = renderPositionsPage(payload, sampleStrategyExposure());
     expect(positionsHtml).toContain('Positions &amp; Exposure');
+    expect(positionsHtml).toContain('Exposure Summary');
     expect(positionsHtml).toContain('Exposure by Strategy');
     expect(positionsHtml).toContain('Unattributed Exposure');
+    expect(positionsHtml).toContain('This page reports exposure only from persisted paper positions');
+    expect(positionsHtml).toContain('Ambiguous or unlinked positions are withheld from strategy buckets instead of guessed.');
     expect(positionsHtml).toContain('/positions');
 
     const strategiesHtml = renderStrategiesPage(payload, sampleStrategyExposure());
+    expect(strategiesHtml).toContain('Strategy Summary');
     expect(strategiesHtml).toContain('Attributed Open Exposure');
     expect(strategiesHtml).toContain('Invested Capital');
     expect(strategiesHtml).toContain('Current Value');
     expect(strategiesHtml).toContain('Net P&amp;L');
     expect(strategiesHtml).toContain('Unattributed Open Market Value');
+    expect(strategiesHtml).toContain('This page separates whole-book paper-ledger capital from strategy-level attribution');
     expect(strategiesHtml).toContain('/strategies');
   });
 
   it('renders dedicated decisions, governance, and system-health pages', () => {
     const payload = buildPayload();
-    expect(renderDecisionsPage(payload)).toContain('Decision Ledger');
+    const decisionsHtml = renderDecisionsPage(payload);
+    expect(decisionsHtml).toContain('Decision Ledger');
+    expect(decisionsHtml).toContain('Decision Explainability');
+    expect(decisionsHtml).toContain('This page stays within the existing persisted decision window');
     const governanceHtml = renderGovernancePage(payload);
     expect(governanceHtml).toContain('Governance &amp; Backtests');
+    expect(governanceHtml).toContain('Governance Explainability');
     expect(governanceHtml).toContain('Research Lineage');
     expect(governanceHtml).toContain('Published Research Total');
     expect(governanceHtml).toContain('Repository-backed totals lead this section so operators can inspect the truthful full lineage first');
@@ -520,6 +529,29 @@ describe('Top-level operator pages', () => {
     expect(healthHtml).toContain('Upstox Token Refresh');
     expect(healthHtml).toContain('Request Upstox Token Refresh');
   });
+
+  it('renders explicit missing-evidence copy for absent decision LLM evidence and empty governance lineage', () => {
+    const decisionsHtml = renderDecisionsPage(buildPayload({
+      decisionPerformance: ok(sampleDecisionPerformance().map(decision => ({
+        ...decision,
+        llmStatus: null,
+        llmRationale: null,
+      }))),
+    }));
+    expect(decisionsHtml).toContain('No persisted hybrid LLM evidence exists in this bounded recent window, so the page keeps deterministic decision truth without speculative rationale.');
+    expect(decisionsHtml).toContain('No decision in this recent window persisted hybrid LLM evidence.');
+
+    const governanceHtml = renderGovernancePage(buildPayload({
+      researchLineage: ok({
+        totals: { generationAttempts: 0, hypotheses: 0, evaluations: 0, duplicateSkips: 0, publications: 0 },
+        recent: [],
+        status: { availability: 'empty', diagnostics: [], provenance: [{ sourceLabel: 'hypothesis_generation_attempts', detail: 'recent generation lineage rows' }] },
+        provenance: testProvenance,
+      }),
+    }));
+    expect(governanceHtml).toContain('No recent lineage rows are persisted, so the page keeps the missing-evidence state explicit instead of inferring governance context.');
+    expect(governanceHtml).toContain('No recent research lineage rows are persisted, so governance keeps an explicit missing-evidence state.');
+  });
 });
 
 describe('Dashboard page', () => {
@@ -533,6 +565,8 @@ describe('Dashboard page', () => {
     expect(html).toContain('Current Value');
     expect(html).toContain('Net P&amp;L');
     expect(html).toContain('Healthy');
+    expect(html).toContain('Overview prioritizes persisted paper-ledger aggregates and refresh health');
+    expect(html).toContain('Overview copy keeps invested capital and current value explicitly scoped to open paper positions.');
     expect(html).toContain('data-dashboard-section="summaryCards"');
     expect(html).toContain('id="dashboard-section-strategyPerformance"');
     expect(html).toContain('id="dashboard-bootstrap"');
