@@ -865,14 +865,22 @@ export class OperatorDetailReadModel {
   }
 
   private _getStrategyPerformance(strategyId: string, strategyVersion: string): StrategyPerformanceRow {
+    const hasQuoteTable = this._tableExists('zerodha_latest_quotes');
+    const quoteJoin = hasQuoteTable
+      ? 'LEFT JOIN zerodha_latest_quotes q ON q.exchange = pp.exchange AND q.tradingsymbol = pp.tradingsymbol'
+      : '';
+    const effectivePrice = hasQuoteTable
+      ? 'COALESCE(pp.mark_price, q.last_price)'
+      : 'pp.mark_price';
+
     const row = this._db.prepare(`
       SELECT
         COALESCE(COUNT(pf.id), 0) AS trade_count,
         COALESCE(SUM(DISTINCT pp.realized_pnl), 0) AS realized_pnl,
         COALESCE(SUM(pf.fees), 0) AS total_fees,
         COALESCE(SUM(DISTINCT CASE
-          WHEN pp.quantity != 0 AND pp.mark_price IS NOT NULL AND pp.avg_cost_price != 0
-            THEN (pp.mark_price - pp.avg_cost_price) * ABS(pp.quantity)
+          WHEN pp.quantity != 0 AND ${effectivePrice} IS NOT NULL AND pp.avg_cost_price != 0
+            THEN (${effectivePrice} - pp.avg_cost_price) * ABS(pp.quantity)
           ELSE 0
         END), 0) AS unrealized_pnl,
         AVG(wtw.total_return) AS total_return_pct,
@@ -887,6 +895,7 @@ export class OperatorDetailReadModel {
         ON pp.exchange = sd.exchange
        AND pp.tradingsymbol = sd.tradingsymbol
        AND pp.product = sd.product
+      ${quoteJoin}
       LEFT JOIN walk_forward_runs wr
         ON wr.strategy_id = sd.strategy_id
        AND wr.strategy_version = sd.strategy_version
@@ -1098,5 +1107,16 @@ export class OperatorDetailReadModel {
 
   private _provenance(source: OperatorProvenance['source'], sourceLabel: string | null): OperatorProvenance {
     return { source, asOf: Date.now(), sourceLabel };
+  }
+
+  private _tableExists(tableName: string): boolean {
+    try {
+      const row = this._db.prepare(
+        'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
+      ).get('table', tableName) as { name: string } | undefined;
+      return row !== undefined;
+    } catch {
+      return false;
+    }
   }
 }

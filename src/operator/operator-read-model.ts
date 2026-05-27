@@ -262,30 +262,39 @@ export class OperatorReadModel {
     netPnl: number;
   } {
     try {
+      const hasQuoteTable = this._tableExists('zerodha_latest_quotes');
+      const quoteJoin = hasQuoteTable
+        ? 'LEFT JOIN zerodha_latest_quotes q ON q.exchange = pp.exchange AND q.tradingsymbol = pp.tradingsymbol'
+        : '';
+      const effectivePrice = hasQuoteTable
+        ? 'COALESCE(pp.mark_price, q.last_price)'
+        : 'pp.mark_price';
+
       const row = this._db.prepare(`
         SELECT
-          COALESCE(SUM(realized_pnl), 0) AS current_pnl,
+          COALESCE(SUM(pp.realized_pnl), 0) AS current_pnl,
           COALESCE(
             SUM(
-              CASE WHEN quantity != 0 AND mark_price IS NOT NULL AND avg_cost_price != 0
-                THEN (mark_price - avg_cost_price) * ABS(quantity)
+              CASE WHEN pp.quantity != 0 AND ${effectivePrice} IS NOT NULL AND pp.avg_cost_price != 0
+                THEN (${effectivePrice} - pp.avg_cost_price) * ABS(pp.quantity)
                 ELSE 0
               END
             ), 0
           ) AS unrealized_pnl,
-          COUNT(CASE WHEN quantity != 0 THEN 1 END) AS open_positions,
-          COALESCE(SUM(CASE WHEN quantity != 0 THEN ABS(quantity) * avg_cost_price ELSE 0 END), 0) AS invested_capital,
+          COUNT(CASE WHEN pp.quantity != 0 THEN 1 END) AS open_positions,
+          COALESCE(SUM(CASE WHEN pp.quantity != 0 THEN ABS(pp.quantity) * pp.avg_cost_price ELSE 0 END), 0) AS invested_capital,
           COALESCE(
             SUM(
-              CASE WHEN quantity != 0 AND mark_price IS NOT NULL
-                THEN ABS(quantity) * mark_price
-                WHEN quantity != 0
-                THEN ABS(quantity) * avg_cost_price
+              CASE WHEN pp.quantity != 0 AND ${effectivePrice} IS NOT NULL
+                THEN ABS(pp.quantity) * ${effectivePrice}
+                WHEN pp.quantity != 0
+                THEN ABS(pp.quantity) * pp.avg_cost_price
                 ELSE 0
               END
             ), 0
           ) AS current_value
-        FROM paper_positions
+        FROM paper_positions pp
+        ${quoteJoin}
       `).get() as {
         current_pnl: number;
         unrealized_pnl: number;
@@ -635,19 +644,27 @@ export class OperatorReadModel {
       }
 
       const unrealizedMap = new Map<string, number>();
+      const hasQuoteTable = this._tableExists('zerodha_latest_quotes');
+      const unrealizedQuoteJoin = hasQuoteTable
+        ? 'LEFT JOIN zerodha_latest_quotes q ON q.exchange = pp.exchange AND q.tradingsymbol = pp.tradingsymbol'
+        : '';
+      const unrealizedEffectivePrice = hasQuoteTable
+        ? 'COALESCE(pp.mark_price, q.last_price)'
+        : 'pp.mark_price';
       const unrealizedRows = this._db.prepare(`
         SELECT
           attributed.strategy_id,
           attributed.strategy_version,
           COALESCE(
             SUM(
-              CASE WHEN pp.quantity != 0 AND pp.mark_price IS NOT NULL AND pp.avg_cost_price != 0
-                THEN (pp.mark_price - pp.avg_cost_price) * ABS(pp.quantity)
+              CASE WHEN pp.quantity != 0 AND ${unrealizedEffectivePrice} IS NOT NULL AND pp.avg_cost_price != 0
+                THEN (${unrealizedEffectivePrice} - pp.avg_cost_price) * ABS(pp.quantity)
                 ELSE 0
               END
             ), 0
           ) AS total_unrealized_pnl
         FROM paper_positions pp
+        ${unrealizedQuoteJoin}
         INNER JOIN (
           SELECT DISTINCT
             sd.strategy_id,
@@ -782,6 +799,20 @@ export class OperatorReadModel {
         // No positions table; unrealized defaults to 0
       }
 
+      const quoteMap = new Map<string, number>();
+      if (this._tableExists('zerodha_latest_quotes')) {
+        try {
+          const quotes = this._db.prepare(`
+            SELECT exchange, tradingsymbol, last_price FROM zerodha_latest_quotes
+          `).all() as Array<{ exchange: string; tradingsymbol: string; last_price: number }>;
+          for (const q of quotes) {
+            quoteMap.set(`${q.exchange}:${q.tradingsymbol}`, q.last_price);
+          }
+        } catch {
+          // No quotes table; skip fallback
+        }
+      }
+
       for (const row of fillRows) {
         const key = `${row.exchange}:${row.tradingsymbol}`;
         const pos = positionMap.get(key);
@@ -791,12 +822,13 @@ export class OperatorReadModel {
         }
 
         const netQuantity = pos?.quantity ?? 0;
-        const unrealizedPnl = pos && pos.mark_price !== null && row.avg_entry_price !== null
-          ? (pos.mark_price - row.avg_entry_price) * Math.abs(netQuantity)
+        const effectivePrice = pos?.mark_price ?? quoteMap.get(key) ?? null;
+        const unrealizedPnl = effectivePrice !== null && row.avg_entry_price !== null && netQuantity !== 0
+          ? (effectivePrice - row.avg_entry_price) * Math.abs(netQuantity)
           : 0;
 
         let winRate: number | null = null;
-        const markPrice = pos?.mark_price;
+        const markPrice = effectivePrice;
         if (row.trade_count > 0 && markPrice !== null && markPrice !== undefined) {
           try {
             const winCount = this._db.prepare(`
@@ -821,7 +853,7 @@ export class OperatorReadModel {
           winRate,
           netQuantity,
           avgEntryPrice: row.avg_entry_price,
-          lastPrice: pos?.mark_price ?? row.last_fill_price,
+          lastPrice: effectivePrice ?? row.last_fill_price,
           unrealizedPnl,
           realizedPnl,
           totalFees: row.total_fees ?? 0,
@@ -831,8 +863,9 @@ export class OperatorReadModel {
 
       for (const [key, pos] of positionMap) {
         if (!fillRows.some(r => `${r.exchange}:${r.tradingsymbol}` === key)) {
-          const unrealizedPnl = pos.mark_price !== null && pos.avg_cost_price > 0
-            ? (pos.mark_price - pos.avg_cost_price) * Math.abs(pos.quantity)
+          const effectivePrice = pos.mark_price ?? quoteMap.get(key) ?? null;
+          const unrealizedPnl = effectivePrice !== null && pos.avg_cost_price > 0 && pos.quantity !== 0
+            ? (effectivePrice - pos.avg_cost_price) * Math.abs(pos.quantity)
             : 0;
           results.push({
             exchange: pos.exchange,
@@ -842,7 +875,7 @@ export class OperatorReadModel {
             winRate: null,
             netQuantity: pos.quantity,
             avgEntryPrice: pos.avg_cost_price || null,
-            lastPrice: pos.mark_price,
+            lastPrice: effectivePrice,
             unrealizedPnl,
             realizedPnl: pos.realized_pnl,
             totalFees: 0,
@@ -880,6 +913,20 @@ export class OperatorReadModel {
         ORDER BY exchange, tradingsymbol, product
       `).all() as PaperPositionRow[];
 
+      const quoteMap = new Map<string, number>();
+      if (this._tableExists('zerodha_latest_quotes')) {
+        try {
+          const quotes = this._db.prepare(`
+            SELECT exchange, tradingsymbol, last_price FROM zerodha_latest_quotes
+          `).all() as Array<{ exchange: string; tradingsymbol: string; last_price: number }>;
+          for (const q of quotes) {
+            quoteMap.set(`${q.exchange}:${q.tradingsymbol}`, q.last_price);
+          }
+        } catch {
+          // No quotes table; skip fallback
+        }
+      }
+
       const distinctStrategies = this._db.prepare(`
         SELECT DISTINCT sd.strategy_id, sd.strategy_version
         FROM paper_fills pf
@@ -897,10 +944,12 @@ export class OperatorReadModel {
           position.product,
         ) as Array<{ strategy_id: string; strategy_version: string }>;
 
+        const quoteKey = `${position.exchange}:${position.tradingsymbol}`;
+        const effectivePrice = position.mark_price ?? quoteMap.get(quoteKey) ?? null;
         const grossOpenCostBasis = Math.abs(position.quantity) * position.avg_cost_price;
-        const grossOpenMarketValue = Math.abs(position.quantity) * (position.mark_price ?? position.avg_cost_price);
-        const unrealizedPnl = position.mark_price !== null && position.avg_cost_price !== 0
-          ? (position.mark_price - position.avg_cost_price) * Math.abs(position.quantity)
+        const grossOpenMarketValue = Math.abs(position.quantity) * (effectivePrice ?? position.avg_cost_price);
+        const unrealizedPnl = effectivePrice !== null && position.avg_cost_price !== 0 && position.quantity !== 0
+          ? (effectivePrice - position.avg_cost_price) * Math.abs(position.quantity)
           : 0;
 
         let key: string;
