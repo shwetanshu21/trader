@@ -135,7 +135,7 @@ async function main(): Promise<void> {
       pollIntervalMs: 1500,
       rateLimitMax: 100,
       proofFaultSection: 'summaryCards',
-      proofFaultAfterSuccessCount: 3,
+      proofFaultAfterSuccessCount: 15,
       proofFaultMessage: 'Injected summaryCards refresh failure for M010/S04 proof: authorization=proof-secret-token',
       readyTimeoutMs: 15_000,
     });
@@ -154,7 +154,9 @@ async function main(): Promise<void> {
     assert('unauthenticated dashboard advertises Basic auth realm', (unauthenticatedDashboard.headers.get('www-authenticate') ?? '').includes('Operator Console'), String(unauthenticatedDashboard.headers.get('www-authenticate')));
 
     const wrongCredentials = await fetchJson(`${app.baseUrl}/api/health`, basicAuthHeader(app.username, 'wrong-password'));
-    assert('wrong credentials return 403', wrongCredentials.status === 403, `status=${wrongCredentials.status}`);
+    assert('wrong credentials return 401', wrongCredentials.status === 401, `status=${wrongCredentials.status}`);
+    assert('wrong credentials advertise Basic auth realm', (wrongCredentials.headers.get('www-authenticate') ?? '').includes('Operator Console'), String(wrongCredentials.headers.get('www-authenticate')));
+    assert('wrong credentials message is truthful', wrongCredentials.body.error === 'Invalid credentials. 2 attempt(s) remaining before lockout.', JSON.stringify(wrongCredentials.body));
 
     log('');
     log('── Phase 2: Dashboard + detail surfaces ──');
@@ -172,8 +174,12 @@ async function main(): Promise<void> {
 
     const decision = await fetchText(`${app.baseUrl}/decision?id=1`, authHeader);
     assert('decision detail returns 200', decision.status === 200, `status=${decision.status}`);
+    assert('decision detail shows redesigned evidence hierarchy',
+      ['Operator Decision Detail', 'Decision Summary', 'Rationale', 'Research Evidence', 'Hybrid Scoring', 'Execution Outcome']
+        .every(snippet => decision.body.includes(snippet)),
+      'decision detail missing section hierarchy');
     assert('decision detail shows joined evidence',
-      ['Operator Decision Detail', 'trend_alignment', 'risk_budget_ok', 'India research favored refinery strength ahead of earnings.', 'LLM agreed that refinery momentum and macro context supported approval.', 'Current Position Snapshot']
+      ['trend_alignment', 'risk_budget_ok', 'India research favored refinery strength ahead of earnings.', 'LLM agreed that refinery momentum and macro context supported approval.', 'Current Position Snapshot']
         .every(snippet => decision.body.includes(snippet)),
       'decision detail missing evidence');
 
@@ -182,27 +188,37 @@ async function main(): Promise<void> {
 
     const strategy = await fetchText(`${app.baseUrl}/strategy?strategyId=strat-a&strategyVersion=1.0.0`, authHeader);
     assert('strategy detail returns 200', strategy.status === 200, `status=${strategy.status}`);
+    assert('strategy detail shows redesigned explainability hierarchy',
+      ['Operator Strategy Detail', 'Strategy Explainability', '<h3>What</h3>', '<h3>Why</h3>', '<h3>Evidence</h3>', 'Recent evidence below is intentionally bounded to the newest 2 decision rows for operator readability.']
+        .every(snippet => strategy.body.includes(snippet)),
+      'strategy detail missing explainability hierarchy');
     assert('strategy detail shows governance and winner evidence',
-      ['Operator Strategy Detail', 'Strategy A passed walk-forward thresholds', 'approvingReviewer', 'WF#1', '/decision?id=1', '/backtest?runId=1']
+      ['Strategy A passed walk-forward thresholds', 'approvingReviewer', 'WF#1', '/decision?id=1', '/backtest?runId=1']
         .every(snippet => strategy.body.includes(snippet)),
       'strategy detail missing promotion evidence');
 
     const noWinnerStrategy = await fetchText(`${app.baseUrl}/strategy?strategyId=strat-b&strategyVersion=2.0.0`, authHeader);
     assert('strategy detail shows no-winner rationale',
-      noWinnerStrategy.body.includes('No trial met the minimum merged-score threshold for promotion.'),
+      noWinnerStrategy.body.includes('No trial met the minimum merged-score threshold for promotion.')
+        && noWinnerStrategy.body.includes('At least one linked run ended with no winner, so the page keeps the no-winner state explicit rather than promoting a candidate implicitly.'),
       'missing no-winner strategy rationale');
 
     const backtest = await fetchText(`${app.baseUrl}/backtest?runId=1`, authHeader);
     assert('backtest detail returns 200', backtest.status === 200, `status=${backtest.status}`);
+    assert('backtest detail shows redesigned evidence hierarchy',
+      ['Operator Backtest Detail', 'Backtest Summary', 'Selection Rationale', 'Selected Trial', 'Per-Window Evidence', 'Ranked Candidates']
+        .every(snippet => backtest.body.includes(snippet)),
+      'missing backtest detail hierarchy');
     assert('backtest detail shows winner and trial evidence',
-      ['Operator Backtest Detail', 'Trial-A has the best risk-adjusted out-of-sample result and cleared promotion gates.', 'Candidate Params', 'artifacts/wf-001/winner.json', 'Trial-B']
+      ['Trial-A has the best risk-adjusted out-of-sample result and cleared promotion gates.', 'Candidate Params', 'artifacts/wf-001/winner.json', 'Trial-B']
         .every(snippet => backtest.body.includes(snippet)),
       'missing backtest winner evidence');
 
     const noWinnerBacktest = await fetchText(`${app.baseUrl}/backtest?runId=2`, authHeader);
     assert('backtest detail shows no-winner empty state',
       noWinnerBacktest.body.includes('No winner selected for this run.')
-        && noWinnerBacktest.body.includes('No selected trial evidence was persisted because this run has no winner context.'),
+        && noWinnerBacktest.body.includes('No selected trial evidence was persisted because this run has no winner context.')
+        && noWinnerBacktest.body.includes('No per-window evidence was persisted for the selected trial.'),
       'missing no-winner backtest copy');
 
     log('');
@@ -218,9 +234,19 @@ async function main(): Promise<void> {
 
     const malformedStrategy = await fetchText(`${app.baseUrl}/strategy?strategyId=strat-a&strategyVersion=%20%20`, authHeader);
     assert('malformed strategy request returns 400', malformedStrategy.status === 400, `status=${malformedStrategy.status}`);
+    assert('malformed strategy message is truthful', malformedStrategy.body.includes('Invalid strategyVersion. Expected a non-empty string.'), 'missing malformed strategy copy');
+
+    const missingStrategy = await fetchText(`${app.baseUrl}/strategy?strategyId=missing&strategyVersion=9.9.9`, authHeader);
+    assert('missing strategy returns 404', missingStrategy.status === 404, `status=${missingStrategy.status}`);
+    assert('missing strategy message is truthful', missingStrategy.body.includes('No persisted strategy detail exists for missing@9.9.9.'), 'missing not-found strategy copy');
 
     const malformedBacktest = await fetchText(`${app.baseUrl}/backtest?runId=not-a-number`, authHeader);
     assert('malformed backtest request returns 400', malformedBacktest.status === 400, `status=${malformedBacktest.status}`);
+    assert('malformed backtest message is truthful', malformedBacktest.body.includes('Invalid runId. Expected a positive integer.'), 'missing malformed backtest copy');
+
+    const missingBacktest = await fetchText(`${app.baseUrl}/backtest?runId=9999`, authHeader);
+    assert('missing backtest returns 404', missingBacktest.status === 404, `status=${missingBacktest.status}`);
+    assert('missing backtest message is truthful', missingBacktest.body.includes('No persisted backtest run detail exists for runId=9999.'), 'missing not-found backtest copy');
 
     const refresh1 = await fetchJson(`${app.baseUrl}/api/refresh`, authHeader);
     assert('first /api/refresh returns 200', refresh1.status === 200, `status=${refresh1.status}`);

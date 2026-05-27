@@ -92,9 +92,11 @@ describe('operator UI — live standalone integration', () => {
     const wrongCredentials = await fetch(`${app.baseUrl}/api/health`, {
       headers: { Authorization: basicAuthHeader(app.username, 'wrong-password') },
     });
-    expect(wrongCredentials.status).toBe(403);
+    expect(wrongCredentials.status).toBe(401);
+    expect(wrongCredentials.headers.get('www-authenticate')).toContain('Basic realm="Operator Console"');
     expect(await wrongCredentials.json()).toMatchObject({
-      status: 403,
+      error: 'Invalid credentials. 2 attempt(s) remaining before lockout.',
+      status: 401,
     });
 
     const htmlResponse = await fetch(`${app.baseUrl}/`, {
@@ -154,6 +156,12 @@ describe('operator UI — live standalone integration', () => {
     expect(decisionResponse.status).toBe(200);
     expectSharedShellHtml(decisionHtml, '/decisions');
     expect(decisionHtml).toContain('Operator Decision Detail');
+    expect(decisionHtml).toContain('Decision Summary');
+    expect(decisionHtml).toContain('Rationale');
+    expect(decisionHtml).toContain('Research Evidence');
+    expect(decisionHtml).toContain('Hybrid Scoring');
+    expect(decisionHtml).toContain('Execution Outcome');
+    expect(decisionHtml).toContain('Realized P&amp;L Linkage');
     expect(decisionHtml).toContain('trend_alignment');
     expect(decisionHtml).toContain('risk_budget_ok');
     expect(decisionHtml.indexOf('trend_alignment')).toBeLessThan(decisionHtml.indexOf('risk_budget_ok'));
@@ -179,6 +187,11 @@ describe('operator UI — live standalone integration', () => {
     expect(strategyResponse.status).toBe(200);
     expectSharedShellHtml(strategyHtml, '/strategies');
     expect(strategyHtml).toContain('Operator Strategy Detail');
+    expect(strategyHtml).toContain('Strategy Explainability');
+    expect(strategyHtml).toContain('<h3>What</h3>');
+    expect(strategyHtml).toContain('<h3>Why</h3>');
+    expect(strategyHtml).toContain('<h3>Evidence</h3>');
+    expect(strategyHtml).toContain('Recent evidence below is intentionally bounded to the newest 2 decision rows for operator readability.');
     expect(strategyHtml).toContain('Strategy A passed walk-forward thresholds');
     expect(strategyHtml).toContain('Evidence JSON');
     expect(strategyHtml).toContain('approvingReviewer');
@@ -193,8 +206,10 @@ describe('operator UI — live standalone integration', () => {
     const noWinnerStrategyHtml = await noWinnerStrategyResponse.text();
     expect(noWinnerStrategyResponse.status).toBe(200);
     expectSharedShellHtml(noWinnerStrategyHtml, '/strategies');
+    expect(noWinnerStrategyHtml).toContain('Strategy Explainability');
     expect(noWinnerStrategyHtml).toContain('Insufficient out-of-sample performance');
     expect(noWinnerStrategyHtml).toContain('No trial met the minimum merged-score threshold for promotion.');
+    expect(noWinnerStrategyHtml).toContain('At least one linked run ended with no winner, so the page keeps the no-winner state explicit rather than promoting a candidate implicitly.');
 
     const backtestResponse = await fetch(`${app.baseUrl}/backtest?runId=1`, {
       headers: { Authorization: authHeader },
@@ -203,6 +218,12 @@ describe('operator UI — live standalone integration', () => {
     expect(backtestResponse.status).toBe(200);
     expectSharedShellHtml(backtestHtml, '/governance');
     expect(backtestHtml).toContain('Operator Backtest Detail');
+    expect(backtestHtml).toContain('Backtest Summary');
+    expect(backtestHtml).toContain('Selection Rationale');
+    expect(backtestHtml).toContain('Selected Trial');
+    expect(backtestHtml).toContain('Per-Window Evidence');
+    expect(backtestHtml).toContain('Ranked Candidates');
+    expect(backtestHtml).toContain('Selection Config &amp; Artifacts');
     expect(backtestHtml).toContain('Trial-A has the best risk-adjusted out-of-sample result and cleared promotion gates.');
     expect(backtestHtml).toContain('Trial #1');
     expect(backtestHtml).toContain('Candidate Params');
@@ -216,8 +237,10 @@ describe('operator UI — live standalone integration', () => {
     const noWinnerBacktestHtml = await noWinnerBacktestResponse.text();
     expect(noWinnerBacktestResponse.status).toBe(200);
     expectSharedShellHtml(noWinnerBacktestHtml, '/governance');
+    expect(noWinnerBacktestHtml).toContain('Backtest Summary');
     expect(noWinnerBacktestHtml).toContain('No winner selected for this run.');
     expect(noWinnerBacktestHtml).toContain('No selected trial evidence was persisted because this run has no winner context.');
+    expect(noWinnerBacktestHtml).toContain('No per-window evidence was persisted for the selected trial.');
     expect(noWinnerBacktestHtml).toContain('Trial-C');
 
     const malformedDecisionResponse = await fetch(`${app.baseUrl}/decision?id=abc`, {

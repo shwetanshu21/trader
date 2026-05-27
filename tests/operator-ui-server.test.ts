@@ -240,18 +240,28 @@ describe('operator-ui server detail routes', () => {
     expect(decisionResponse.status).toBe(200);
     const decisionHtml = await decisionResponse.text();
     expect(decisionHtml).toContain('Decision #7');
+    expect(decisionHtml).toContain('Decision Summary');
+    expect(decisionHtml).toContain('Rationale');
+    expect(decisionHtml).toContain('Execution Outcome');
     expect(decisionHtml).toContain('data-shell-status-strip');
 
     const strategyResponse = await fetch(`${baseUrl}/strategy?strategyId=alpha&strategyVersion=1.0.0`, { headers: { Authorization: 'Basic ok' } });
     expect(strategyResponse.status).toBe(200);
     const strategyHtml = await strategyResponse.text();
     expect(strategyHtml).toContain('Operator Strategy Detail');
+    expect(strategyHtml).toContain('Strategy Explainability');
+    expect(strategyHtml).toContain('<h3>What</h3>');
+    expect(strategyHtml).toContain('<h3>Why</h3>');
+    expect(strategyHtml).toContain('<h3>Evidence</h3>');
     expect(strategyHtml).toContain('data-shell-status-strip');
 
     const backtestResponse = await fetch(`${baseUrl}/backtest?runId=42`, { headers: { Authorization: 'Basic ok' } });
     expect(backtestResponse.status).toBe(200);
     const backtestHtml = await backtestResponse.text();
     expect(backtestHtml).toContain('Operator Backtest Detail');
+    expect(backtestHtml).toContain('Backtest Summary');
+    expect(backtestHtml).toContain('Selection Rationale');
+    expect(backtestHtml).toContain('Ranked Candidates');
     expect(backtestHtml).toContain('data-shell-status-strip');
   });
 
