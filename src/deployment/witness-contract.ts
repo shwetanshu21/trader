@@ -39,6 +39,7 @@ export const REQUIRED_SUBSYSTEMS = [
   'runtime',
   'notifier',
   'mcp-bridge',
+  'operator-ui',
   'caddy',
   'sqlite',
   'logs',
@@ -161,6 +162,57 @@ export interface OptionalAnnotation {
   label: string;
   /** Arbitrary JSON-serializable value (redacted if secret-bearing). */
   value: unknown;
+}
+
+/** Reachability record for one operator-ui route. */
+export interface OperatorUiRouteWitness {
+  /** Human-readable route label. */
+  label: string;
+  /** Route path relative to the base URL. */
+  path: string;
+  /** HTTP status code (0 when unreachable). */
+  statusCode: number;
+  /** Whether the route responded with an expected status for this probe. */
+  reachable: boolean;
+  /** Whether this route is expected to require auth. */
+  authProtected: boolean;
+  /** Whether the route challenged correctly with Basic auth. */
+  challenged: boolean;
+  /** Advertised Basic realm, if present. */
+  challengeRealm: string | null;
+  /** Error string when the route did not respond as expected. */
+  error: string | null;
+}
+
+/** Host-local and optional proxy evidence for the operator UI. */
+export interface OperatorUiSubsystemMetadata extends RedactedMap {
+  /** Host-local base URL that should reach the real service bind. */
+  hostLocalBaseUrl: string;
+  /** Route prefix under which the UI is served. */
+  servicePath: string;
+  /** Health endpoint used for the required host-local probe. */
+  healthEndpoint: string;
+  /** Whether the required host-local health endpoint returned a truthful payload. */
+  healthReachable: boolean;
+  /** HTTP status returned by the host-local health endpoint. */
+  healthStatusCode: number;
+  /** Parsed operator-ui status field when available. */
+  healthStatus: string | null;
+  /** Parsed dbConnected field when available. */
+  dbConnected: boolean | null;
+  /** Operator-ui route checks performed against the host-local service. */
+  routeWitnesses: OperatorUiRouteWitness[];
+  /** Optional proxied-entrypoint annotations that never gate bundle validity. */
+  proxyEvidence: {
+    configured: boolean;
+    optional: true;
+    baseUrl: string | null;
+    servicePath: string | null;
+    healthStatusCode: number;
+    healthReachable: boolean;
+    protectedChallengeOk: boolean | null;
+    error: string | null;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -538,9 +590,8 @@ export function validateManifest(manifest: unknown): string[] {
   if (!Array.isArray(m.subsystems)) {
     violations.push('subsystems must be an array');
   } else {
-    const subsystemIds = new Set(
-      (m.subsystems as Array<Record<string, unknown>>).map(s => s.id),
-    );
+    const subsystems = m.subsystems as Array<Record<string, unknown>>;
+    const subsystemIds = new Set(subsystems.map(s => s.id));
 
     for (const requiredId of REQUIRED_SUBSYSTEMS) {
       if (!subsystemIds.has(requiredId)) {
@@ -549,7 +600,7 @@ export function validateManifest(manifest: unknown): string[] {
     }
 
     // Check each required subsystem has required:true
-    for (const sub of m.subsystems as Array<Record<string, unknown>>) {
+    for (const sub of subsystems) {
       if (typeof sub.id !== 'string') {
         violations.push('Each subsystem must have a string id');
         continue;
@@ -559,6 +610,45 @@ export function validateManifest(manifest: unknown): string[] {
           violations.push(
             `Required subsystem '${String(sub.id)}' must have required: true`,
           );
+        }
+      }
+    }
+
+    const operatorUiSubsystem = subsystems.find(sub => sub.id === 'operator-ui');
+    if (operatorUiSubsystem) {
+      const metadata = operatorUiSubsystem.metadata;
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        violations.push("Required subsystem 'operator-ui' must include metadata");
+      } else {
+        const mdata = metadata as Record<string, unknown>;
+        if (typeof mdata.hostLocalBaseUrl !== 'string' || !mdata.hostLocalBaseUrl) {
+          violations.push("operator-ui metadata.hostLocalBaseUrl is required");
+        }
+        if (typeof mdata.servicePath !== 'string') {
+          violations.push("operator-ui metadata.servicePath is required");
+        }
+        if (typeof mdata.healthEndpoint !== 'string' || !mdata.healthEndpoint) {
+          violations.push("operator-ui metadata.healthEndpoint is required");
+        }
+        if (typeof mdata.healthReachable !== 'boolean') {
+          violations.push("operator-ui metadata.healthReachable must be a boolean");
+        }
+        if (typeof mdata.healthStatusCode !== 'number') {
+          violations.push("operator-ui metadata.healthStatusCode must be a number");
+        }
+        if (!Array.isArray(mdata.routeWitnesses) || mdata.routeWitnesses.length === 0) {
+          violations.push("operator-ui metadata.routeWitnesses must be a non-empty array");
+        }
+        if (!mdata.proxyEvidence || typeof mdata.proxyEvidence !== 'object' || Array.isArray(mdata.proxyEvidence)) {
+          violations.push("operator-ui metadata.proxyEvidence is required");
+        } else {
+          const proxy = mdata.proxyEvidence as Record<string, unknown>;
+          if (proxy.optional !== true) {
+            violations.push("operator-ui metadata.proxyEvidence.optional must be true");
+          }
+          if (typeof proxy.configured !== 'boolean') {
+            violations.push("operator-ui metadata.proxyEvidence.configured must be a boolean");
+          }
         }
       }
     }

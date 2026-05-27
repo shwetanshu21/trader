@@ -27,6 +27,12 @@ import * as http from 'node:http';
 import { execSync } from 'node:child_process';
 
 import {
+  basicAuthHeader,
+  buildOperatorUiRouteUrl,
+  DEFAULT_OPERATOR_UI_ROLLOUT_BASE_URL,
+  resolveOperatorUiRolloutTarget,
+} from './operator-ui-proof-support.js';
+import {
   ARTIFACTS_ROOT,
   REQUIRED_SUBSYSTEMS,
   buildPathWitness,
@@ -43,6 +49,8 @@ import {
   type AppEvidence,
   type PathWitness,
   type OptionalAnnotation,
+  type OperatorUiRouteWitness,
+  type OperatorUiSubsystemMetadata,
   type ResourceSample,
   type ProcessProbe,
   type HttpProbe,
@@ -72,6 +80,8 @@ const DEFAULTS = {
   runtimeDashboardUrl: 'http://127.0.0.1:3001/dashboard.json',
   notifierHealthUrl: 'http://127.0.0.1:8788/health',
   bridgeHealthUrl: 'http://127.0.0.1:8787/health',
+  operatorUiBaseUrl: DEFAULT_OPERATOR_UI_ROLLOUT_BASE_URL,
+  operatorUiExpectedAuthRealm: 'Operator Console',
   // Production DB path from systemd unit (TRADER_DB_PATH=./data/production.db)
   dbPath: './data/production.db',
   // Notifier logs directory
@@ -102,6 +112,12 @@ export interface CaptureOptions {
   notifierHealthUrl?: string;
   /** Override bridge health URL. */
   bridgeHealthUrl?: string;
+  /** Override host-local operator-ui base URL. */
+  operatorUiBaseUrl?: string;
+  /** Optional proxied operator-ui base URL for non-gating annotations. */
+  operatorUiProxyBaseUrl?: string;
+  /** Override expected Basic-auth realm for operator-ui challenge checks. */
+  operatorUiExpectedAuthRealm?: string;
   /** Override SQLite DB path. */
   dbPath?: string;
   /** Override log paths to scan. */
@@ -136,6 +152,18 @@ interface HealthFetchResult {
   statusCode: number;
   /** Response body as a string (for raw storage). */
   rawBody: string | null;
+}
+
+/** Generic HTTP response capture for routes whose expected status may be non-2xx. */
+interface CapturedHttpResponse {
+  /** HTTP status code (0 if unreachable). */
+  statusCode: number;
+  /** Response body as text. */
+  rawBody: string | null;
+  /** Lower-cased response headers. */
+  headers: Record<string, string>;
+  /** Network or timeout error, if any. */
+  error: string | null;
 }
 
 /** Result of Caddy/service discovery. */
@@ -227,6 +255,45 @@ function fetchJson(url: string, timeoutMs: number): Promise<HealthFetchResult> {
         statusCode: 0,
         rawBody: null,
       });
+    });
+  });
+}
+
+/** Fetch raw HTTP response details for routes whose expected status may be non-2xx. */
+function fetchHttpResponse(
+  url: string,
+  timeoutMs: number,
+  headers?: Record<string, string>,
+): Promise<CapturedHttpResponse> {
+  return new Promise(resolve => {
+    const req = http.get(url, { timeout: timeoutMs, headers }, res => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const rawHeaders = Object.entries(res.headers).reduce<Record<string, string>>((acc, [key, value]) => {
+          if (Array.isArray(value)) {
+            acc[key.toLowerCase()] = value.join(', ');
+          } else if (typeof value === 'string') {
+            acc[key.toLowerCase()] = value;
+          }
+          return acc;
+        }, {});
+        resolve({
+          statusCode: res.statusCode ?? 0,
+          rawBody: Buffer.concat(chunks).toString('utf-8'),
+          headers: rawHeaders,
+          error: null,
+        });
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ statusCode: 0, rawBody: null, headers: {}, error: 'timeout' });
+    });
+
+    req.on('error', (err: Error) => {
+      resolve({ statusCode: 0, rawBody: null, headers: {}, error: err.message });
     });
   });
 }
