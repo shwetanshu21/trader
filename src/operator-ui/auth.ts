@@ -71,8 +71,7 @@ export class Authenticator {
    * with the appropriate HTTP status and message.
    *
    * Status codes:
-   *   401 — Missing or invalid Authorization header format
-   *   403 — Invalid credentials (counts as a failure)
+   *   401 — Missing/invalid Authorization header or invalid credentials
    *   429 — Rate limit exceeded or locked out
    *
    * On successful auth: resets the failure count for that client.

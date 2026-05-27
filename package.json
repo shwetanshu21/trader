@@ -16,6 +16,7 @@
     "witness:all": "npx vitest run tests/deployment-witness-contract.test.ts tests/deployment-witness-capture.test.ts && bash scripts/verify-m007-s01-witness.sh",
     "proof:paper:s06": "node --import tsx src/deployment/verify-m009-s06-paper-proof.ts",
     "proof:operator-ui:s04": "node --import tsx src/deployment/verify-m010-s04-operator-proof.ts",
+    "proof:operator-ui:deploy": "node --import tsx src/deployment/verify-m014-s04-operator-rollout.ts",
     "proof:research:s04": "node --import tsx src/deployment/verify-m011-s04-research-proof.ts",
     "proof:research:s05": "node --import tsx src/deployment/verify-m011-s05-real-generation-proof.ts",
     "proof:paper:s06:sh": "bash scripts/verify-m009-s06-paper-proof.sh",

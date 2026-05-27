@@ -56,8 +56,45 @@ export async function getFreePort(): Promise<number> {
   });
 }
 
+export const OPERATOR_UI_PROOF_ARTIFACT_ROOT = 'data/artifacts/operator-ui-proof';
+export const DEFAULT_OPERATOR_UI_ROLLOUT_BASE_URL = 'http://127.0.0.1:3100';
+
+export type OperatorUIRolloutTarget = {
+  verificationMode: 'host-local-default' | 'explicit-base-url';
+  baseUrl: string;
+  origin: string;
+  routePrefix: string;
+};
+
 export function basicAuthHeader(username: string, password: string): string {
   return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+}
+
+export function resolveOperatorUiRolloutTarget(baseUrl?: string): OperatorUIRolloutTarget {
+  const verificationMode = baseUrl ? 'explicit-base-url' : 'host-local-default';
+  const candidate = (baseUrl?.trim() || DEFAULT_OPERATOR_UI_ROLLOUT_BASE_URL).replace(/\/+$/, '');
+  let url: URL;
+
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new Error(`Invalid --base-url value: ${baseUrl}`);
+  }
+
+  const routePrefix = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
+  const normalizedBaseUrl = `${url.origin}${routePrefix}`;
+
+  return {
+    verificationMode,
+    baseUrl: normalizedBaseUrl,
+    origin: url.origin,
+    routePrefix,
+  };
+}
+
+export function buildOperatorUiRouteUrl(target: OperatorUIRolloutTarget, routePath: string): string {
+  const normalizedPath = routePath.startsWith('/') ? routePath : `/${routePath}`;
+  return `${target.origin}${target.routePrefix}${normalizedPath}`;
 }
 
 export function seedOperatorUiDatabase(dbPath: string): void {

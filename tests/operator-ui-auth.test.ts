@@ -211,17 +211,17 @@ describe('Authenticator — auth failures', () => {
     expect(result.status).toBe(401);
   });
 
-  it('rejects wrong username with 403', () => {
+  it('rejects wrong username with 401', () => {
     const result = attemptAuth(auth, 'wronguser', 'test-password');
     expect(result.ok).toBe(false);
-    expect(result.status).toBe(403);
+    expect(result.status).toBe(401);
     expect(result.message).toContain('attempt(s) remaining');
   });
 
-  it('rejects wrong password with 403', () => {
+  it('rejects wrong password with 401', () => {
     const result = attemptAuth(auth, 'operator', 'wrongpass');
     expect(result.ok).toBe(false);
-    expect(result.status).toBe(403);
+    expect(result.status).toBe(401);
     expect(result.message).toContain('attempt(s) remaining');
   });
 });
@@ -238,8 +238,8 @@ describe('Authenticator — lockout', () => {
     const auth = createAuth(cfg);
 
     // Fail 3 times
-    expect(attemptAuth(auth, 'operator', 'wrong').status).toBe(403);
-    expect(attemptAuth(auth, 'operator', 'wrong').status).toBe(403);
+    expect(attemptAuth(auth, 'operator', 'wrong').status).toBe(401);
+    expect(attemptAuth(auth, 'operator', 'wrong').status).toBe(401);
     // Third failure triggers lockout (429)
     const lockoutResult = attemptAuth(auth, 'operator', 'wrong');
     expect(lockoutResult.ok).toBe(false);
